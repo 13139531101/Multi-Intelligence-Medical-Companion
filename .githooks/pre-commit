@@ -1,0 +1,42 @@
+#!/bin/sh
+set -e
+
+# 1) Detect whitespace errors (tabs, trailing spaces, etc.)
+if ! git diff --cached --check; then
+  echo "fix whitespace errors reported above and commit again"
+  exit 1
+fi
+
+# 2) Block sensitive or generated files from being committed even if forced
+for path in $(git diff --cached --name-only); do
+  case "$path" in
+    *.env|*.key|*.db|uploads/*|frontend/*/uploads/*|**/uploads/*)
+      echo "ERROR: Attempting to commit forbidden file: $path"
+      echo "These files are sensitive or generated and must not be committed."
+      echo "Add them to .gitignore or remove from the commit (git restore --staged <file>)."
+      exit 1
+      ;;
+  esac
+done
+
+# 3) Block large files (> 5MB) in the index; recommend using Git LFS or ignoring
+limit=$((5*1024*1024))
+for f in $(git diff --cached --name-only --diff-filter=AM); do
+  blob=$(git ls-files -s -- "$f" | awk '{print $2}')
+  if [ -n "$blob" ]; then
+    size=$(git cat-file -s "$blob")
+    if [ "$size" -gt "$limit" ]; then
+      echo "ERROR: $f is $size bytes (> 5MB)."
+      echo "Consider using Git LFS or add to .gitignore."
+      exit 1
+    fi
+  fi
+done
+
+# 4) Optional: basic sanity check to avoid accidental commit of debug artifacts
+if git diff --cached --name-only | grep -E '\.(log|tmp)$' >/dev/null 2>&1; then
+  echo "ERROR: .log or .tmp files detected in commit. Remove or ignore them."
+  exit 1
+fi
+
+exit 0
