@@ -1,0 +1,49 @@
+<!--login.wxml-->
+<view class="container">
+  <view class="header">
+    <text class="title">智能健康助手</text>
+    <text class="subtitle">请登录您的账户</text>
+  </view>
+
+  <view class="api-status">
+    <text class="status-text">后端状态: {{apiStatus}}</text>
+  </view>
+
+  <view class="form-container">
+    <view class="input-group">
+      <text class="label">用户名</text>
+      <input 
+        class="input" 
+        type="text" 
+        placeholder="请输入用户名" 
+        value="{{username}}"
+        bindinput="onUsernameInput"
+      />
+    </view>
+
+    <view class="input-group">
+      <text class="label">密码</text>
+      <input 
+        class="input" 
+        type="password" 
+        placeholder="请输入密码" 
+        value="{{password}}"
+        bindinput="onPasswordInput"
+      />
+    </view>
+
+    <button 
+      class="login-btn" 
+      type="primary" 
+      bindtap="onLogin"
+      loading="{{isLoading}}"
+      disabled="{{isLoading}}"
+    >
+      {{isLoading ? '登录中...' : '登录'}}
+    </button>
+
+    <view class="register-link">
+      <text class="link-text" bindtap="goToRegister">还没有账户？点击注册</text>
+    </view>
+  </view>
+</view>

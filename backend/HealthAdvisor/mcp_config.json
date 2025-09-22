@@ -1,0 +1,29 @@
+{
+  "mcpServers": {
+    "KnowledgeTool": {
+      "command": "python",
+      "args": [
+        "mcpserver/knowledge_tool.py"
+      ]
+    },
+    "DiagnosisTool": {
+      "command": "python",
+      "args": [
+        "mcpserver/diagnosis_tool.py"
+      ]
+    },
+    "MemoryIntegrationTool": {
+      "command": "python",
+      "args": ["mcpserver/memory_integration_tool.py"],
+      "env": {
+        "MEMORY_DB_HOST": "localhost",
+        "MEMORY_DB_PORT": "3306",
+        "MEMORY_DB_NAME": "agent_memory",
+        "MEMORY_DB_USER": "root",
+        "MEMORY_DB_PASSWORD": "root",
+        "EMBEDDING_MODEL": "all-MiniLM-L6-v2",
+        "MEMORY_ENCRYPTION_ENABLED": "false"
+      }
+    }
+  }
+}

@@ -1,0 +1,85 @@
+<!--pages/agent_chat/agent_chat.wxml-->
+<view class="chat-container">
+  <!-- 聊天历史区域 -->
+  <scroll-view scroll-y="true" class="chat-history" id="messageList" scroll-into-view="{{scrollIntoView}}">
+    <view wx:for="{{messages}}" wx:key="timestamp" id="{{'msg-' + index}}" class="message-bubble-container {{item.role}}">
+      <!-- 用户头像 -->
+      <view wx:if="{{item.role === 'user'}}" class="avatar user-avatar">
+        <text class="avatar-text">我</text>
+      </view>
+      
+      <!-- AI头像 -->
+      <view wx:if="{{item.role === 'assistant'}}" class="avatar ai-avatar">
+        <text class="avatar-text">AI</text>
+      </view>
+      
+      <!-- 消息气泡 -->
+      <view class="message-bubble">
+        <!-- 消息内容 -->
+        <rich-text class="message-content" nodes="{{item.formattedContent || item.content}}"></rich-text>
+        
+        <!-- 时间戳 -->
+        <view class="message-time">{{item.timeString}}</view>
+        
+        <!-- 重复计数 -->
+        <view wx:if="{{item.dupCount > 1}}" class="dup-count">
+          <text>重复 {{item.dupCount}} 次</text>
+        </view>
+      </view>
+    </view>
+    
+    <!-- 加载状态 -->
+    <view wx:if="{{isSending}}" class="loading-container">
+      <view class="loading-avatar">
+        <text class="avatar-text">AI</text>
+      </view>
+      <view class="loading-bubble">
+        <view class="typing-indicator">
+          <view class="dot"></view>
+          <view class="dot"></view>
+          <view class="dot"></view>
+        </view>
+        <text class="loading-text">AI正在思考中...</text>
+      </view>
+    </view>
+  </scroll-view>
+  
+  <!-- 输入区域 -->
+  <view class="chat-input-area">
+    <view class="input-container">
+      <textarea 
+        class="chat-input" 
+        placeholder="有什么健康问题问我..." 
+        value="{{inputText}}" 
+        bindinput="handleInput"
+        auto-height
+        maxlength="500"
+        show-confirm-bar="{{false}}"
+        cursor-spacing="10"
+      ></textarea>
+      <view class="input-actions">
+        <text class="char-count">{{inputText.length}}/500</text>
+        <button 
+        class="send-button {{(inputText.trim() && !isSending) ? 'active' : 'disabled'}}" 
+        bindtap="handleSend"
+        >
+        {{isSending ? '发送中' : '发送'}}
+        </button>
+        <!-- 无disabled的发送按钮 -->
+        <!-- 临时调试按钮 -->
+        <button 
+          bindtap="debugState"
+          style="margin-left: 10rpx; padding: 8rpx 16rpx; font-size: 24rpx; background: #ff9500; color: white; border-radius: 8rpx;"
+        >
+          状态
+        </button>
+        <button 
+          bindtap="resetState"
+          style="margin-left: 10rpx; padding: 8rpx 16rpx; font-size: 24rpx; background: #ff3b30; color: white; border-radius: 8rpx;"
+        >
+          重置
+        </button>
+      </view>
+    </view>
+  </view>
+</view>

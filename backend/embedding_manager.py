@@ -1,0 +1,271 @@
+import os
+import logging
+from typing import List, Optional, Dict, Any
+import numpy as np
+from sentence_transformers import SentenceTransformer
+import json
+
+logger = logging.getLogger(__name__)
+
+class EmbeddingService:
+    """嵌入服务 - 负责生成和管理文本向量嵌入"""
+    
+    def __init__(self, model_name: str = None):
+        self.model_name = model_name or os.getenv('EMBEDDING_MODEL', 'all-MiniLM-L6-v2')
+        self.model = None
+        self.dimension = None
+        self._load_model()
+    
+    def _load_model(self):
+        """加载嵌入模型"""
+        try:
+            logger.info(f"正在加载嵌入模型: {self.model_name}")
+            self.model = SentenceTransformer(self.model_name)
+            
+            # 获取模型维度
+            test_embedding = self.model.encode(["test"])
+            self.dimension = len(test_embedding[0])
+            
+            logger.info(f"嵌入模型加载成功，维度: {self.dimension}")
+        except Exception as e:
+            logger.error(f"加载嵌入模型失败: {e}")
+            # 使用备用方案
+            self._load_fallback_model()
+    
+    def _load_fallback_model(self):
+        """加载备用模型"""
+        try:
+            logger.info("尝试加载备用嵌入模型")
+            self.model_name = 'paraphrase-MiniLM-L6-v2'
+            self.model = SentenceTransformer(self.model_name)
+            
+            test_embedding = self.model.encode(["test"])
+            self.dimension = len(test_embedding[0])
+            
+            logger.info(f"备用嵌入模型加载成功: {self.model_name}")
+        except Exception as e:
+            logger.error(f"备用嵌入模型加载失败: {e}")
+            self.model = None
+            self.dimension = 384  # 默认维度
+    
+    def generate_embedding(self, text: str) -> Optional[List[float]]:
+        """生成文本的向量嵌入
+        
+        Args:
+            text: 输入文本
+            
+        Returns:
+            List[float]: 向量嵌入，如果失败返回None
+        """
+        if not self.model or not text.strip():
+            return None
+        
+        try:
+            # 预处理文本
+            processed_text = self._preprocess_text(text)
+            
+            # 生成嵌入
+            embedding = self.model.encode([processed_text])[0]
+            
+            # 转换为Python列表
+            return embedding.tolist()
+            
+        except Exception as e:
+            logger.error(f"生成嵌入失败: {e}")
+            return None
+    
+    def generate_batch_embeddings(self, texts: List[str]) -> List[Optional[List[float]]]:
+        """批量生成文本嵌入
+        
+        Args:
+            texts: 文本列表
+            
+        Returns:
+            List[Optional[List[float]]]: 嵌入列表
+        """
+        if not self.model or not texts:
+            return [None] * len(texts)
+        
+        try:
+            # 预处理文本
+            processed_texts = [self._preprocess_text(text) for text in texts]
+            
+            # 过滤空文本
+            valid_indices = [i for i, text in enumerate(processed_texts) if text.strip()]
+            valid_texts = [processed_texts[i] for i in valid_indices]
+            
+            if not valid_texts:
+                return [None] * len(texts)
+            
+            # 批量生成嵌入
+            embeddings = self.model.encode(valid_texts)
+            
+            # 构建结果列表
+            results = [None] * len(texts)
+            for i, embedding in zip(valid_indices, embeddings):
+                results[i] = embedding.tolist()
+            
+            return results
+            
+        except Exception as e:
+            logger.error(f"批量生成嵌入失败: {e}")
+            return [None] * len(texts)
+    
+    def calculate_similarity(self, embedding1: List[float], embedding2: List[float]) -> float:
+        """计算两个嵌入向量的余弦相似度
+        
+        Args:
+            embedding1: 第一个嵌入向量
+            embedding2: 第二个嵌入向量
+            
+        Returns:
+            float: 相似度分数 (0-1)
+        """
+        try:
+            vec1 = np.array(embedding1)
+            vec2 = np.array(embedding2)
+            
+            # 计算余弦相似度
+            dot_product = np.dot(vec1, vec2)
+            norm1 = np.linalg.norm(vec1)
+            norm2 = np.linalg.norm(vec2)
+            
+            if norm1 == 0 or norm2 == 0:
+                return 0.0
+            
+            similarity = dot_product / (norm1 * norm2)
+            
+            # 确保结果在0-1范围内
+            return max(0.0, min(1.0, (similarity + 1) / 2))
+            
+        except Exception as e:
+            logger.error(f"计算相似度失败: {e}")
+            return 0.0
+    
+    def find_most_similar(self, query_embedding: List[float], 
+                         candidate_embeddings: List[List[float]], 
+                         top_k: int = 5) -> List[Dict[str, Any]]:
+        """找到最相似的嵌入向量
+        
+        Args:
+            query_embedding: 查询嵌入向量
+            candidate_embeddings: 候选嵌入向量列表
+            top_k: 返回前k个最相似的结果
+            
+        Returns:
+            List[Dict]: 相似度结果列表，包含index和similarity
+        """
+        if not query_embedding or not candidate_embeddings:
+            return []
+        
+        try:
+            similarities = []
+            
+            for i, candidate in enumerate(candidate_embeddings):
+                if candidate:
+                    similarity = self.calculate_similarity(query_embedding, candidate)
+                    similarities.append({
+                        'index': i,
+                        'similarity': similarity
+                    })
+            
+            # 按相似度降序排序
+            similarities.sort(key=lambda x: x['similarity'], reverse=True)
+            
+            return similarities[:top_k]
+            
+        except Exception as e:
+            logger.error(f"查找相似嵌入失败: {e}")
+            return []
+    
+    def _preprocess_text(self, text: str) -> str:
+        """预处理文本
+        
+        Args:
+            text: 原始文本
+            
+        Returns:
+            str: 预处理后的文本
+        """
+        if not text:
+            return ""
+        
+        # 基本清理
+        text = text.strip()
+        
+        # 限制长度（避免过长文本影响性能）
+        max_length = int(os.getenv('EMBEDDING_MAX_LENGTH', 512))
+        if len(text) > max_length:
+            text = text[:max_length]
+        
+        return text
+    
+    def get_model_info(self) -> Dict[str, Any]:
+        """获取模型信息
+        
+        Returns:
+            Dict: 模型信息
+        """
+        return {
+            'model_name': self.model_name,
+            'dimension': self.dimension,
+            'is_loaded': self.model is not None,
+            'max_length': int(os.getenv('EMBEDDING_MAX_LENGTH', 512))
+        }
+    
+    def encode_for_storage(self, embedding: List[float]) -> str:
+        """将嵌入向量编码为存储格式
+        
+        Args:
+            embedding: 嵌入向量
+            
+        Returns:
+            str: JSON格式的字符串
+        """
+        try:
+            return json.dumps(embedding, separators=(',', ':'))
+        except Exception as e:
+            logger.error(f"编码嵌入向量失败: {e}")
+            return '[]'
+    
+    def decode_from_storage(self, encoded_embedding: str) -> Optional[List[float]]:
+        """从存储格式解码嵌入向量
+        
+        Args:
+            encoded_embedding: JSON格式的字符串
+            
+        Returns:
+            List[float]: 嵌入向量，如果失败返回None
+        """
+        try:
+            return json.loads(encoded_embedding)
+        except Exception as e:
+            logger.error(f"解码嵌入向量失败: {e}")
+            return None
+    
+    def validate_embedding(self, embedding: List[float]) -> bool:
+        """验证嵌入向量的有效性
+        
+        Args:
+            embedding: 嵌入向量
+            
+        Returns:
+            bool: 是否有效
+        """
+        if not embedding:
+            return False
+        
+        try:
+            # 检查维度
+            if len(embedding) != self.dimension:
+                return False
+            
+            # 检查数值有效性
+            vec = np.array(embedding)
+            if np.isnan(vec).any() or np.isinf(vec).any():
+                return False
+            
+            return True
+            
+        except Exception:
+            return False

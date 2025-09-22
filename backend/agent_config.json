@@ -1,0 +1,73 @@
+{
+  "agents": [
+    {
+      "name": "健康档案管理员",
+      "folder": "HealthRecordsManager",
+      "port": 8001,
+      "description": "管理个人健康档案，包括基本信息、病史记录、检查报告等",
+      "category": "health_core",
+      "auto_restart": true,
+      "health_check_enabled": true
+    },
+    {
+      "name": "健康顾问",
+      "folder": "HealthAdvisor",
+      "port": 8002,
+      "description": "提供个性化健康建议和生活方式指导",
+      "category": "health_core",
+      "auto_restart": true,
+      "health_check_enabled": true
+    },
+    {
+      "name": "用药提醒助手",
+      "folder": "MedicationReminder",
+      "port": 8003,
+      "description": "管理用药计划，提供智能提醒和用药指导",
+      "category": "health_core",
+      "auto_restart": true,
+      "health_check_enabled": true
+    },
+    {
+      "name": "就诊摘要生成器",
+      "folder": "VisitSummaryGenerator",
+      "port": 8004,
+      "description": "生成就诊记录摘要，整理医疗信息",
+      "category": "health_core",
+      "auto_restart": true,
+      "health_check_enabled": true
+    },
+    {
+      "name": "深度搜索研究",
+      "folder": "DeepSearch",
+      "port": 8005,
+      "description": "深度搜索医疗资讯和健康信息",
+      "category": "utility",
+      "auto_restart": true,
+      "health_check_enabled": true
+    },
+    {
+      "name": "智能检索助手",
+      "folder": "AgentRAG",
+      "port": 8006,
+      "description": "基于RAG的智能文档检索和问答",
+      "category": "utility",
+      "auto_restart": true,
+      "health_check_enabled": true
+    }
+  ],
+  "settings": {
+    "startup_delay": 2,
+    "health_check_delay": 10,
+    "health_check_timeout": 2,
+    "health_check_retries": 5,
+    "process_monitor_interval": 5,
+    "restart_delay": 2,
+    "shutdown_timeout": 5,
+    "log_retention_days": 7
+  },
+  "logging": {
+    "level": "INFO",
+    "format": "%(asctime)s - %(levelname)s - %(message)s",
+    "file_encoding": "utf-8"
+  }
+}

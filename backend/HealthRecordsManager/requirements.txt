@@ -1,0 +1,16 @@
+fastmcp>=0.1.0
+PyMySQL>=1.1.0
+cryptography>=41.0.0
+Pillow>=10.0.0
+pytesseract>=0.3.10
+openai>=1.0.0
+pandas>=2.0.0
+numpy>=1.24.0
+python-dateutil>=2.8.0
+python-dotenv>=1.0.0
+loguru>=0.7.0
+requests>=2.31.0
+orjson>=3.9.0
+chardet>=5.2.0
+regex>=2023.8.8
+mysql-connector-python>=8.2.0

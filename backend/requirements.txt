@@ -1,0 +1,61 @@
+# 个人智能健康助手项目依赖包
+
+# 核心框架
+fastmcp>=0.1.0
+fastapi>=0.104.0
+uvicorn>=0.24.0
+
+# 环境变量管理
+python-dotenv>=1.0.0
+
+# HTTP请求
+requests>=2.31.0
+
+# 数据库
+# sqlite3  # Python内置，无需安装
+
+# 数据处理
+pandas>=2.1.0
+numpy>=1.24.0
+
+# 日期时间处理
+python-dateutil>=2.8.2
+
+# JSON处理
+orjson>=3.9.0
+
+# 阿里云SDK（用于OCR服务）
+alibabacloud-ocr20191230>=3.0.0
+alibabacloud-tea-openapi>=0.3.7
+
+# 讯飞星火大模型SDK
+spark-ai-python>=0.4.5  # 如果有官方SDK
+websocket-client>=1.6.0  # 用于WebSocket连接
+
+# 图像处理
+Pillow>=10.0.0
+
+# 加密和安全
+cryptography>=41.0.0
+
+# 日志
+loguru>=0.7.0
+
+# 进程监控和健康检查
+psutil>=5.9.0  # 系统和进程监控
+schedule>=1.2.0  # 任务调度
+
+# 类型检查
+typing-extensions>=4.8.0
+
+# 测试框架（开发用）
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+
+# 代码格式化（开发用）
+black>=23.0.0
+flake8>=6.0.0
+
+# 文档生成（开发用）
+mkdocs>=1.5.0
+mkdocs-material>=9.4.0

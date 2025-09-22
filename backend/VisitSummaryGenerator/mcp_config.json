@@ -1,0 +1,26 @@
+{
+  "mcpServers": {
+    "DocumentTool": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--with",
+        "mcp[cli]",
+        "mcp",
+        "run",
+        "mcpserver/document_tool.py"
+      ]
+    },
+    "AIAnalysisTool": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--with",
+        "mcp[cli]",
+        "mcp",
+        "run",
+        "mcpserver/ai_analysis_tool.py"
+      ]
+    }
+  }
+}

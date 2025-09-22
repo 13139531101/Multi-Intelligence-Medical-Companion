@@ -1,0 +1,50 @@
+============================================================
+长期记忆系统测试报告
+============================================================
+测试时间: 2025-08-25 11:22:32
+可用服务数量: 4
+
+测试概览:
+  总测试数: 17
+  通过: 17
+  失败: 0
+  错误: 0
+  成功率: 100.0%
+
+可用记忆服务:
+  ✓ 健康档案管理 (HealthRecordsManager)
+  ✓ 健康顾问 (HealthAdvisor)
+  ✓ 用药提醒 (MedicationReminder)
+  ✓ 就诊摘要生成 (VisitSummaryGenerator)
+
+详细测试结果:
+  ✓ core_memory_import: PASS
+  ✓ HealthRecordsManager_files: PASS
+  ✓ HealthAdvisor_files: PASS
+  ✓ MedicationReminder_files: PASS
+  ✓ VisitSummaryGenerator_files: PASS
+  ✓ HealthRecordsManager_content: PASS
+    评分: 8
+  ✓ HealthAdvisor_content: PASS
+    评分: 8
+  ✓ MedicationReminder_content: PASS
+    评分: 8
+  ✓ VisitSummaryGenerator_content: PASS
+    评分: 7
+  ✓ HealthRecordsManager_main_integration: PASS
+    评分: 4
+  ✓ HealthAdvisor_main_integration: PASS
+    评分: 4
+  ✓ MedicationReminder_main_integration: PASS
+    评分: 4
+  ✓ VisitSummaryGenerator_main_integration: PASS
+    评分: 4
+  ✓ db_file_memory_system.py: PASS
+  ✓ db_file_memory_config.py: PASS
+  ✓ db_file_database_manager.py: PASS
+  ✓ db_file_embedding_manager.py: PASS
+
+测试总结:
+  🎉 所有测试通过！长期记忆系统集成成功。
+
+============================================================

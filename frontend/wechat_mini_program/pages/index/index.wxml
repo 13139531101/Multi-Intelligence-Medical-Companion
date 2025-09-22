@@ -1,0 +1,49 @@
+<!--index.wxml-->
+<view class="container">
+  <view class="userinfo">
+    <block wx:if="{{isLoggedIn}}">
+      <view class="login-userinfo">
+        <view class="avatar-placeholder">
+          <text class="avatar-text">{{loginUserInfo.username.charAt(0).toUpperCase()}}</text>
+        </view>
+        <text class="username">欢迎，{{loginUserInfo.username}}</text>
+        <button class="logout-btn" size="mini" bindtap="logout">退出登录</button>
+      </view>
+    </block>
+    <block wx:elif="{{canIUseOpenData}}">
+      <view class="userinfo-avatar" bindtap="bindViewTap">
+        <open-data type="userAvatarUrl"></open-data>
+      </view>
+      <open-data type="userNickName"></open-data>
+    </block>
+    <block wx:elif="{{!hasUserInfo && canIUseGetUserProfile}}">
+      <button bindtap="getUserProfile"> 获取头像昵称 </button>
+    </block>
+    <block wx:else>
+      <image bindtap="bindViewTap" class="userinfo-avatar" src="{{userInfo.avatarUrl}}" mode="cover"></image>
+      <text class="userinfo-nickname">{{userInfo.nickName}}</text>
+    </block>
+  </view>
+  <view class="usermotto">
+    <text class="user-motto">{{motto}}</text>
+  </view>
+
+  <view class="api-status">
+    <text>Backend Status: {{apiStatus}}</text>
+  </view>
+
+  <view class="button-container">
+    <button class="upload-btn" type="primary" bindtap="uploadImage">上传图片</button>
+  </view>
+
+  <view class="button-container">
+    <button class="entry-btn" type="primary" bindtap="goToAgentChat">AI诊室</button>
+  </view>
+
+  <view wx:if="{{uploadedImage}}" class="image-container" bindtap="previewImage">
+    <image class="uploaded-image" src="{{uploadedImage}}" mode="aspectFit"></image>
+    <view class="image-overlay">
+      <text class="preview-text">点击查看原图</text>
+    </view>
+  </view>
+</view>

@@ -1,0 +1,82 @@
+<!--register.wxml-->
+<view class="container">
+  <view class="header">
+    <text class="title">用户注册</text>
+    <text class="subtitle">创建您的健康助手账户</text>
+  </view>
+
+  <view class="api-status">
+    <text class="status-text">后端状态: {{apiStatus}}</text>
+  </view>
+
+  <view class="form-container">
+    <view class="input-group">
+      <text class="label">用户名 *</text>
+      <input 
+        class="input" 
+        type="text" 
+        placeholder="请输入用户名（至少3个字符）" 
+        value="{{username}}"
+        bindinput="onUsernameInput"
+      />
+    </view>
+
+    <view class="input-group">
+      <text class="label">密码 *</text>
+      <input 
+        class="input" 
+        type="password" 
+        placeholder="请输入密码（至少6个字符）" 
+        value="{{password}}"
+        bindinput="onPasswordInput"
+      />
+    </view>
+
+    <view class="input-group">
+      <text class="label">确认密码 *</text>
+      <input 
+        class="input" 
+        type="password" 
+        placeholder="请再次输入密码" 
+        value="{{confirmPassword}}"
+        bindinput="onConfirmPasswordInput"
+      />
+    </view>
+
+    <view class="input-group">
+      <text class="label">邮箱 *</text>
+      <input 
+        class="input" 
+        type="email" 
+        placeholder="请输入邮箱地址" 
+        value="{{email}}"
+        bindinput="onEmailInput"
+      />
+    </view>
+
+    <view class="input-group">
+      <text class="label">手机号 *</text>
+      <input 
+        class="input" 
+        type="number" 
+        placeholder="请输入手机号" 
+        value="{{phone}}"
+        bindinput="onPhoneInput"
+      />
+    </view>
+
+    <button 
+      class="register-btn" 
+      type="primary" 
+      bindtap="onRegister"
+      loading="{{isLoading}}"
+      disabled="{{isLoading}}"
+    >
+      {{isLoading ? '注册中...' : '注册'}}
+    </button>
+
+    <view class="login-link">
+      <text class="link-text" bindtap="goToLogin">已有账户？返回登录</text>
+    </view>
+  </view>
+</view>

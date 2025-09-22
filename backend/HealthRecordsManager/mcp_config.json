@@ -1,0 +1,72 @@
+{
+  "mcpServers": {
+    "OCRTool": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--with",
+        "mcp[cli]",
+        "--with",
+        "requests",
+        "--with",
+        "python-dotenv",
+        "mcp",
+        "run",
+        "mcpserver/ocr_tool.py"
+      ]
+    },
+    "DataExtractionTool": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--with",
+        "mcp[cli]",
+        "mcp",
+        "run",
+        "mcpserver/data_extraction_tool.py"
+      ]
+    },
+    "StorageTool": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--with",
+        "mcp[cli]",
+        "--with",
+        "mysql-connector-python",
+        "--with",
+        "cryptography",
+        "mcp",
+        "run",
+        "mcpserver/storage_tool.py"
+      ]
+    },
+    "ReminderTool": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--with",
+        "mcp[cli]",
+        "--with",
+        "mysql-connector-python",
+        "mcp",
+        "run",
+        "mcpserver/reminder_tool.py"
+      ]
+    },
+    "MemoryIntegrationTool": {
+      "command": "python",
+      "args": ["mcpserver/memory_integration_tool.py"],
+      "cwd": "backend/HealthRecordsManager",
+      "env": {
+        "MEMORY_DB_HOST": "localhost",
+        "MEMORY_DB_PORT": "3306",
+        "MEMORY_DB_NAME": "agent_memory",
+        "MEMORY_DB_USER": "root",
+        "MEMORY_DB_PASSWORD": "root",
+        "MEMORY_EMBEDDING_MODEL": "all-MiniLM-L6-v2",
+        "MEMORY_LOG_LEVEL": "INFO"
+      }
+    }
+  }
+}

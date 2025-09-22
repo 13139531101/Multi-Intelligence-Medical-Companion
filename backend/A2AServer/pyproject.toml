@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "A2AServer"
+version = "1.0.0"
+description = "A2A and MCP"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "fastmcp",
+    "requests",
+    "dotenv",
+    "tenacity",
+    "mcp",
+    "zhipuai",
+    "cachetools",
+    "asyncclick",
+    "lmstudio",
+    "openai",
+    "google-genai>=1.10.0",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

@@ -1,0 +1,257 @@
+/* 聊天容器 */
+.chat-container {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background-color: #f8f9fa;
+}
+
+/* 聊天历史区域 */
+.chat-history {
+  flex: 1;
+  padding: 20rpx;
+  background-color: #f8f9fa;
+}
+
+/* 消息容器 */
+.message-bubble-container {
+  display: flex;
+  align-items: flex-start;
+  margin-bottom: 30rpx;
+  padding: 0 20rpx;
+}
+
+.message-bubble-container.user {
+  flex-direction: row-reverse;
+}
+
+.message-bubble-container.assistant {
+  flex-direction: row;
+}
+
+/* 头像样式 */
+.avatar {
+  width: 80rpx;
+  height: 80rpx;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 20rpx;
+  flex-shrink: 0;
+}
+
+.user-avatar {
+  background: linear-gradient(135deg, #007aff 0%, #0056cc 100%);
+}
+
+.ai-avatar {
+  background: linear-gradient(135deg, #34c759 0%, #30a14e 100%);
+}
+
+.avatar-text {
+  color: white;
+  font-size: 28rpx;
+  font-weight: bold;
+}
+
+/* 消息气泡 */
+.message-bubble {
+  max-width: 500rpx;
+  padding: 24rpx 28rpx;
+  border-radius: 24rpx;
+  word-wrap: break-word;
+  position: relative;
+  box-shadow: 0 2rpx 8rpx rgba(0, 0, 0, 0.1);
+}
+
+.message-bubble-container.user .message-bubble {
+  background-color: #007aff;
+  color: white;
+  border-bottom-right-radius: 8rpx;
+}
+
+.message-bubble-container.assistant .message-bubble {
+  background-color: white;
+  color: #333;
+  border: 1rpx solid #e5e5ea;
+  border-bottom-left-radius: 8rpx;
+}
+
+/* 消息内容 */
+.message-content {
+  font-size: 32rpx;
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+/* 时间戳 */
+.message-time {
+  font-size: 22rpx;
+  opacity: 0.7;
+  margin-top: 12rpx;
+  text-align: right;
+}
+
+.message-bubble-container.assistant .message-time {
+  color: #999;
+}
+
+.message-bubble-container.user .message-time {
+  color: rgba(255, 255, 255, 0.8);
+}
+
+/* 重复计数 */
+.dup-count {
+  font-size: 20rpx;
+  opacity: 0.6;
+  margin-top: 8rpx;
+  padding: 4rpx 12rpx;
+  background-color: rgba(0, 0, 0, 0.1);
+  border-radius: 12rpx;
+  display: inline-block;
+}
+
+/* 加载状态 */
+.loading-container {
+  display: flex;
+  align-items: flex-start;
+  margin-bottom: 30rpx;
+  padding: 0 20rpx;
+}
+
+.loading-avatar {
+  width: 80rpx;
+  height: 80rpx;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #34c759 0%, #30a14e 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-right: 20rpx;
+  flex-shrink: 0;
+}
+
+.loading-bubble {
+  background-color: white;
+  padding: 24rpx 28rpx;
+  border-radius: 24rpx;
+  border-bottom-left-radius: 8rpx;
+  border: 1rpx solid #e5e5ea;
+  box-shadow: 0 2rpx 8rpx rgba(0, 0, 0, 0.1);
+}
+
+/* 打字指示器 */
+.typing-indicator {
+  display: flex;
+  align-items: center;
+  margin-bottom: 12rpx;
+}
+
+.dot {
+  width: 12rpx;
+  height: 12rpx;
+  border-radius: 50%;
+  background-color: #007aff;
+  margin-right: 8rpx;
+  animation: typing 1.4s infinite ease-in-out;
+}
+
+.dot:nth-child(1) {
+  animation-delay: -0.32s;
+}
+
+.dot:nth-child(2) {
+  animation-delay: -0.16s;
+}
+
+.dot:nth-child(3) {
+  margin-right: 0;
+}
+
+@keyframes typing {
+  0%,
+  80%,
+  100% {
+    transform: scale(0.8);
+    opacity: 0.5;
+  }
+  40% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.loading-text {
+  font-size: 28rpx;
+  color: #666;
+}
+
+/* 输入区域 */
+.chat-input-area {
+  background-color: white;
+  border-top: 1rpx solid #e5e5ea;
+  padding: 20rpx;
+  box-shadow: 0 -2rpx 8rpx rgba(0, 0, 0, 0.05);
+}
+
+.input-container {
+  background-color: #f8f9fa;
+  border-radius: 24rpx;
+  padding: 16rpx 24rpx;
+  border: 1rpx solid #e5e5ea;
+}
+
+.chat-input {
+  width: 100%;
+  min-height: 80rpx;
+  max-height: 200rpx;
+  font-size: 32rpx;
+  line-height: 1.5;
+  background-color: transparent;
+  border: none;
+  outline: none;
+  resize: none;
+}
+
+.input-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 16rpx;
+}
+
+.char-count {
+  font-size: 24rpx;
+  color: #999;
+}
+
+.send-button {
+  padding: 12rpx 32rpx;
+  border-radius: 20rpx;
+  font-size: 28rpx;
+  font-weight: 500;
+  border: none;
+  transition: all 0.3s ease;
+}
+
+.send-button.active {
+  background: linear-gradient(135deg, #007aff 0%, #0056cc 100%);
+  color: white;
+  box-shadow: 0 4rpx 12rpx rgba(0, 122, 255, 0.3);
+}
+
+.send-button.disabled {
+  background-color: #e5e5ea;
+  color: #999;
+  box-shadow: none;
+  opacity: 0.6;
+  /*pointer-events: none;*/
+}
+button[disabled] {
+    color: #cccccc !important;
+    background-color: #f5f5f5 !important;
+  }
+.send-button.active:active {
+  transform: scale(0.95);
+}
