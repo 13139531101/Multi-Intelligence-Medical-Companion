@@ -23,6 +23,7 @@ class AuthMiddleware:
             "/ping",
             "/auth/register",
             "/auth/login",
+            "/api/health-records",  # 健康档案相关路由公开（上传、列表、详情等）
             "/docs",
             "/openapi.json",
             "/redoc"

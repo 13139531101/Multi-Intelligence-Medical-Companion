@@ -1,6 +1,13 @@
 {
   "consultations": [
     {
+      "id": "7cd35465422643658be73791dc14dfbe",
+      "title": "4",
+      "type": "fitness",
+      "createdAt": "2025-09-27T01:35:15.408054",
+      "messages": []
+    },
+    {
       "id": "4ad861332fc64974aae2cf1442abd50c",
       "title": "3",
       "type": "general",

@@ -52,6 +52,24 @@ class BasicAgent:
         self.chosen_model = {"model": model_name, "provider": provider, "prompt_file": prompt_file}
         self.is_ready = True
 
+        # 可选启用记忆系统（支持 ENABLE_AGENT_MEMORY=false 与 SKIP_MEMORY_INIT=1 两种关闭方式）
+        self.memory_system = None
+        try:
+            enable_memory_flag = os.getenv("ENABLE_AGENT_MEMORY", "true").lower()
+            skip_memory_init = os.getenv("SKIP_MEMORY_INIT", "0") == "1"
+            enable_memory = (enable_memory_flag == "true" or enable_memory_flag == "1") and not skip_memory_init
+            if enable_memory:
+                try:
+                    from AgentMemorySystem.memory_system import AgentMemorySystem as AMS
+                except Exception:
+                    from memory_system import AgentMemorySystem as AMS
+                self.memory_system = AMS()
+                logger.info("Agent 记忆系统已启用")
+            else:
+                logger.info("Agent 记忆系统未启用（通过环境开关/跳过初始化）")
+        except Exception as e:
+            logger.warning(f"记忆系统初始化失败，将不启用：{e}")
+
         # Initialize attributes that will be populated asynchronously in setup()
         self.servers = {}
         self.all_functions = []
@@ -206,6 +224,32 @@ class BasicAgent:
              self.session_conversations[sessionId].append({"role": "system", "content": agent_prompt})
         # 加上当前的时间
          self.session_conversations[sessionId][0]['content'] = f"当前时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}。" + self.session_conversations[sessionId][0]['content']
+         # 注入记忆上下文（若启用记忆系统）
+         try:
+             if self.memory_system:
+                 agent_id = os.environ.get("AGENT_ID", "A2AAgent")
+                 user_id = os.environ.get("USER_ID", sessionId)
+                 memories = self.memory_system.search_memories(
+                     query=user_query,
+                     agent_id=agent_id,
+                     user_id=user_id,
+                     memory_types=["long_term", "working"],
+                     limit=5,
+                     min_similarity=0.5,
+                 )
+                 if memories:
+                     summary_lines = []
+                     for m in memories:
+                         text = (m.get("content", {}) or {}).get("text") or m.get("text") or ""
+                         if text:
+                             summary_lines.append(f"- {text}")
+                     if summary_lines:
+                         memory_block = "\n".join(["相关历史记忆："] + summary_lines)
+                         self.session_conversations[sessionId][0]['content'] = (
+                             self.session_conversations[sessionId][0]['content'] + "\n" + memory_block
+                         )
+         except Exception as e:
+             logger.warning(f"注入记忆上下文失败：{e}")
          self.session_conversations[sessionId].append({"role": "user", "content": user_query})
          print(f"发起的conversation: {self.session_conversations[sessionId]}")
 
@@ -286,6 +330,37 @@ class BasicAgent:
                  if result:
                      self.session_conversations[sessionId].append(result)
                      logger.info(f"Added tool result: {json.dumps(result, indent=2)}")
+                     # 可选：将工具结果写入记忆
+                     try:
+                         if self.memory_system:
+                             agent_id = os.environ.get("AGENT_ID", "A2AAgent")
+                             user_id = os.environ.get("USER_ID", sessionId)
+                             # 简化写入：以文本形式存储工具结果摘要
+                             tool_text = json.dumps(result, ensure_ascii=False)
+                             self.memory_system.store_memory(
+                                 agent_id=agent_id,
+                                 user_id=user_id,
+                                 content={"text": tool_text, "metadata": {"sessionId": sessionId, "source": "tool_result"}},
+                                 memory_type="working",
+                                 importance=0.5,
+                             )
+                     except Exception as e:
+                         logger.warning(f"写入工具结果记忆失败：{e}")
+
+         # 将最终回答写入记忆（若启用记忆系统）
+         try:
+             if self.memory_system and final_text:
+                 agent_id = os.environ.get("AGENT_ID", "A2AAgent")
+                 user_id = os.environ.get("USER_ID", sessionId)
+                 self.memory_system.store_memory(
+                     agent_id=agent_id,
+                     user_id=user_id,
+                     content={"text": final_text, "metadata": {"sessionId": sessionId}},
+                     memory_type="working",
+                     importance=0.6,
+                 )
+         except Exception as e:
+             logger.warning(f"写入回答记忆失败：{e}")
 
          return final_text
 
@@ -294,7 +369,15 @@ class BasicAgent:
         """Clean up servers and log messages."""
         print("Cleaning up servers...")
         for cli in self.servers.values():
-            await cli.stop() # AWAIT valid here
+            try:
+                await asyncio.shield(cli.stop())
+            except BaseException as e:
+                logger.debug(f"Ignore error during client stop: {e!r}")
+        if sys.platform.startswith("win"):
+            try:
+                await asyncio.shield(asyncio.sleep(0.05))
+            except BaseException:
+                pass
         print("Cleanup complete.")
 
     def get_agent_response(self, response: str) -> dict[str, Any]:

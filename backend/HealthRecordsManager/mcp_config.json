@@ -7,13 +7,16 @@
         "--with",
         "mcp[cli]",
         "--with",
+        "Pillow",
+        "--with",
+        "pytesseract",
+        "--with",
         "requests",
         "--with",
         "python-dotenv",
-        "mcp",
-        "run",
         "mcpserver/ocr_tool.py"
-      ]
+      ],
+      "cwd": "HealthRecordsManager"
     },
     "DataExtractionTool": {
       "command": "uv",
@@ -21,10 +24,9 @@
         "run",
         "--with",
         "mcp[cli]",
-        "mcp",
-        "run",
         "mcpserver/data_extraction_tool.py"
-      ]
+      ],
+      "cwd": "HealthRecordsManager"
     },
     "StorageTool": {
       "command": "uv",
@@ -36,10 +38,9 @@
         "mysql-connector-python",
         "--with",
         "cryptography",
-        "mcp",
-        "run",
         "mcpserver/storage_tool.py"
-      ]
+      ],
+      "cwd": "HealthRecordsManager"
     },
     "ReminderTool": {
       "command": "uv",
@@ -49,15 +50,23 @@
         "mcp[cli]",
         "--with",
         "mysql-connector-python",
-        "mcp",
-        "run",
         "mcpserver/reminder_tool.py"
-      ]
+      ],
+      "cwd": "HealthRecordsManager"
     },
     "MemoryIntegrationTool": {
-      "command": "python",
-      "args": ["mcpserver/memory_integration_tool.py"],
-      "cwd": "backend/HealthRecordsManager",
+      "command": "uv",
+      "args": [
+        "run",
+        "--with",
+        "mcp[cli]",
+        "--with",
+        "mysql-connector-python",
+        "--with",
+        "cryptography",
+        "mcpserver/memory_integration_tool.py"
+      ],
+      "cwd": "HealthRecordsManager",
       "env": {
         "MEMORY_DB_HOST": "localhost",
         "MEMORY_DB_PORT": "3306",

@@ -66,7 +66,16 @@ class AgentTaskManager(InMemoryTaskManager):
         query = self._get_user_query(task_send_params)
 
         try:
-            agent_response = self.agent.invoke(query, task_send_params.sessionId)
+            # 使用 Agent 的非流式推理以实现同步调用
+            final_text = await self.agent.run_inference(
+                user_query=query,
+                sessionId=task_send_params.sessionId,
+                stream=False,
+            )
+            agent_response = {
+                "content": final_text,
+                "require_user_input": False,
+            }
             return await self._handle_send_task(request, agent_response)
         except Exception as e:
             logger.error(f"Error invoking agent: {e}")

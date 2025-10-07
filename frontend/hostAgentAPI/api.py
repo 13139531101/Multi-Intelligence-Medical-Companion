@@ -4,6 +4,7 @@ import asyncio
 import os
 import sys
 from fastapi import FastAPI, APIRouter, Response, Request, UploadFile, File
+from typing import List
 from fastapi.middleware.cors import CORSMiddleware
 from server import ConversationServer
 from auth import router as auth_router
@@ -44,10 +45,71 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# 在HostAgentAPI启动时预热后端工具（记忆系统与OCR），避免首次调用时冷启动
+@app.on_event("startup")
+async def _host_api_startup_warmup():
+    logger = logging.getLogger(__name__)
+    try:
+        # 尝试导入后端的健康档案API模块以访问其工具与服务
+        try:
+            sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "backend")))
+        except Exception:
+            pass
+        try:
+            import importlib
+            health_api = importlib.import_module("health_records_api")
+        except Exception as e:
+            logging.warning(f"导入后端健康档案模块失败，跳过预热: {e}")
+            return
+
+        # 预热记忆系统嵌入模型
+        try:
+            service = getattr(health_api, "health_records_memory_service", None)
+            if service:
+                try:
+                    await service.initialize()
+                    ms = getattr(service, "memory_system", None)
+                    if ms and getattr(ms, "embedding_service", None):
+                        try:
+                            ms.embedding_service.generate_embedding("host_api_warmup_embeddings")
+                            logging.info("[HostAPI] 记忆嵌入模型预热完成")
+                        except Exception as e:
+                            logging.warning(f"[HostAPI] 嵌入模型预热异常: {e}")
+                except Exception as e:
+                    logging.warning(f"[HostAPI] 记忆系统初始化失败: {e}")
+        except Exception as e:
+            logging.warning(f"[HostAPI] 访问记忆服务异常: {e}")
+
+        # 预热 OCR 工具
+        try:
+            tiny_png_b64 = (
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII="
+            )
+            extract_text_from_image = getattr(health_api, "extract_text_from_image", None)
+            validate_medical_document = getattr(health_api, "validate_medical_document", None)
+            if extract_text_from_image:
+                try:
+                    _ = extract_text_from_image.fn(tiny_png_b64) if hasattr(extract_text_from_image, "fn") else extract_text_from_image(tiny_png_b64)
+                    logging.info("[HostAPI] OCR工具预热完成")
+                except Exception as e:
+                    logging.warning(f"[HostAPI] OCR工具预热异常: {e}")
+            if validate_medical_document:
+                try:
+                    _ = validate_medical_document.fn("host_api warmup text") if hasattr(validate_medical_document, "fn") else validate_medical_document("host_api warmup text")
+                    logging.info("[HostAPI] 医疗文档验证器预热完成")
+                except Exception as e:
+                    logging.warning(f"[HostAPI] 医疗文档验证器预热异常: {e}")
+        except Exception as e:
+            logging.warning(f"[HostAPI] 预热OCR时出现异常: {e}")
+    except Exception as e:
+        logging.warning(f"[HostAPI] 启动预热过程出现异常（忽略继续启动）: {e}")
+
 @app.middleware("http")
 async def log_request_body(request: Request, call_next):
     try:
-        if request.method == "POST":
+        content_type = request.headers.get("content-type", "")
+        # 为避免影响 multipart/form-data 的流式解析，跳过读取其原始请求体
+        if request.method == "POST" and "multipart/form-data" not in content_type:
             body = await request.body()
             try:
                 decoded = body.decode("utf-8")
@@ -55,7 +117,7 @@ async def log_request_body(request: Request, call_next):
                 decoded = body.decode("utf-8", errors="replace")
             logging.info(f"Request to {request.url.path} with body: {decoded}")
         else:
-            logging.info(f"Request to {request.url.path}")
+            logging.info(f"Request to {request.url.path} (content-type: {content_type})")
     except Exception as e:
         logging.warning(f"Failed to log request body: {e}")
     response = await call_next(request)
@@ -309,6 +371,11 @@ try:
     @health_router.post("/api/health-records/upload")
     async def upload_file_proxy(file: UploadFile = File(...)):
         return await health_api.upload_file(file)
+
+    # 新增：批量上传代理，转发到后端批量上传端点
+    @health_router.post("/api/health-records/upload/multiple")
+    async def upload_files_proxy(files: List[UploadFile] = File(...)):
+        return await health_api.upload_multiple_files(files)
 
     # 新增：文件直链转发（按file_id读取并以内联方式返回）
     @health_router.get("/api/health-records/files/{file_id}")

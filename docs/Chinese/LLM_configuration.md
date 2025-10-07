@@ -36,6 +36,14 @@ VLLM_API_KEY=xxxxx
 VLLM_BASE_URL="http://xxxx:xxx/v1"
 ```
 
+## 阿里云 DashScope/Qwen 模型
+
+1.  创建 `.env` 文件并添加 `DASHSCOPE_API_KEY` 环境变量，值为你的阿里云 DashScope API Key。
+2.  运行命令：`python main.py --provider dashscope --model qwen-plus`，也可使用其他Qwen系列模型（例如 `qwen2.5-72b-instruct`）。
+3.  可选：如需自定义兼容接口地址，支持在 `mcp_config.json` 的 `models` 中为该模型添加 `apiBase` 字段，默认使用 `https://dashscope.aliyuncs.com/compatible/v1`。
+
+注意：DashScope使用OpenAI兼容接口，支持工具调用与流式输出，调用方式与OpenAI/DeepSeek/智谱保持一致。
+
 2.  运行命令：`python main.py --provider vllm --model xxx`， model是你创建vllm时的模型
 3.  注意vllm启动示例,注意需要启动工具的调用还有工具的形式：--enable-auto-tool-choice --tool-call-parser hermes
 ```

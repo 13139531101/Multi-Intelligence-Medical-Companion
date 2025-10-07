@@ -156,8 +156,20 @@ const HealthRecords = () => {
   const handleSubmit = async () => {
     try {
       const payload = toApiPayload(formData);
+      // 如果是新建且已通过上传创建了OCR记录，则改为更新这些记录，避免重复创建与覆盖OCR内容
+      const uploadedRecordIds = (formData.files || [])
+        .map((f) => (typeof f === 'object' ? f.record_id : null))
+        .filter(Boolean);
+
       if (editingRecord) {
         await updateHealthRecord(editingRecord.id, payload);
+      } else if (uploadedRecordIds.length > 0) {
+        // 不覆盖OCR content，仅更新其他字段
+        const updatePayload = { ...payload };
+        delete updatePayload.content;
+        for (const rid of uploadedRecordIds) {
+          await updateHealthRecord(rid, updatePayload);
+        }
       } else {
         await createHealthRecord(payload);
       }
@@ -202,6 +214,7 @@ const HealthRecords = () => {
       const displayName = f.original_filename || f.filename || f.name || `文件-${fileId || ''}`;
       return {
         file_id: fileId,
+        record_id: f.record_id,
         name: displayName,
         url: fileId ? getAttachmentUrl(fileId) : undefined,
       };

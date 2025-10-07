@@ -149,13 +149,44 @@ class HealthRecordsMemoryService:
             return None
         
         try:
+            # 将结构化数据与可能包含复杂类型的对象转换为可JSON序列化的基本类型
+            def _make_json_safe(obj):
+                try:
+                    import json
+                    from pydantic import BaseModel  # 可选
+                except Exception:
+                    BaseModel = tuple()
+
+                if obj is None:
+                    return None
+                if isinstance(obj, (str, int, float, bool)):
+                    return obj
+                if isinstance(obj, (list, tuple, set)):
+                    return [ _make_json_safe(x) for x in list(obj) ]
+                if isinstance(obj, dict):
+                    return { str(k): _make_json_safe(v) for k, v in obj.items() }
+                # Pydantic模型
+                try:
+                    if isinstance(obj, BaseModel):
+                        return _make_json_safe(obj.dict())
+                except Exception:
+                    pass
+                # 若本身可被json.dumps处理，直接返回
+                try:
+                    import json as _json
+                    _json.dumps(obj)
+                    return obj
+                except Exception:
+                    # 兜底：转为字符串，避免 "Python type Form cannot be converted" 等错误
+                    return str(obj)
+
             # 构建记忆内容
             content = {
-                'text': f"OCR识别结果: {document_type}\n{ocr_text[:500]}...",
+                'text': f"OCR识别结果: {document_type}\n{str(ocr_text)[:500]}...",
                 'structured_data': {
                     'document_type': document_type,
-                    'ocr_text': ocr_text,
-                    'extracted_info': extracted_info,
+                    'ocr_text': str(ocr_text),
+                    'extracted_info': _make_json_safe(extracted_info or {}),
                     'confidence': confidence,
                     'file_path': file_path,
                     'processing_time': datetime.now().isoformat()

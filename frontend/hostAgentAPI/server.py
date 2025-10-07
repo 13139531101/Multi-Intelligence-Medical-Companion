@@ -56,16 +56,8 @@ class ConversationServer:
     self._upload_dir = os.path.join(os.path.dirname(__file__), 'uploads')
     os.makedirs(self._upload_dir, exist_ok=True)
 
-    # Load and register agents from agents.json
-    try:
-        with open('agents.json', 'r', encoding='utf-8') as f:
-            agents = json.load(f)
-            for agent in agents:
-                self.manager.register_agent(agent['url'])
-    except FileNotFoundError:
-        logging.warning("agents.json not found, no agents registered.")
-    except json.JSONDecodeError:
-        logging.error("Error decoding agents.json.")
+    # Load and register agents from agents.json (run in background to avoid blocking API startup)
+    threading.Thread(target=self._load_and_register_agents, daemon=True).start()
 
     router.add_api_route(
         "/conversation/create",
@@ -137,6 +129,23 @@ class ConversationServer:
         "/files/{file_id}",
         self._delete_uploaded_file,
         methods=["DELETE"])
+
+  # Background agent registration (class method, not nested in __init__)
+  def _load_and_register_agents(self):
+    try:
+      with open('agents.json', 'r', encoding='utf-8') as f:
+        agents = json.load(f)
+      for agent in agents:
+        try:
+          self.manager.register_agent(agent.get('url'))
+        except Exception as e:
+          logging.warning(f"Register agent failed for {agent.get('url')}: {e}")
+    except FileNotFoundError:
+      logging.warning("agents.json not found, no agents registered.")
+    except json.JSONDecodeError:
+      logging.error("Error decoding agents.json.")
+    except Exception as e:
+      logging.error(f"Unexpected error while loading agents: {e}")
 
   # Update API key in manager
   def update_api_key(self, api_key: str):

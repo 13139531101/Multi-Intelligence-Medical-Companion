@@ -14,6 +14,7 @@ from pathlib import Path
 import logging
 from contextlib import contextmanager
 import base64
+import mimetypes
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
@@ -226,8 +227,45 @@ def row_to_health_record(row) -> HealthRecord:
 # API路由
 @app.on_event("startup")
 async def startup_event():
-    """应用启动时初始化数据库"""
+    """应用启动时初始化数据库并预热可选工具（OCR与记忆系统）"""
     init_database()
+
+    # 预热：在启动阶段加载 OCR 与记忆系统，避免首次图片上传时阻塞
+    try:
+        # 初始化记忆系统并预热嵌入模型
+        if 'health_records_memory_service' in globals() and health_records_memory_service:
+            try:
+                await health_records_memory_service.initialize()
+                ms = getattr(health_records_memory_service, 'memory_system', None)
+                if ms and getattr(ms, 'embedding_service', None):
+                    # 生成一次小样本嵌入以触发模型加载
+                    try:
+                        ms.embedding_service.generate_embedding("warmup for embeddings")
+                        logger.info("记忆嵌入模型预热完成")
+                    except Exception as e:
+                        logger.warning(f"记忆嵌入模型预热异常: {e}")
+            except Exception as e:
+                logger.warning(f"记忆系统初始化/预热失败，将继续启动: {e}")
+
+        # 预热 OCR 工具与文档验证器
+        # 使用 1x1 PNG 的 base64 触发一次轻量调用，避免首次上传图片时冷启动
+        tiny_png_b64 = (
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII="
+        )
+        if 'extract_text_from_image' in globals() and extract_text_from_image:
+            try:
+                _ = extract_text_from_image.fn(tiny_png_b64) if hasattr(extract_text_from_image, "fn") else extract_text_from_image(tiny_png_b64)
+                logger.info("OCR工具预热完成")
+            except Exception as e:
+                logger.warning(f"OCR工具预热异常: {e}")
+        if 'validate_medical_document' in globals() and validate_medical_document:
+            try:
+                _ = validate_medical_document.fn("warmup text") if hasattr(validate_medical_document, "fn") else validate_medical_document("warmup text")
+                logger.info("医疗文档验证器预热完成")
+            except Exception as e:
+                logger.warning(f"医疗文档验证器预热异常: {e}")
+    except Exception as e:
+        logger.warning(f"工具预热过程出现异常（忽略，继续启动）: {e}")
 
 @app.get("/api/health-records/status")
 async def get_api_status():
@@ -317,6 +355,27 @@ async def get_health_record(record_id: str):
 async def create_health_record(record: HealthRecordCreate):
     """创建健康档案"""
     try:
+        # 后端保护：如请求体包含文件但未提供内容，返回400，避免产生空内容记录
+        try:
+            has_files = False
+            if record.metadata and isinstance(record.metadata, dict):
+                meta_files = record.metadata.get("files") or record.metadata.get("uploaded_files")
+                if isinstance(meta_files, list) and len(meta_files) > 0:
+                    has_files = True
+            # 顶层 files 由网关可能转换为 metadata.uploaded_files，但也兼容直接传递
+            # Pydantic 模型中未定义顶层 files，此处仅基于 metadata 判断
+            content_empty = (record.content is None) or (isinstance(record.content, str) and record.content.strip() == "")
+            if has_files and content_empty:
+                raise HTTPException(
+                    status_code=400,
+                    detail="检测到文件ID但内容为空：请使用 /api/health-records/upload 进行上传与OCR，或在创建时提供内容"
+                )
+        except HTTPException:
+            raise
+        except Exception:
+            # 不影响正常创建流程，保护逻辑失败时忽略
+            pass
+
         record_id = generate_id()
         now = datetime.now()
         
@@ -580,14 +639,47 @@ async def get_health_insights(
 async def upload_file(file: UploadFile = File(...), user_id: str = Form("default_user")):
     """上传文件"""
     try:
-        # 检查文件类型
+        # 检查与规范化文件类型（支持 octet-stream 与扩展名推断）
         allowed_types = {
-            "image/jpeg", "image/png", "image/gif",
+            "image/jpeg", "image/jpg", "image/png", "image/gif",
+            # 扩展前端支持的图片类型，避免前端允许而后端拒绝
+            "image/webp", "image/bmp",
             "application/pdf", "text/plain",
             "application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         }
-        
-        if file.content_type not in allowed_types:
+
+        # 初始类型
+        incoming_ct = (getattr(file, "content_type", None) or "").strip().lower()
+
+        # 当为通用流或未设置时，尝试依据文件名推断类型
+        normalized_ct = incoming_ct
+        if not normalized_ct or normalized_ct == "application/octet-stream":
+            guessed, _ = mimetypes.guess_type(file.filename or "")
+            if guessed:
+                normalized_ct = guessed.lower()
+        # 常见扩展手动兜底
+        if (not normalized_ct or normalized_ct == "application/octet-stream") and isinstance(file.filename, str):
+            ext = Path(file.filename).suffix.lower()
+            ext_to_ct = {
+                ".jpg": "image/jpeg",
+                ".jpeg": "image/jpeg",
+                ".png": "image/png",
+                ".gif": "image/gif",
+                ".webp": "image/webp",
+                ".bmp": "image/bmp",
+                ".pdf": "application/pdf",
+                ".txt": "text/plain",
+                ".doc": "application/msword",
+                ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            }
+            normalized_ct = ext_to_ct.get(ext, normalized_ct or "")
+
+        # 统一 jpg 到 jpeg
+        if normalized_ct == "image/jpg":
+            normalized_ct = "image/jpeg"
+
+        # 最终类型校验
+        if normalized_ct not in allowed_types:
             raise HTTPException(status_code=400, detail="不支持的文件类型")
         
         # 检查文件大小（10MB限制）
@@ -606,95 +698,265 @@ async def upload_file(file: UploadFile = File(...), user_id: str = Form("default
         with open(file_path, "wb") as f:
             f.write(file_content)
         
-        # 保存文件信息到数据库
+        # 使用单个事务：先写附件，再进行图片OCR并入库；图片OCR失败则回滚并报错
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
+            cursor.execute(
+                """
                 INSERT INTO file_attachments (
-                    id, filename, original_filename, file_path, 
-                    file_size, mime_type, upload_time
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, (
-                file_id,
-                filename,
-                file.filename,
-                str(file_path),
-                len(file_content),
-                file.content_type,
-                datetime.now().isoformat()
-            ))
-            conn.commit()
-        
-        # 尝试进行OCR与记忆入库（仅针对图片类型）
-        ocr_info = None
-        memory_id = None
-        if file.content_type.startswith("image/") and extract_text_from_image and validate_medical_document:
-            try:
-                image_base64 = base64.b64encode(file_content).decode("utf-8")
-                # 调用OCR
-                ocr_text = extract_text_from_image.fn(image_base64) if hasattr(extract_text_from_image, "fn") else extract_text_from_image(image_base64)
-                # 验证医疗文档属性
-                validation = validate_medical_document.fn(ocr_text) if hasattr(validate_medical_document, "fn") else validate_medical_document(ocr_text)
+                    id, filename, original_filename, file_path,
+                    file_size, mime_type, upload_time, record_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    file_id,
+                    filename,
+                    file.filename,
+                    str(file_path),
+                    len(file_content),
+                    normalized_ct,
+                    datetime.now().isoformat(),
+                    None,
+                ),
+            )
+
+            # 尝试进行OCR与记忆入库（仅针对图片类型；图片必须经过OCR并成功入库）
+            ocr_info = None
+            memory_id = None
+            record_id = None
+
+            if normalized_ct.startswith("image/"):
+                # 强制要求OCR模块可用
+                if not extract_text_from_image or not validate_medical_document:
+                    conn.rollback()
+                    raise HTTPException(status_code=503, detail="OCR模块未加载，无法对图片进行识别与入库")
                 try:
-                    validation_data = json.loads(validation) if isinstance(validation, str) else validation
-                except Exception:
-                    validation_data = {"raw": validation}
-                document_type = validation_data.get("document_type") or "unknown"
-                try:
-                    confidence = float(validation_data.get("confidence", 0.5))
-                except Exception:
-                    confidence = 0.5
-                # 可选的信息抽取
-                extracted_info = {}
-                if extract_medical_info:
+                    image_base64 = base64.b64encode(file_content).decode("utf-8")
+                    # 调用OCR
+                    ocr_text = extract_text_from_image.fn(image_base64) if hasattr(extract_text_from_image, "fn") else extract_text_from_image(image_base64)
+                    # 验证医疗文档属性
+                    validation = validate_medical_document.fn(ocr_text) if hasattr(validate_medical_document, "fn") else validate_medical_document(ocr_text)
+
+                    # 结构化信息提取（集成 HealthRecordsManager 的数据提取工具）
+                    extracted_info = None
                     try:
-                        info_json = extract_medical_info.fn(ocr_text) if hasattr(extract_medical_info, "fn") else extract_medical_info(ocr_text)
-                        extracted_info = json.loads(info_json) if isinstance(info_json, str) else (info_json or {})
-                    except Exception as e:
-                        logger.warning(f"信息抽取失败，已忽略: {e}")
-                        extracted_info = {}
-                # 存入记忆系统
-                if health_records_memory_service is not None:
+                        from HealthRecordsManager.mcpserver.data_extraction_tool import extract_medical_info as _extract_medical_info  # type: ignore
+                    except Exception:
+                        _extract_medical_info = None  # type: ignore
+
+                    if _extract_medical_info:
+                        try:
+                            info_json = _extract_medical_info.fn(ocr_text) if hasattr(_extract_medical_info, "fn") else _extract_medical_info(ocr_text)
+                            extracted_info = json.loads(info_json) if isinstance(info_json, str) else info_json
+                        except Exception as e:
+                            logger.warning(f"结构化提取失败: {e}")
+
                     try:
-                        if not health_records_memory_service.is_available():
-                            # 初始化记忆系统
-                            await health_records_memory_service.initialize()
-                        memory_id = await health_records_memory_service.store_ocr_result(
-                            user_id=user_id,
-                            document_type=document_type,
-                            ocr_text=ocr_text if isinstance(ocr_text, str) else str(ocr_text),
-                            extracted_info=extracted_info if isinstance(extracted_info, dict) else {},
-                            confidence=confidence,
-                            file_path=str(file_path)
-                        )
-                    except Exception as e:
-                        logger.warning(f"存储OCR结果到记忆失败: {e}")
-                else:
-                    logger.info("记忆服务未加载，跳过记忆入库")
-                
-                ocr_info = {
-                    "document_type": document_type,
-                    "confidence": confidence,
-                    "text_length": len(ocr_text) if isinstance(ocr_text, str) else 0
-                }
-            except Exception as e:
-                logger.warning(f"OCR处理失败，已跳过: {e}")
-        
+                        validation_data = json.loads(validation) if isinstance(validation, str) else validation
+                    except Exception:
+                        validation_data = {"raw": validation}
+                    document_type = validation_data.get("document_type") or "unknown"
+                    try:
+                        confidence = float(validation_data.get("confidence", 0.5))
+                    except Exception:
+                        confidence = 0.5
+
+                    # 可选的信息抽取
+                    extracted_info = {}
+                    if extract_medical_info:
+                        try:
+                            info_json = extract_medical_info.fn(ocr_text) if hasattr(extract_medical_info, "fn") else extract_medical_info(ocr_text)
+                            extracted_info = json.loads(info_json) if isinstance(info_json, str) else (info_json or {})
+                        except Exception as e:
+                            logger.warning(f"信息抽取失败，已忽略: {e}")
+                            extracted_info = {}
+
+                    # 存入记忆系统（可选，不影响事务）
+                    if health_records_memory_service is not None:
+                        try:
+                            if not health_records_memory_service.is_available():
+                                await health_records_memory_service.initialize()
+                            memory_id = await health_records_memory_service.store_ocr_result(
+                                user_id=user_id,
+                                document_type=document_type,
+                                ocr_text=ocr_text if isinstance(ocr_text, str) else str(ocr_text),
+                                extracted_info=extracted_info if isinstance(extracted_info, dict) else {},
+                                confidence=confidence,
+                                file_path=str(file_path)
+                            )
+                        except Exception as e:
+                            logger.warning(f"存储OCR结果到记忆失败: {e}")
+
+                    # —— 将OCR识别结果入库到健康档案，并关联附件 ——
+                    # 若OCR文本为空则视为失败
+                    ocr_text_str = ocr_text if isinstance(ocr_text, str) else str(ocr_text)
+                    if not ocr_text_str or not ocr_text_str.strip():
+                        conn.rollback()
+                        raise HTTPException(status_code=422, detail="OCR识别结果为空，未入库")
+
+                    doc_type_lower = (document_type or "").lower()
+                    ext_doc_type = (extracted_info or {}).get("document_type") if isinstance(extracted_info, dict) else None
+                    if isinstance(ext_doc_type, str) and ext_doc_type.strip():
+                        doc_type_lower = ext_doc_type.strip().lower()
+
+                    lab_keywords = ["血常规", "化验", "检验", "实验室", "检验报告", "化验单", "B超", "CT", "MRI", "X光", "影像"]
+                    prescription_keywords = ["处方", "医嘱", "用药", "药品", "药方"]
+                    surgery_keywords = ["手术", "术后", "术前", "麻醉"]
+                    allergy_keywords = ["过敏", "皮试", "过敏史"]
+                    vaccination_keywords = ["疫苗", "接种", "免疫"]
+                    vital_keywords = ["血压", "心率", "体温", "呼吸", "身高", "体重"]
+
+                    def has_any(text: str, kws: list[str]) -> bool:
+                        return any(k in text for k in kws)
+
+                    if doc_type_lower in {"test_report", "lab_result", "inspection_report", "检验报告", "化验单"} or has_any(ocr_text_str, lab_keywords):
+                        record_type = RecordType.LAB_RESULT.value
+                    elif doc_type_lower in {"prescription", "medication", "处方"} or has_any(ocr_text_str, prescription_keywords):
+                        record_type = RecordType.PRESCRIPTION.value
+                    elif has_any(ocr_text_str, surgery_keywords):
+                        record_type = RecordType.SURGERY.value
+                    elif doc_type_lower in {"medical_record", "病历", "门诊记录", "出院记录", "入院记录"}:
+                        record_type = RecordType.MEDICAL_REPORT.value
+                    elif has_any(ocr_text_str, allergy_keywords):
+                        record_type = RecordType.ALLERGY.value
+                    elif has_any(ocr_text_str, vaccination_keywords):
+                        record_type = RecordType.VACCINATION.value
+                    elif has_any(ocr_text_str, vital_keywords):
+                        record_type = RecordType.VITAL_SIGNS.value
+                    else:
+                        record_type = RecordType.MEDICAL_REPORT.value
+
+                    now = datetime.now()
+                    record_id = generate_id()
+                    title = f"{document_type or 'OCR文档'} - {file.filename}"
+                    tags = ["ocr", "auto_import", document_type or "unknown", f"file:{file_id}"]
+                    metadata = {
+                        "file_id": file_id,
+                        "file_path": str(file_path),
+                        "mime_type": normalized_ct,
+                        "ocr_info": {
+                            "document_type": document_type,
+                            "confidence": confidence,
+                            "text_length": len(ocr_text_str)
+                        },
+                        "memory_id": memory_id,
+                        "extracted_info": extracted_info if isinstance(extracted_info, dict) else {}
+                    }
+
+                    cursor.execute(
+                        """
+                        INSERT INTO health_records (
+                            id, title, record_type, summary, content, importance,
+                            tags, metadata, record_date, created_at, updated_at, file_attachments
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            record_id,
+                            title,
+                            record_type,
+                            ocr_text_str[:300] if ocr_text_str else None,
+                            ocr_text_str,
+                            ImportanceLevel.MEDIUM.value,
+                            serialize_tags(tags),
+                            serialize_metadata(metadata),
+                            None,
+                            now.isoformat(),
+                            now.isoformat(),
+                            serialize_tags([file_id]),
+                        ),
+                    )
+                    cursor.execute(
+                        "UPDATE file_attachments SET record_id = ? WHERE id = ?",
+                        (record_id, file_id),
+                    )
+
+                    ocr_info = {
+                        "document_type": document_type,
+                        "confidence": confidence,
+                        "text_length": len(ocr_text_str)
+                    }
+
+                    # 成功则提交事务
+                    conn.commit()
+                except HTTPException:
+                    # 已经rollback并抛出
+                    raise
+                except Exception as e:
+                    conn.rollback()
+                    logger.error(f"OCR处理或入库失败: {e}")
+                    raise HTTPException(status_code=422, detail=f"OCR处理或入库失败: {str(e)}")
+            else:
+                # 非图片：仅保存附件记录
+                conn.commit()
+
         return {
             "file_id": file_id,
             "filename": filename,
             "original_filename": file.filename,
             "file_size": len(file_content),
-            "mime_type": file.content_type,
+            "mime_type": normalized_ct,
             "message": "文件上传成功",
             "ocr_info": ocr_info,
             "memory_id": memory_id,
+            "record_id": record_id,
         }
         
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"文件上传失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# 新增：批量上传多个文件（逐个调用单文件上传逻辑，保证返回结构一致）
+@app.post("/api/health-records/upload/multiple")
+async def upload_multiple_files(files: List[UploadFile] = File(...), user_id: str = Form("default_user")):
+    try:
+        if not files:
+            raise HTTPException(status_code=400, detail="未提供文件")
+
+        results = []
+        for f in files:
+            try:
+                # 复用单文件上传的完整逻辑（含OCR与入库）
+                res = await upload_file(file=f, user_id=user_id)
+                results.append(res)
+            except HTTPException as he:
+                results.append({
+                    "filename": getattr(f, "filename", None),
+                    "error": he.detail
+                })
+            except Exception as e:
+                results.append({
+                    "filename": getattr(f, "filename", None),
+                    "error": str(e)
+                })
+
+        return {"files": results, "count": len(results), "message": f"已处理 {len(results)} 个文件"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"批量文件上传失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# 新增：获取指定记录的结构化与OCR信息（上移到启动语句之前）
+@app.get("/api/health-records/{record_id}/extracted")
+async def get_record_extracted_info(record_id: str):
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT metadata FROM health_records WHERE id = ?", (record_id,))
+            row = cursor.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="健康档案不存在")
+            metadata = deserialize_metadata(row[0] if isinstance(row, tuple) else row["metadata"])
+            return {
+                "extracted_info": metadata.get("extracted_info") or {},
+                "ocr_info": metadata.get("ocr_info") or {},
+            }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取结构化信息失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 # 新增：按 file_id 读取并以内联方式返回附件文件

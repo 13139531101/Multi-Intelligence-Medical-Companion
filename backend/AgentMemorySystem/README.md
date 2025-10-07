@@ -104,6 +104,19 @@ EMBEDDING_DEVICE=cpu
 
 # 安全配置
 MEMORY_ENCRYPTION_KEY=your_32_character_encryption_key
+
+# 运行时开关（与 Agent 集成）
+# 将在运行 Agent 时读取这些变量
+# 设置为 false 或 1 来关闭记忆初始化：
+# - ENABLE_AGENT_MEMORY=false  或  SKIP_MEMORY_INIT=1
+ENABLE_AGENT_MEMORY=true
+# 跳过初始化以加速调试（优先级高于 ENABLE_AGENT_MEMORY）
+SKIP_MEMORY_INIT=0
+
+# 标识信息（写入/检索记忆时使用）
+AGENT_ID=A2AAgent
+# 建议为后端或会话进程设置 USER_ID；若未设置，系统将使用 sessionId 作为回退
+USER_ID=
 ```
 
 ### 5. 初始化数据库

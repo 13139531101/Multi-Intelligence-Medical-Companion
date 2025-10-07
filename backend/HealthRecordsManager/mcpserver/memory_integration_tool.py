@@ -24,6 +24,7 @@ if BACKEND_ROOT not in sys.path:
 
 from mcp.server.models import InitializationOptions
 from mcp.server import NotificationOptions, Server
+from mcp.server.stdio import stdio_server
 from mcp.types import (
     Resource,
     Tool,
@@ -38,7 +39,8 @@ import mcp.types as types
 # 导入记忆系统
 try:
     from memory_system import AgentMemorySystem
-    from config import MemorySystemConfig
+    # 移除不存在的 MemorySystemConfig 导入，避免启动失败
+    # from memory_config import MemorySystemConfig
 except ImportError as e:
     logging.error(f"无法导入记忆系统: {e}")
     sys.exit(1)
@@ -810,7 +812,7 @@ async def main():
         sys.exit(1)
     
     # 运行服务器
-    async with mcp.server.stdio.stdio_server() as (read_stream, write_stream):
+    async with stdio_server() as (read_stream, write_stream):
         await server.run(
             read_stream,
             write_stream,

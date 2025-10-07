@@ -8,6 +8,9 @@ OPENAI_API_KEY=xxx
 VLLM_API_KEY=xxxxx
 VLLM_BASE_URL="http://xxxx:xxx/v1"
 
+#如果使用阿里云DashScope/Qwen模型， python main.py --provider dashscope --model qwen-plus
+DASHSCOPE_API_KEY=xxxx
+
 # 字节豆包模型, python main.py --provider bytedance --model deepseek-v3
 BYTEDANCE_API_KEY=xxxx
 

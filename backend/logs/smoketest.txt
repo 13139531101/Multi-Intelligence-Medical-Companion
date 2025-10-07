@@ -1,0 +1,189 @@
+[09/27/25 15:37:54] INFO     Processing request of type           server.py:623
+                             ListToolsRequest
+[09/27/25 15:37:55] INFO     Processing request of type           server.py:623
+                             ListToolsRequest
+[09/27/25 15:37:56] INFO     Processing request of type           server.py:623
+                             ListToolsRequest
+[09/27/25 15:37:57] INFO     Processing request of type           server.py:623
+                             ListToolsRequest
+INFO:AgentMemorySystem.database_config:记忆系统数据库连接池初始化成功
+INFO:AgentMemorySystem.embedding_service:正在加载嵌入模型: all-MiniLM-L6-v2
+INFO:sentence_transformers.SentenceTransformer:Use pytorch device_name: cpu
+INFO:sentence_transformers.SentenceTransformer:Load pretrained SentenceTransformer: all-MiniLM-L6-v2
+
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]
+Batches: 100%|██████████| 1/1 [00:00<00:00,  3.22it/s]
+Batches: 100%|██████████| 1/1 [00:00<00:00,  3.21it/s]
+INFO:AgentMemorySystem.embedding_service:嵌入模型加载成功，维度: 384
+INFO:AgentMemorySystem.embedding_service:正在加载嵌入模型: all-MiniLM-L6-v2
+INFO:sentence_transformers.SentenceTransformer:Use pytorch device_name: cpu
+INFO:sentence_transformers.SentenceTransformer:Load pretrained SentenceTransformer: all-MiniLM-L6-v2
+
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]
+Batches: 100%|██████████| 1/1 [00:00<00:00,  2.79it/s]
+Batches: 100%|██████████| 1/1 [00:00<00:00,  2.78it/s]
+INFO:AgentMemorySystem.embedding_service:嵌入模型加载成功，维度: 384
+INFO:AgentMemorySystem.embedding_service:正在加载嵌入模型: all-MiniLM-L6-v2
+INFO:sentence_transformers.SentenceTransformer:Use pytorch device_name: cpu
+INFO:sentence_transformers.SentenceTransformer:Load pretrained SentenceTransformer: all-MiniLM-L6-v2
+
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]
+Batches: 100%|██████████| 1/1 [00:00<00:00,  1.97it/s]
+Batches: 100%|██████████| 1/1 [00:00<00:00,  1.97it/s]
+INFO:AgentMemorySystem.embedding_service:嵌入模型加载成功，维度: 384
+INFO:AgentMemorySystem.embedding_service:正在加载嵌入模型: all-MiniLM-L6-v2
+INFO:sentence_transformers.SentenceTransformer:Use pytorch device_name: cpu
+INFO:sentence_transformers.SentenceTransformer:Load pretrained SentenceTransformer: all-MiniLM-L6-v2
+
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]
+Batches: 100%|██████████| 1/1 [00:00<00:00,  2.29it/s]
+Batches: 100%|██████████| 1/1 [00:00<00:00,  2.29it/s]
+INFO:AgentMemorySystem.embedding_service:嵌入模型加载成功，维度: 384
+INFO:AgentMemorySystem.database_config:记忆主表创建成功
+INFO:AgentMemorySystem.database_config:记忆向量表创建成功
+INFO:AgentMemorySystem.database_config:记忆关联表创建成功
+INFO:AgentMemorySystem.database_config:记忆标签表创建成功
+INFO:AgentMemorySystem.database_config:所有记忆系统表创建完成
+INFO:memory_system:记忆系统数据库初始化完成
+INFO:health_records_memory:记忆系统初始化成功
+Traceback (most recent call last):
+  File "I:\A2A\3\A2AServer\backend\HealthRecordsManager\mcpserver\memory_integration_tool.py", line 829, in <module>
+    asyncio.run(main())
+  File "G:\Anaconda\Lib\asyncio\runners.py", line 194, in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+  File "G:\Anaconda\Lib\asyncio\runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "G:\Anaconda\Lib\asyncio\base_events.py", line 687, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "I:\A2A\3\A2AServer\backend\HealthRecordsManager\mcpserver\memory_integration_tool.py", line 814, in main
+    async with mcp.server.stdio.stdio_server() as (read_stream, write_stream):
+               ^^^
+NameError: name 'mcp' is not defined. Did you mean: 'map'?
+Starting MCP servers...
+[MCP][OCRTool] Launching: G:\Anaconda\Scripts\uv.EXE run --with mcp[cli] --with requests --with python-dotenv mcpserver/ocr_tool.py cwd=I:\A2A\3\A2AServer\backend\HealthRecordsManager
+[MCP Tool OK] OCRTool
+[MCP][DataExtractionTool] Launching: G:\Anaconda\Scripts\uv.EXE run --with mcp[cli] mcpserver/data_extraction_tool.py cwd=I:\A2A\3\A2AServer\backend\HealthRecordsManager
+[MCP Tool OK] DataExtractionTool
+[MCP][StorageTool] Launching: G:\Anaconda\Scripts\uv.EXE run --with mcp[cli] --with mysql-connector-python --with cryptography mcpserver/storage_tool.py cwd=I:\A2A\3\A2AServer\backend\HealthRecordsManager
+[MCP Tool OK] StorageTool
+[MCP][ReminderTool] Launching: G:\Anaconda\Scripts\uv.EXE run --with mcp[cli] --with mysql-connector-python mcpserver/reminder_tool.py cwd=I:\A2A\3\A2AServer\backend\HealthRecordsManager
+[MCP Tool OK] ReminderTool
+[MCP][MemoryIntegrationTool] Launching: G:\Anaconda\Scripts\uv.EXE run --with mcp[cli] --with mysql-connector-python --with cryptography mcpserver/memory_integration_tool.py cwd=I:\A2A\3\A2AServer\backend\HealthRecordsManager
+[MCP][MemoryIntegrationTool] Error initializing: McpError('Connection closed')
+Traceback (most recent call last):
+  File "I:\A2A\3\A2AServer\backend\A2AServer\src\A2AServer\mcp_client\client.py", line 218, in start
+    await session.initialize()
+  File "G:\Anaconda\Lib\site-packages\mcp\client\session.py", line 133, in initialize
+    result = await self.send_request(
+             ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "G:\Anaconda\Lib\site-packages\mcp\shared\session.py", line 297, in send_request
+    raise McpError(response_or_error.error)
+mcp.shared.exceptions.McpError: Connection closed
+
+[WARN] Could not start server MemoryIntegrationTool
+Found 18 tools: [{"name": "OCRTool_extract_text_from_image", "description": "\n    从医疗文档图片中提取文字\n    :param image_base64: base64编码的图片数据\n    :return: 提取的文字内容\n    ", "parameters": {"properties": {"image_base64": {"title": "Image Base64", "type": "string"}}, "required": ["image_base64"], "title": "extract_text_from_imageArguments", "type": "object"}}, {"name": "OCRTool_validate_medical_document", "description": "\n    验证医疗文档的有效性\n    :param text: OCR识别的文本\n    :return: JSON格式的验证结果\n    ", "parameters": {"properties": {"text": {"title": "Text", "type": "string"}}, "required": ["text"], "title": "validate_medical_documentArguments", "type": "object"}}, {"name": "DataExtractionTool_extract_medical_info", "description": "\n    从文本中提取结构化医疗信息\n    :param text: OCR识别的文本\n    :return: JSON格式的结构化信息\n    ", "parameters": {"properties": {"text": {"title": "Text", "type": "string"}}, "required": ["text"], "title": "extract_medical_infoArguments", "type": "object"}}, {"name": "DataExtractionTool_extract_prescription_info", "description": "专门提取处方信息", "parameters": {"properties": {"text": {"title": "Text", "type": "string"}}, "required": ["text"], "title": "extract_prescription_infoArguments", "type": "object"}}, {"name": "StorageTool_save_health_record", "description": "\n    保存健康档案记录\n    :param user_id: 用户ID\n    :param record_type: 记录类型 (prescription/test_report/medical_record/hospital_record/vaccination/surgery/other)\n    :param title: 记录标题\n    :param content: 原始内容\n    :param extracted_data: 提取的结构化数据\n    :return: 保存结果\n    ", "parameters": {"properties": {"user_id": {"title": "User Id", "type": "string"}, "record_type": {"title": "Record Type", "type": "string"}, "title": {"title": "Title", "type": "string"}, "content": {"title": "Content", "type": "string"}, "extracted_data": {"default": "", "title": "Extracted Data", "type": "string"}}, "required": ["user_id", "record_type", "title", "content"], "title": "save_health_recordArguments", "type": "object"}}, {"name": "StorageTool_get_health_records", "description": "\n    获取健康档案记录\n    :param user_id: 用户ID\n    :param record_type: 记录类型过滤\n    :param limit: 返回记录数量限制\n    :return: 记录列表\n    ", "parameters": {"properties": {"user_id": {"title": "User Id", "type": "string"}, "record_type": {"default": "", "title": "Record Type", "type": "string"}, "limit": {"default": 10, "title": "Limit", "type": "integer"}}, "required": ["user_id"], "title": "get_health_recordsArguments", "type": "object"}}, {"name": "StorageTool_get_health_record_detail", "description": "\n    获取健康档案详细信息\n    :param user_id: 用户ID\n    :param record_id: 记录ID\n    :return: 详细记录信息\n    ", "parameters": {"properties": {"user_id": {"title": "User Id", "type": "string"}, "record_id": {"title": "Record Id", "type": "integer"}}, "required": ["user_id", "record_id"], "title": "get_health_record_detailArguments", "type": "object"}}, {"name": "StorageTool_save_medication", "description": "\n    保存用药记录\n    :param user_id: 用户ID\n    :param drug_name: 药物名称\n    :param dosage: 剂量\n    :param frequency: 频次\n    :param start_date: 开始日期\n    :param end_date: 结束日期\n    :param notes: 备注\n    :return: 保存结果\n    ", "parameters": {"properties": {"user_id": {"title": "User Id", "type": "string"}, "drug_name": {"title": "Drug Name", "type": "string"}, "dosage": {"default": "", "title": "Dosage", "type": "string"}, "frequency": {"default": "", "title": "Frequency", "type": "string"}, "start_date": {"default": "", "title": "Start Date", "type": "string"}, "end_date": {"default": "", "title": "End Date", "type": "string"}, "notes": {"default": "", "title": "Notes", "type": "string"}}, "required": ["user_id", "drug_name"], "title": "save_medicationArguments", "type": "object"}}, {"name": "StorageTool_get_medications", "description": "\n    获取用药记录\n    :param user_id: 用户ID\n    :param is_active: 是否只获取活跃的用药记录\n    :return: 用药记录列表\n    ", "parameters": {"properties": {"user_id": {"title": "User Id", "type": "string"}, "is_active": {"default": true, "title": "Is Active", "type": "boolean"}}, "required": ["user_id"], "title": "get_medicationsArguments", "type": "object"}}, {"name": "StorageTool_delete_health_record", "description": "\n    删除健康档案记录（软删除）\n    :param user_id: 用户ID\n    :param record_id: 记录ID\n    :return: 删除结果\n    ", "parameters": {"properties": {"user_id": {"title": "User Id", "type": "string"}, "record_id": {"title": "Record Id", "type": "integer"}}, "required": ["user_id", "record_id"], "title": "delete_health_recordArguments", "type": "object"}}, {"name": "StorageTool_create_user_profile", "description": "\n    创建用户档案\n    :param user_id: 用户ID\n    :param username: 用户名\n    :param email: 邮箱\n    :param real_name: 真实姓名\n    :param gender: 性别 (male/female/other)\n    :param birth_date: 出生日期 (YYYY-MM-DD)\n    :return: 创建结果\n    ", "parameters": {"properties": {"user_id": {"title": "User Id", "type": "string"}, "username": {"title": "Username", "type": "string"}, "email": {"default": "", "title": "Email", "type": "string"}, "real_name": {"default": "", "title": "Real Name", "type": "string"}, "gender": {"default": "", "title": "Gender", "type": "string"}, "birth_date": {"default": "", "title": "Birth Date", "type": "string"}}, "required": ["user_id", "username"], "title": "create_user_profileArguments", "type": "object"}}, {"name": "ReminderTool_add_medication_reminder", "description": "\n    添加用药提醒\n    :param user_id: 用户ID\n    :param medication_name: 药物名称\n    :param dosage: 剂量\n    :param reminder_times: 提醒时间（JSON格式，如：[\"08:00\", \"12:00\", \"18:00\"]）\n    :param start_date: 开始日期 (YYYY-MM-DD)\n    :param end_date: 结束日期 (YYYY-MM-DD)\n    :param notes: 备注\n    :return: 添加结果\n    ", "parameters": {"properties": {"user_id": {"title": "User Id", "type": "string"}, "medication_name": {"title": "Medication Name", "type": "string"}, "dosage": {"title": "Dosage", "type": "string"}, "reminder_times": {"title": "Reminder Times", "type": "string"}, "start_date": {"default": "", "title": "Start Date", "type": "string"}, "end_date": {"default": "", "title": "End Date", "type": "string"}, "notes": {"default": "", "title": "Notes", "type": "string"}}, "required": ["user_id", "medication_name", "dosage", "reminder_times"], "title": "add_medication_reminderArguments", "type": "object"}}, {"name": "ReminderTool_get_medication_reminders", "description": "\n    获取用药提醒列表\n    :param user_id: 用户ID\n    :param date: 指定日期 (YYYY-MM-DD)，为空则获取今天的\n    :param active_only: 是否只获取活跃的提醒\n    :return: 提醒列表\n    ", "parameters": {"properties": {"user_id": {"title": "User Id", "type": "string"}, "date": {"default": "", "title": "Date", "type": "string"}, "active_only": {"default": true, "title": "Active Only", "type": "boolean"}}, "required": ["user_id"], "title": "get_medication_remindersArguments", "type": "object"}}, {"name": "ReminderTool_mark_reminder_taken", "description": "\n    标记提醒已服药\n    :param user_id: 用户ID\n    :param reminder_id: 提醒ID\n    :param taken_time: 服药时间 (YYYY-MM-DD HH:MM:SS)，为空则使用当前时间\n    :return: 标记结果\n    ", "parameters": {"properties": {"user_id": {"title": "User Id", "type": "string"}, "reminder_id": {"title": "Reminder Id", "type": "integer"}, "taken_time": {"default": "", "title": "Taken Time", "type": "string"}}, "required": ["user_id", "reminder_id"], "title": "mark_reminder_takenArguments", "type": "object"}}, {"name": "ReminderTool_add_health_reminder", "description": "\n    添加健康提醒\n    :param user_id: 用户ID\n    :param title: 提醒标题\n    :param description: 提醒描述\n    :param reminder_time: 提醒时间 (YYYY-MM-DD HH:MM:SS)\n    :param reminder_type: 提醒类型 (health/checkup/exercise/diet/other)\n    :return: 添加结果\n    ", "parameters": {"properties": {"user_id": {"title": "User Id", "type": "string"}, "title": {"title": "Title", "type": "string"}, "description": {"default": "", "title": "Description", "type": "string"}, "reminder_time": {"default": "", "title": "Reminder Time", "type": "string"}, "reminder_type": {"default": "health", "title": "Reminder Type", "type": "string"}}, "required": ["user_id", "title"], "title": "add_health_reminderArguments", "type": "object"}}, {"name": "ReminderTool_get_health_reminders", "description": "\n    获取健康提醒列表\n    :param user_id: 用户ID\n    :param reminder_type: 提醒类型过滤\n    :param start_date: 开始日期 (YYYY-MM-DD)\n    :param end_date: 结束日期 (YYYY-MM-DD)\n    :return: 提醒列表\n    ", "parameters": {"properties": {"user_id": {"title": "User Id", "type": "string"}, "reminder_type": {"default": "", "title": "Reminder Type", "type": "string"}, "start_date": {"default": "", "title": "Start Date", "type": "string"}, "end_date": {"default": "", "title": "End Date", "type": "string"}}, "required": ["user_id"], "title": "get_health_remindersArguments", "type": "object"}}, {"name": "ReminderTool_complete_reminder", "description": "\n    完成提醒\n    :param user_id: 用户ID\n    :param reminder_id: 提醒ID\n    :return: 完成结果\n    ", "parameters": {"properties": {"user_id": {"title": "User Id", "type": "string"}, "reminder_id": {"title": "Reminder Id", "type": "integer"}}, "required": ["user_id", "reminder_id"], "title": "complete_reminderArguments", "type": "object"}}, {"name": "ReminderTool_delete_reminder", "description": "\n    删除提醒（软删除）\n    :param user_id: 用户ID\n    :param reminder_id: 提醒ID\n    :param reminder_type: 提醒类型 (health/medication)\n    :return: 删除结果\n    ", "parameters": {"properties": {"user_id": {"title": "User Id", "type": "string"}, "reminder_id": {"title": "Reminder Id", "type": "integer"}, "reminder_type": {"default": "health", "title": "Reminder Type", "type": "string"}}, "required": ["user_id", "reminder_id"], "title": "delete_reminderArguments", "type": "object"}}]
+setup_tools: True
+Cleaning up servers...
+Traceback (most recent call last):
+  File "I:\A2A\3\A2AServer\backend\_mcp_smoketest.py", line 39, in <module>
+    asyncio.run(main())
+  File "G:\Anaconda\Lib\asyncio\runners.py", line 194, in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+  File "G:\Anaconda\Lib\asyncio\runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "G:\Anaconda\Lib\asyncio\base_events.py", line 687, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "I:\A2A\3\A2AServer\backend\_mcp_smoketest.py", line 33, in main
+    await agent.cleanup()
+  File "I:\A2A\3\A2AServer\backend\A2AServer\src\A2AServer\agent.py", line 297, in cleanup
+    await cli.stop() # AWAIT valid here
+    ^^^^^^^^^^^^^^^^
+  File "I:\A2A\3\A2AServer\backend\A2AServer\src\A2AServer\mcp_client\client.py", line 327, in stop
+    await self.cleanup()
+  File "I:\A2A\3\A2AServer\backend\A2AServer\src\A2AServer\mcp_client\client.py", line 345, in cleanup
+    await asyncio.sleep(0.05)
+  File "G:\Anaconda\Lib\asyncio\tasks.py", line 665, in sleep
+    return await future
+           ^^^^^^^^^^^^
+asyncio.exceptions.CancelledError: Cancelled by cancel scope 1d7c05cc530
+Exception ignored in: <function _ProactorBasePipeTransport.__del__ at 0x000001D7BD033600>
+Traceback (most recent call last):
+  File "G:\Anaconda\Lib\asyncio\proactor_events.py", line 116, in __del__
+    _warn(f"unclosed transport {self!r}", ResourceWarning, source=self)
+                               ^^^^^^^^
+  File "G:\Anaconda\Lib\asyncio\proactor_events.py", line 80, in __repr__
+    info.append(f'fd={self._sock.fileno()}')
+                      ^^^^^^^^^^^^^^^^^^^
+  File "G:\Anaconda\Lib\asyncio\windows_utils.py", line 102, in fileno
+    raise ValueError("I/O operation on closed pipe")
+ValueError: I/O operation on closed pipe
+Exception ignored in: <function BaseSubprocessTransport.__del__ at 0x000001D7BD031E40>
+Traceback (most recent call last):
+  File "G:\Anaconda\Lib\asyncio\base_subprocess.py", line 125, in __del__
+    _warn(f"unclosed transport {self!r}", ResourceWarning, source=self)
+                               ^^^^^^^^
+  File "G:\Anaconda\Lib\asyncio\base_subprocess.py", line 78, in __repr__
+    info.append(f'stdout={stdout.pipe}')
+                         ^^^^^^^^^^^^^
+  File "G:\Anaconda\Lib\asyncio\proactor_events.py", line 80, in __repr__
+    info.append(f'fd={self._sock.fileno()}')
+                      ^^^^^^^^^^^^^^^^^^^
+  File "G:\Anaconda\Lib\asyncio\windows_utils.py", line 102, in fileno
+    raise ValueError("I/O operation on closed pipe")
+ValueError: I/O operation on closed pipe
+Exception ignored in: <function _ProactorBasePipeTransport.__del__ at 0x000001D7BD033600>
+Traceback (most recent call last):
+  File "G:\Anaconda\Lib\asyncio\proactor_events.py", line 116, in __del__
+    _warn(f"unclosed transport {self!r}", ResourceWarning, source=self)
+                               ^^^^^^^^
+  File "G:\Anaconda\Lib\asyncio\proactor_events.py", line 80, in __repr__
+    info.append(f'fd={self._sock.fileno()}')
+                      ^^^^^^^^^^^^^^^^^^^
+  File "G:\Anaconda\Lib\asyncio\windows_utils.py", line 102, in fileno
+    raise ValueError("I/O operation on closed pipe")
+ValueError: I/O operation on closed pipe
+Exception ignored in: <function _ProactorBasePipeTransport.__del__ at 0x000001D7BD033600>
+Traceback (most recent call last):
+  File "G:\Anaconda\Lib\asyncio\proactor_events.py", line 116, in __del__
+    _warn(f"unclosed transport {self!r}", ResourceWarning, source=self)
+                               ^^^^^^^^
+  File "G:\Anaconda\Lib\asyncio\proactor_events.py", line 80, in __repr__
+    info.append(f'fd={self._sock.fileno()}')
+                      ^^^^^^^^^^^^^^^^^^^
+  File "G:\Anaconda\Lib\asyncio\windows_utils.py", line 102, in fileno
+    raise ValueError("I/O operation on closed pipe")
+ValueError: I/O operation on closed pipe
+Exception ignored in: <function BaseSubprocessTransport.__del__ at 0x000001D7BD031E40>
+Traceback (most recent call last):
+  File "G:\Anaconda\Lib\asyncio\base_subprocess.py", line 125, in __del__
+    _warn(f"unclosed transport {self!r}", ResourceWarning, source=self)
+                               ^^^^^^^^
+  File "G:\Anaconda\Lib\asyncio\base_subprocess.py", line 78, in __repr__
+    info.append(f'stdout={stdout.pipe}')
+                         ^^^^^^^^^^^^^
+  File "G:\Anaconda\Lib\asyncio\proactor_events.py", line 80, in __repr__
+    info.append(f'fd={self._sock.fileno()}')
+                      ^^^^^^^^^^^^^^^^^^^
+  File "G:\Anaconda\Lib\asyncio\windows_utils.py", line 102, in fileno
+    raise ValueError("I/O operation on closed pipe")
+ValueError: I/O operation on closed pipe
+Exception ignored in: <function BaseSubprocessTransport.__del__ at 0x000001D7BD031E40>
+Traceback (most recent call last):
+  File "G:\Anaconda\Lib\asyncio\base_subprocess.py", line 125, in __del__
+    _warn(f"unclosed transport {self!r}", ResourceWarning, source=self)
+                               ^^^^^^^^
+  File "G:\Anaconda\Lib\asyncio\base_subprocess.py", line 78, in __repr__
+    info.append(f'stdout={stdout.pipe}')
+                         ^^^^^^^^^^^^^
+  File "G:\Anaconda\Lib\asyncio\proactor_events.py", line 80, in __repr__
+    info.append(f'fd={self._sock.fileno()}')
+                      ^^^^^^^^^^^^^^^^^^^
+  File "G:\Anaconda\Lib\asyncio\windows_utils.py", line 102, in fileno
+    raise ValueError("I/O operation on closed pipe")
+ValueError: I/O operation on closed pipe

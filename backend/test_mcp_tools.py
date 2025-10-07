@@ -24,11 +24,11 @@ def test_ocr_tool():
         
         # 测试OCR识别
         test_image = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
-        ocr_result = extract_text_from_image.fn(test_image)
+        ocr_result = extract_text_from_image(test_image)
         print(f"OCR识别结果: {ocr_result[:100]}...")
         
         # 测试文档验证
-        validation_result = validate_medical_document.fn(ocr_result)
+        validation_result = validate_medical_document(ocr_result)
         print(f"文档验证结果: {validation_result[:100]}...")
         
         print("✅ OCR工具测试通过")
@@ -46,7 +46,7 @@ def test_diagnosis_tool():
         
         # 测试症状分析
         symptoms = ["头痛", "发热", "咳嗽"]
-        analysis_result = analyze_symptoms.fn(symptoms)
+        analysis_result = analyze_symptoms(symptoms)
         print(f"症状分析结果: {analysis_result['status']}")
         
         # 测试AI诊断
@@ -55,7 +55,7 @@ def test_diagnosis_tool():
             "gender": "男"
         }
         medical_history = ["无特殊病史"]
-        diagnosis_result = ai_medical_diagnosis.fn(symptoms, patient_info, medical_history)
+        diagnosis_result = ai_medical_diagnosis(symptoms, patient_info, medical_history)
         print(f"AI诊断结果: {diagnosis_result['status']}")
         
         print("✅ 诊断工具测试通过")
@@ -74,7 +74,7 @@ def test_reminder_tool():
         print("数据库已初始化")
         
         # 添加用药提醒
-        add_result = add_medication_reminder.fn(
+        add_result = add_medication_reminder(
             user_id="test_user",
             medication_name="阿司匹林",
             dosage="100mg",
@@ -87,7 +87,7 @@ def test_reminder_tool():
         print(f"添加提醒结果: {add_result['status']}")
         
         # 获取提醒列表
-        list_result = get_medication_reminders.fn(user_id="test_user")
+        list_result = get_medication_reminders(user_id="test_user")
         print(f"提醒列表: {list_result['status']}, 数量: {list_result.get('count', 0)}")
         
         print("✅ 提醒工具测试通过")

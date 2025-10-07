@@ -31,6 +31,62 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+# 将复杂对象转换为可JSON序列化的安全结构
+def _json_safe(obj: Any) -> Any:
+    try:
+        # 基本类型直接返回
+        if obj is None or isinstance(obj, (str, int, float, bool)):
+            return obj
+        # 容器类型递归处理
+        if isinstance(obj, (list, tuple, set)):
+            return [ _json_safe(x) for x in list(obj) ]
+        if isinstance(obj, dict):
+            return { str(k): _json_safe(v) for k, v in obj.items() }
+
+        # Pydantic模型支持（如果存在）
+        try:
+            from pydantic import BaseModel  # type: ignore
+            if isinstance(obj, BaseModel):
+                return _json_safe(obj.dict())
+        except Exception:
+            pass
+
+        # Starlette/WS/Flask的表单或多字典类型
+        try:
+            from werkzeug.datastructures import ImmutableMultiDict  # type: ignore
+            if isinstance(obj, ImmutableMultiDict):
+                return _json_safe(dict(obj))
+        except Exception:
+            pass
+        try:
+            from starlette.datastructures import FormData  # type: ignore
+            if isinstance(obj, FormData):
+                return _json_safe(dict(obj))
+        except Exception:
+            pass
+        # FastAPI/Starlette 的 UploadFile 类型
+        try:
+            from fastapi import UploadFile  # type: ignore
+            if isinstance(obj, UploadFile):
+                return {
+                    "filename": getattr(obj, "filename", None),
+                    "content_type": getattr(obj, "content_type", None),
+                    "size": getattr(obj, "size", None),
+                }
+        except Exception:
+            pass
+
+        # 如果可以直接json序列化则返回原值
+        try:
+            json.dumps(obj)
+            return obj
+        except Exception:
+            # 兜底：转字符串避免 "Python type Form cannot be converted" 类错误
+            return str(obj)
+    except Exception:
+        # 极端情况下直接字符串化
+        return str(obj)
+
 class MemoryStorage:
     """记忆存储模块 - 负责记忆的存储、更新和删除"""
     
@@ -61,10 +117,29 @@ class MemoryStorage:
             connection = self.db_config.get_connection()
             cursor = connection.cursor()
             
-            # 准备记忆数据
-            content_text = content.get('text', '')
-            content_structured = content.get('structured_data', {})
-            metadata = content.get('metadata', {})
+            # 准备记忆数据（全面JSON安全与类型规范化）
+            # 关键标识统一字符串化并裁剪到列长度，避免出现 Form 等不可转换及过长问题
+            def _normalize_id(val: Any, max_len: int, default: str) -> str:
+                s = str(val) if val is not None else default
+                s = s.strip() or default
+                if len(s) > max_len:
+                    try:
+                        import logging
+                        logging.getLogger(__name__).warning(
+                            f"标识值过长，已裁剪: len={len(s)} max_len={max_len} value_prefix={s[:32]}...")
+                    except Exception:
+                        pass
+                    s = s[:max_len]
+                return s
+
+            # 与数据库列定义保持一致（见 AgentMemorySystem.database_config）
+            safe_agent_id = _normalize_id(agent_id, 50, 'agent')
+            safe_user_id = _normalize_id(user_id, 50, 'default_user')
+            safe_memory_type = str(memory_type) if memory_type is not None else 'long_term'
+
+            content_text = str(content.get('text', ''))
+            content_structured = _json_safe(content.get('structured_data', {}))
+            metadata = _json_safe(content.get('metadata', {}))
             
             # 计算过期时间
             expires_at = None
@@ -80,7 +155,7 @@ class MemoryStorage:
             """
             
             cursor.execute(insert_memory_sql, (
-                memory_id, agent_id, user_id, memory_type, content_text,
+                memory_id, safe_agent_id, safe_user_id, safe_memory_type, content_text,
                 json.dumps(content_structured, ensure_ascii=False),
                 json.dumps(metadata, ensure_ascii=False),
                 importance, expires_at
@@ -143,11 +218,11 @@ class MemoryStorage:
                 
                 if 'structured_data' in content:
                     update_fields.append('content_structured = %s')
-                    update_values.append(json.dumps(content['structured_data'], ensure_ascii=False))
+                    update_values.append(json.dumps(_json_safe(content['structured_data']), ensure_ascii=False))
                 
                 if 'metadata' in content:
                     update_fields.append('metadata = %s')
-                    update_values.append(json.dumps(content['metadata'], ensure_ascii=False))
+                    update_values.append(json.dumps(_json_safe(content['metadata']), ensure_ascii=False))
             
             if importance is not None:
                 update_fields.append('importance_score = %s')

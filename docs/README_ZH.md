@@ -43,6 +43,17 @@ backend/DeepSearch/mcpserver/mcp.log中显示了详细的使用日志。
 
 ## 问题总结
 1. Deepseek官方Deepseek-R1模型不支持函数调用，因此使用Deepseek的R1模型会报错。但是火山引擎的deepseek-r1模型可以支持函数调用和思考，推荐。
+
+## 账户资料绑定说明
+为确保“询问AI时，它得到的资料就是当前账户的资料”，系统通过 `agent_id` 与 `user_id`（或请求的 `sessionId`）进行严格数据隔离与绑定：
+- 后端在推理过程中读取 `AGENT_ID` 与 `USER_ID` 环境变量，若未设置 `USER_ID`，则自动使用当前请求的 `sessionId` 作为用户标识。
+- 记忆系统的存储与检索（如 `store_memory`、`search_memories`、`get_recent_memories` 等）均以 `agent_id` 与 `user_id` 分区，确保不同账户的数据不互通。
+- 前端或调用方应在每次请求中传递唯一的 `sessionId`（或显式设置 `USER_ID`），并与“当前登录账户”绑定，这样AI检索到的就是该账户的历史与资料。
+
+最佳实践：
+- 登录后生成并维护会话 `sessionId`，所有与AI交互均附带该标识。
+- 进程级设置固定 `AGENT_ID`；`USER_ID`优先由请求动态传入，未传入时使用该请求的 `sessionId`。
+- 保持 `sessionId` 的唯一性并与账户ID映射，确保跨设备与长会话的检索一致性。
 2. 保持传入Agent的会话的session_id的唯一，这是必须的。
 3. Agent Card中的url是最终对外提供的接口，当前端访问时，会访问这个Agent Card中的地址，可以按需传入。
 4. DeepSeek V3的函数名称不支持中文, ByteDance的Deepseek R1函数支持中文

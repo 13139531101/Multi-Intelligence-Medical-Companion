@@ -1,17 +1,16 @@
 import axios from 'axios';
 
 // 创建axios实例
+// 重要说明：不要为该实例设置默认的 'Content-Type'
+// 让 axios 根据请求体自动选择（JSON 或 multipart/form-data）。
 const healthApi = axios.create({
   baseURL: import.meta.env.VITE_HOSTAGENT_API || 'http://127.0.0.1:13002',
   timeout: 10000,
-  headers: {
-    'Content-Type': 'application/json',
-  },
 });
 
 // 智能路由API实例
 const smartChatApi = axios.create({
-  baseURL: 'http://localhost:13002',
+  baseURL: import.meta.env.VITE_HOSTAGENT_API || 'http://127.0.0.1:13002',
   timeout: 10000,
   headers: {
     'Content-Type': 'application/json',
@@ -20,7 +19,7 @@ const smartChatApi = axios.create({
 
 // 认证API实例 - 使用hostAgentAPI的认证服务
 const authApi = axios.create({
-  baseURL: 'http://localhost:13002',
+  baseURL: import.meta.env.VITE_HOSTAGENT_API || 'http://127.0.0.1:13002',
   timeout: 10000,
   headers: {
     'Content-Type': 'application/json',
@@ -345,23 +344,19 @@ export const uploadFile = async (file, onProgress = null) => {
   try {
     const formData = new FormData();
     formData.append('file', file);
-
-    const config = {
-      headers: {
-        'Content-Type': 'multipart/form-data',
-      },
-    };
-
-    if (onProgress) {
-      config.onUploadProgress = (progressEvent) => {
-        const percentCompleted = Math.round(
-          (progressEvent.loaded * 100) / progressEvent.total
-        );
-        onProgress(percentCompleted);
-      };
-    }
-
-    const response = await healthApi.post('/api/health-records/upload', formData, config);
+    const response = await healthApi.post('/api/health-records/upload', formData, {
+      // 不要手动设置 Content-Type，浏览器会自动添加 boundary
+      ...(onProgress
+        ? {
+            onUploadProgress: (progressEvent) => {
+              const percentCompleted = Math.round(
+                (progressEvent.loaded * 100) / progressEvent.total
+              );
+              onProgress(percentCompleted);
+            },
+          }
+        : {}),
+    });
     return response.data;
   } catch (error) {
     throw error.response?.data || { message: '文件上传失败' };
@@ -383,23 +378,20 @@ export const uploadMultipleFiles = async (files, onProgress = null) => {
     files.forEach((file, index) => {
       formData.append(`files`, file);
     });
-
-    const config = {
-      headers: {
-        'Content-Type': 'multipart/form-data',
-      },
-    };
-
-    if (onProgress) {
-      config.onUploadProgress = (progressEvent) => {
-        const percentCompleted = Math.round(
-          (progressEvent.loaded * 100) / progressEvent.total
-        );
-        onProgress(percentCompleted);
-      };
-    }
-
-    const response = await healthApi.post('/upload/multiple', formData, config);
+    // 对齐后端健康档案批量上传端点
+    const response = await healthApi.post('/api/health-records/upload/multiple', formData, {
+      // 不要手动设置 Content-Type，浏览器会自动添加 boundary
+      ...(onProgress
+        ? {
+            onUploadProgress: (progressEvent) => {
+              const percentCompleted = Math.round(
+                (progressEvent.loaded * 100) / progressEvent.total
+              );
+              onProgress(percentCompleted);
+            },
+          }
+        : {}),
+    });
     return response.data;
   } catch (error) {
     throw error.response?.data || { message: '批量上传失败' };

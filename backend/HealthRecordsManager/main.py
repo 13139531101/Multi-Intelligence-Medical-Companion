@@ -70,13 +70,19 @@ def main(host, port, agent_prompt_file, model_name, provider, mcp_config_path, a
         )
         agent = BasicAgent(config_path=mcp_config_path, model_name=model_name, prompt_file=agent_prompt_file, provider=provider)
         
-        # 初始化记忆服务
-        logger.info("正在初始化记忆服务...")
-        memory_initialized = asyncio.run(health_records_memory_service.initialize())
-        if memory_initialized:
-            logger.info("记忆服务初始化成功")
+        # 初始化记忆服务（可通过环境变量 SKIP_MEMORY_INIT=1 跳过，加速调试）
+        if os.getenv("SKIP_MEMORY_INIT", "0") == "1":
+            logger.warning("检测到 SKIP_MEMORY_INIT=1，跳过记忆服务初始化（仅用于调试）")
         else:
-            logger.warning("记忆服务初始化失败，将在无记忆模式下运行")
+            logger.info("正在初始化记忆服务...")
+            try:
+                memory_initialized = asyncio.run(health_records_memory_service.initialize())
+                if memory_initialized:
+                    logger.info("记忆服务初始化成功")
+                else:
+                    logger.warning("记忆服务初始化失败，将在无记忆模式下运行")
+            except Exception as e:
+                logger.error(f"记忆服务初始化异常: {e}，将在无记忆模式下运行")
         
         # 启动 A2A 服务器
         server = A2AServer(

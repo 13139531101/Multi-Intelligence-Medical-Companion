@@ -54,7 +54,8 @@ class DatabaseManager:
     def __init__(self):
         self.config = DatabaseConfig()
         self._connection_pool = None
-        self._init_connection_pool()
+        # 延迟初始化连接池，避免在导入阶段因为数据库未就绪而导致进程退出
+        # 如需使用连接池，可在应用启动完成后主动调用 self._init_connection_pool()
     
     def _init_connection_pool(self):
         """初始化连接池"""

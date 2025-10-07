@@ -47,3 +47,7 @@ backend/**/uploads/
 # Local config
 *.local
 *.secret
+
+# Large binaries (do not commit)
+backend/tesseract_setup.exe
+tessdata/

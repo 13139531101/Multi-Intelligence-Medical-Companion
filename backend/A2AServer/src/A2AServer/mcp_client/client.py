@@ -24,6 +24,7 @@ from .providers.openai import generate_with_openai
 from .providers.deepseek import generate_with_deepseek
 from .providers.anthropic import generate_with_anthropic
 from .providers.ollama import generate_with_ollama
+from .providers.dashscope import generate_with_dashscope
 # 将 lmstudio 的导入改为可选，避免未安装第三方包导致整体导入失败
 try:
     from .providers.lmstudio import generate_with_lmstudio
@@ -134,12 +135,28 @@ class SSEMCPClient:
         await self.cleanup()
     async def cleanup(self):
         try:
-            if self.session:
-                await self._session_context.__aexit__(None, None, None)
+            if self.session and self._session_context:
+                try:
+                    await self._session_context.__aexit__(None, None, None)
+                except (ClosedResourceError, ValueError) as e:
+                    logger.debug(f"SSE session context already closed: {e!r}")
             if self._streams_context:
-                await self._streams_context.__aexit__(None, None, None)
+                try:
+                    await self._streams_context.__aexit__(None, None, None)
+                except (ClosedResourceError, ValueError) as e:
+                    logger.debug(f"SSE streams context already closed: {e!r}")
         except Exception as e:
             logger.warning(f"Error cleaning up SSE client: {e.__repr__()}")
+        finally:
+            # 释放引用并在 Windows 上给事件循环一点时间清理后台 I/O 任务
+            self.session = None
+            self._session_context = None
+            self._streams_context = None
+            if sys.platform.startswith("win"):
+                try:
+                    await asyncio.shield(asyncio.sleep(0.05))
+                except BaseException:
+                    pass
 
 
 class MCPClient:
@@ -181,6 +198,11 @@ class MCPClient:
             # Respect configured working directory for launching the MCP server process
             cfg_cwd = self.config.get("cwd")
             logger.info(f"[MCP][{self.name}] Launching: command={command} args={self.config['args']} cwd={cfg_cwd}")
+            # EXTRA DEBUG PRINTS FOR STARTUP DIAGNOSIS
+            try:
+                print(f"[MCP][{self.name}] Launching: {command} {' '.join(self.config['args'] or [])} cwd={cfg_cwd}")
+            except Exception:
+                pass
             if cfg_cwd:
                 try:
                     os.chdir(cfg_cwd)
@@ -199,6 +221,13 @@ class MCPClient:
             return True
         except Exception as e:
             logger.exception(f"Error initializing server {self.name}: {e}")
+            # EXTRA DEBUG PRINTS FOR ERROR DETAILS
+            try:
+                import traceback as _tb
+                print(f"[MCP][{self.name}] Error initializing: {e!r}")
+                print(_tb.format_exc())
+            except Exception:
+                pass
             await self.cleanup()
             return False
         finally:
@@ -301,11 +330,22 @@ class MCPClient:
         """Clean up server resources."""
         async with self._cleanup_lock:
             try:
-                await self.exit_stack.aclose()
+                try:
+                    await self.exit_stack.aclose()
+                except (ClosedResourceError, ValueError) as e:
+                    # 在 Windows 上 stdio 管道已关闭时，anyio 可能抛出 ValueError/ClosedResourceError，忽略即可
+                    logger.debug(f"Exit stack already closed or stdio pipe closed: {e!r}")
                 self.session = None
                 self.stdio_context = None
             except Exception as e:
                 logger.error(f"Error during cleanup of server {self.name}: {e}")
+            finally:
+                if sys.platform.startswith("win"):
+                    # 给事件循环一次机会清理后台 I/O 任务，避免 ValueError: I/O operation on closed pipe 警告
+                    try:
+                        await asyncio.shield(asyncio.sleep(0.05))
+                    except BaseException:
+                        pass
 
 
 class Tool:
@@ -428,6 +468,8 @@ async def generate_text(conversation: List[Dict], model_cfg: Dict,
             return await generate_with_bytedance(conversation, model_cfg, all_functions, stream=False)
         elif provider == "vllm":
             return await generate_with_vllm(conversation, model_cfg, all_functions, stream=False)
+        elif provider == "dashscope" or provider == "qwen":
+            return await generate_with_dashscope(conversation, model_cfg, all_functions, stream=False)
         elif provider == "anthropic":
             return await generate_with_anthropic(conversation, model_cfg, all_functions)
         elif provider == "ollama":

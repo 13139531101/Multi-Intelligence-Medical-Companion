@@ -87,6 +87,7 @@ const FileUpload = ({
         return {
           id: result.file_id || result.filename || Date.now() + index,
           file_id: result.file_id,
+          record_id: result.record_id,
           filename: result.filename,
           original_filename: result.original_filename || file.name,
           name: result.filename || file.name,
@@ -117,9 +118,17 @@ const FileUpload = ({
     } catch (error) {
       console.error('文件上传失败:', error);
       setUploadState(prev => ({ ...prev, uploading: false, progress: 0 }));
+      // 优化错误信息展示：优先后端返回的 detail，其次 message/错误数组
+      const detail =
+        (typeof error === 'string' ? error :
+          error?.detail ||
+          error?.message ||
+          error?.error ||
+          (Array.isArray(error?.errors) ? error.errors[0]?.message : null) ||
+          '文件上传失败');
       setNotification({
         open: true,
-        message: error.message || '文件上传失败',
+        message: detail,
         severity: 'error'
       });
     }
@@ -243,6 +252,7 @@ const FileUpload = ({
                   {getFileIcon(file.type)}
                 </ListItemIcon>
                 <ListItemText
+                  disableTypography
                   primary={
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                       <Typography variant="body2" noWrap>
