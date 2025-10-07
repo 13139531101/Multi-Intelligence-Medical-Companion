@@ -51,3 +51,5 @@ backend/**/uploads/
 # Large binaries (do not commit)
 backend/tesseract_setup.exe
 tessdata/
+# Ignore root multiagent_front
+multiagent_front/
