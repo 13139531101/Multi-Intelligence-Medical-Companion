@@ -64,7 +64,7 @@ class ADKHostManager(ApplicationManager):
         self._artifact_service = InMemoryArtifactService()
         self._memory_service = InMemoryMemoryService()
         self._host_agent = HostAgent([], self.task_callback)
-        self.user_id = 'test_user'
+        self.user_id = os.environ.get('A2A_CURRENT_USER_ID', 'test_user')
         self.app_name = 'A2A'
         self.api_key = api_key or os.environ.get('GOOGLE_API_KEY', '')
         self.uses_vertex_ai = (
@@ -139,6 +139,14 @@ class ADKHostManager(ApplicationManager):
 
     async def process_message(self, message: Message):
         self._messages.append(message)
+        # 优先从消息元数据获取当前账户的 user_id
+        try:
+            if message and message.metadata and 'user_id' in message.metadata:
+                incoming_user_id = message.metadata.get('user_id')
+                if isinstance(incoming_user_id, str) and incoming_user_id:
+                    self.user_id = incoming_user_id
+        except Exception:
+            pass
         message_id = get_message_id(message)
         if message_id:
             self._pending_message_ids.append(message_id)
@@ -162,7 +170,7 @@ class ADKHostManager(ApplicationManager):
         final_event: GenAIEvent | None = None
         # Determine if a task is to be resumed.
         session = self._session_service.get_session(
-            app_name='A2A', user_id='test_user', session_id=conversation_id
+            app_name='A2A', user_id=self.user_id, session_id=conversation_id
         )
         # Update state must happen in the event
         state_update = {

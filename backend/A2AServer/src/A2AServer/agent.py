@@ -89,11 +89,15 @@ class BasicAgent:
         Starts servers and gathers tools.
         Returns True if setup was successful, False otherwise.
         """
+        # 防止重复初始化：如果已预加载过并且服务器实例存在，则直接返回
+        if self.tool_ready and self.servers:
+            logger.info("MCP 工具已预加载，跳过重复初始化")
+            return True
         if not self.is_ready:
              print("Agent cannot be set up: Model not found.")
              return False
 
-        print("Starting MCP servers...")
+        logger.info("Starting MCP servers...")
         successful_servers = {}
         all_functions = []
         # 初始化MCP的server
@@ -132,7 +136,16 @@ class BasicAgent:
                  continue
 
             try:
-                ok = await client.start() # <-- AWAIT is valid here (inside async def)
+                # 启动 MCP 服务器，增加一次重试以提升稳定性（如 OCRTool）
+                attempts = 0
+                ok = False
+                while attempts < 2 and not ok:
+                    ok = await client.start()  # <-- AWAIT is valid here (inside async def)
+                    if not ok:
+                        attempts += 1
+                        if not self.quiet_mode:
+                            print(f"[WARN] Could not start server {server_name}, retry {attempts}/2")
+                        await asyncio.sleep(0.8)
                 if not ok:
                     if not self.quiet_mode:
                         print(f"[WARN] Could not start server {server_name}")
@@ -140,7 +153,7 @@ class BasicAgent:
                     if client: await client.stop()
                     continue
                 else:
-                    print(f"[MCP Tool OK] {server_name}")
+                    logger.info(f"[MCP Tool OK] {server_name}")
                     successful_servers[server_name] = client
 
                     # gather tools
@@ -173,11 +186,11 @@ class BasicAgent:
 
         if not self.servers:
             error_msg = "No MCP servers could be started."
-            print(f"[ERROR] {error_msg}")
+            logger.error(error_msg)
             self.tool_ready = False # Cannot run without servers
             return False
 
-        print(f"Found {len(self.all_functions)} tools: {json.dumps(self.all_functions, ensure_ascii=False)}")
+        logger.info(f"Found {len(self.all_functions)} tools: {json.dumps(self.all_functions, ensure_ascii=False)}")
         self.tool_ready = True # Setup was successful
         return True
 

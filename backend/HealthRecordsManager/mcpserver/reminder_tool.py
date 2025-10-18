@@ -95,6 +95,9 @@ def add_medication_reminder(user_id: str, medication_name: str, dosage: str,
         # 处理日期
         start_dt = reminder_manager.format_datetime(start_date) if start_date else datetime.now().date()
         end_dt = reminder_manager.format_datetime(end_date) if end_date else None
+        # 统一 DATE 类型用于插入
+        start_date_sql = start_dt.date() if isinstance(start_dt, datetime) else start_dt
+        end_date_sql = (end_dt.date() if isinstance(end_dt, datetime) else end_dt) if end_dt else None
 
         # 插入用药记录
         medication_query = """
@@ -106,23 +109,35 @@ def add_medication_reminder(user_id: str, medication_name: str, dosage: str,
         frequency_text = f"每日{len(valid_times)}次，时间：{', '.join(valid_times)}"
         medication_id = reminder_manager.db_manager.execute_insert(
             medication_query,
-            (user_id, medication_name, dosage, frequency_text, start_dt, end_dt, notes)
+            (user_id, medication_name, dosage, frequency_text, start_date_sql, end_date_sql, notes)
         )
 
         # 为每个时间点创建提醒
         reminder_ids = []
         for time_str in valid_times:
-            reminder_query = """
-                INSERT INTO medication_reminders
-                (user_id, medication_id, medication_name, dosage, reminder_time,
-                 start_date, end_date, notes)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-            """
+            # 组合首次提醒时间到具体日期时间
+            date_str = (start_dt.date().isoformat() if isinstance(start_dt, datetime) else str(start_dt))
+            first_dt = f"{date_str} {str(time_str)}:00"
+            # 1) 插入主提醒
+            main_id = reminder_manager.db_manager.execute_insert(
+                """
+                INSERT INTO reminders
+                (user_id, reminder_type, title, description, reminder_time)
+                VALUES (%s, %s, %s, %s, %s)
+                """,
+                (user_id, "medication", medication_name, notes, first_dt)
+            )
 
+            # 2) 插入详情，绑定外键 reminder_id，并存储单个时间点的 JSON
             reminder_id = reminder_manager.db_manager.execute_insert(
-                reminder_query,
-                (user_id, medication_id, medication_name, dosage, time_str,
-                 start_dt, end_dt, notes)
+                """
+                INSERT INTO medication_reminders
+                (reminder_id, user_id, medication_id, medication_name, dosage, frequency, reminder_times,
+                 start_date, end_date, notes)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (main_id, user_id, medication_id, medication_name, dosage, frequency_text, json.dumps([time_str]),
+                 start_date_sql, end_date_sql, notes)
             )
             reminder_ids.append(reminder_id)
 
@@ -164,38 +179,60 @@ def get_medication_reminders(user_id: str, date: str = "", active_only: bool = T
         # 构建查询
         if active_only:
             query = """
-                SELECT mr.id, mr.medication_name, mr.dosage, mr.reminder_time,
+                SELECT mr.id, mr.medication_name, mr.dosage, mr.reminder_times,
                        mr.start_date, mr.end_date, mr.notes, mr.created_at,
                        um.is_active as medication_active
                 FROM medication_reminders mr
                 LEFT JOIN user_medications um ON mr.medication_id = um.id
                 WHERE mr.user_id = %s
                   AND mr.is_active = 1
-                  AND mr.is_deleted = 0
                   AND (mr.start_date <= %s)
                   AND (mr.end_date IS NULL OR mr.end_date >= %s)
-                ORDER BY mr.reminder_time ASC
+                ORDER BY mr.created_at DESC
             """
             params = (user_id, target_date, target_date)
         else:
             query = """
-                SELECT mr.id, mr.medication_name, mr.dosage, mr.reminder_time,
+                SELECT mr.id, mr.medication_name, mr.dosage, mr.reminder_times,
                        mr.start_date, mr.end_date, mr.notes, mr.created_at,
                        um.is_active as medication_active
                 FROM medication_reminders mr
                 LEFT JOIN user_medications um ON mr.medication_id = um.id
-                WHERE mr.user_id = %s AND mr.is_deleted = 0
+                WHERE mr.user_id = %s
                 ORDER BY mr.created_at DESC
             """
             params = (user_id,)
 
         reminders = reminder_manager.db_manager.execute_query(query, params)
 
+        # 展开 JSON 的提醒时间到多个条目，每条包含一个 HH:MM 的 reminder_time
+        expanded = []
+        for row in reminders or []:
+            times_raw = row.get("reminder_times")
+            times_list = []
+            try:
+                if isinstance(times_raw, str):
+                    times_list = json.loads(times_raw)
+                elif isinstance(times_raw, (list, tuple)):
+                    times_list = list(times_raw)
+            except Exception:
+                times_list = []
+            for t in times_list:
+                item = dict(row)
+                item["reminder_time"] = str(t)
+                expanded.append(item)
+
+        # 按时间排序（HH:MM）
+        try:
+            expanded.sort(key=lambda x: x.get("reminder_time", ""))
+        except Exception:
+            pass
+
         return json.dumps({
             'success': True,
             'date': str(target_date),
-            'reminders': reminders,
-            'total': len(reminders)
+            'reminders': expanded,
+            'total': len(expanded)
         }, ensure_ascii=False, indent=2, default=str)
 
     except Exception as e:
@@ -225,9 +262,9 @@ def mark_reminder_taken(user_id: str, reminder_id: int, taken_time: str = "") ->
 
         # 检查提醒是否存在
         check_query = """
-            SELECT id, medication_id, medication_name
+            SELECT id, reminder_id, medication_id, medication_name, reminder_times
             FROM medication_reminders
-            WHERE id = %s AND user_id = %s AND is_deleted = 0
+            WHERE id = %s AND user_id = %s
         """
         reminders = reminder_manager.db_manager.execute_query(check_query, (reminder_id, user_id))
 
@@ -239,22 +276,32 @@ def mark_reminder_taken(user_id: str, reminder_id: int, taken_time: str = "") ->
 
         reminder = reminders[0]
 
-        # 记录服药日志
+        # 解析该条提醒的计划时间（当天的 HH:MM）
+        time_str = "12:00"
+        try:
+            times_raw = reminder.get("reminder_times")
+            times_list = json.loads(times_raw) if isinstance(times_raw, str) else (list(times_raw) if isinstance(times_raw, (list, tuple)) else [])
+            if times_list:
+                s = str(times_list[0])
+                # 简单校验 HH:MM
+                datetime.strptime(s, "%H:%M")
+                time_str = s
+        except Exception:
+            pass
+
+        # 记录服药日志（状态使用枚举中的 completed，并写入完成时间）
         log_query = """
             INSERT INTO reminder_logs
-            (user_id, reminder_id, medication_id, medication_name,
-             scheduled_time, actual_time, status, notes)
-            VALUES (%s, %s, %s, %s, %s, %s, 'taken', '用户手动标记已服药')
+            (reminder_id, user_id, scheduled_time, actual_time, status, completion_time, notes)
+            VALUES (%s, %s, %s, %s, 'completed', %s, '用户手动标记已服药')
         """
 
-        # 获取今天的计划时间
         today = datetime.now().date()
-        scheduled_time = datetime.combine(today, datetime.strptime("12:00", "%H:%M").time())
+        scheduled_time = datetime.combine(today, datetime.strptime(time_str, "%H:%M").time())
 
         log_id = reminder_manager.db_manager.execute_insert(
             log_query,
-            (user_id, reminder_id, reminder['medication_id'],
-             reminder['medication_name'], scheduled_time, taken_dt)
+            (reminder['reminder_id'], user_id, scheduled_time, taken_dt, taken_dt)
         )
 
         return json.dumps({

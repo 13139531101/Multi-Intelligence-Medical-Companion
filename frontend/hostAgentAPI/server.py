@@ -177,6 +177,13 @@ class ConversationServer:
               status_code=status.HTTP_403_FORBIDDEN,
               detail="无权访问此会话"
             )
+      # 自动将当前登录用户ID注入到消息元数据
+      try:
+        message.metadata = message.metadata or {}
+        if 'user_id' not in message.metadata:
+          message.metadata['user_id'] = current_user['user_id']
+      except Exception:
+        pass
     
     message = self.manager.sanitize_message(message)
     t = threading.Thread(target=lambda: asyncio.run(self.manager.process_message(message)))

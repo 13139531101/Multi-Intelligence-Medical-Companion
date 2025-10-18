@@ -3,6 +3,13 @@ import os
 import sys
 import logging
 import asyncio
+
+# 优先使用本仓库的 src 版本，避免误用 build/lib 或已安装旧版本
+_current_dir = os.path.dirname(__file__)
+_src_path = os.path.abspath(os.path.join(_current_dir, "..", "A2AServer", "src"))
+if _src_path not in sys.path:
+    sys.path.insert(0, _src_path)
+
 from A2AServer.common.server import A2AServer
 from A2AServer.common.A2Atypes import AgentCard, AgentCapabilities, AgentSkill, MissingAPIKeyError
 from A2AServer.task_manager import AgentTaskManager
@@ -69,6 +76,8 @@ def main(host, port, agent_prompt_file, model_name, provider, mcp_config_path, a
             skills=[skill],
         )
         agent = BasicAgent(config_path=mcp_config_path, model_name=model_name, prompt_file=agent_prompt_file, provider=provider)
+
+        # 预加载逻辑在服务器 startup 事件中执行，避免与主事件循环不一致
         
         # 初始化记忆服务
         try:

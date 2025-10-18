@@ -7,6 +7,14 @@
         "--with",
         "mcp[cli]",
         "--with",
+        "alibabacloud-ocr20191230",
+        "--with",
+        "alibabacloud-ocr-api20210707",
+        "--with",
+        "alibabacloud-tea-openapi",
+        "--with",
+        "alibabacloud-tea-util",
+        "--with",
         "Pillow",
         "--with",
         "pytesseract",
@@ -16,7 +24,13 @@
         "python-dotenv",
         "mcpserver/ocr_tool.py"
       ],
-      "cwd": "HealthRecordsManager"
+      "cwd": "HealthRecordsManager",
+      "env": {
+        "OCR_PROVIDER": "local",
+        "OCR_LANG": "chi_sim+eng",
+        "TESSERACT_PATH": "C\\\\Program Files\\\\Tesseract-OCR\\\\tesseract.exe",
+        "TESSDATA_PREFIX": "C\\\\Program Files\\\\Tesseract-OCR\\\\tessdata"
+      }
     },
     "DataExtractionTool": {
       "command": "uv",

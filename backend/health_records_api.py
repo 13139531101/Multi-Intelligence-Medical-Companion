@@ -726,14 +726,52 @@ async def upload_file(file: UploadFile = File(...), user_id: str = Form("default
             record_id = None
 
             if normalized_ct.startswith("image/"):
-                # 强制要求OCR模块可用
-                if not extract_text_from_image or not validate_medical_document:
-                    conn.rollback()
-                    raise HTTPException(status_code=503, detail="OCR模块未加载，无法对图片进行识别与入库")
+                # 新增：优先使用 PaddleOCR（若可用）；否则回退到内置OCR工具
                 try:
                     image_base64 = base64.b64encode(file_content).decode("utf-8")
-                    # 调用OCR
-                    ocr_text = extract_text_from_image.fn(image_base64) if hasattr(extract_text_from_image, "fn") else extract_text_from_image(image_base64)
+                    ocr_text = ""
+                    document_type = "unknown"
+                    confidence = 0.0
+                    _used_paddle = False
+                    try:
+                        from paddleocr import PaddleOCR  # type: ignore
+                        import tempfile
+                        _used_paddle = True
+                        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=Path(file.filename or '').suffix or ".png")
+                        tmp.write(file_content)
+                        tmp_path = tmp.name
+                        tmp.close()
+                        try:
+                            ocr_engine = PaddleOCR(use_angle_cls=True, lang='ch')
+                            result = ocr_engine.ocr(tmp_path, cls=True)
+                            lines = [line[1] for line in (result[0] if result else [])]
+                            ocr_text = "\n".join([t[0] for t in lines])
+                            confs = [float(t[1]) for t in lines if isinstance(t[1], (int, float))]
+                            confidence = (sum(confs) / len(confs)) if confs else 0.5
+                        finally:
+                            try:
+                                os.unlink(tmp_path)
+                            except Exception:
+                                pass
+                    except Exception:
+                        _used_paddle = False
+                    # 回退：若未用Paddle或识别为空，尝试内置OCR
+                    if not ocr_text:
+                        if not extract_text_from_image:
+                            conn.rollback()
+                            raise HTTPException(status_code=503, detail="OCR模块未加载，无法对图片进行识别与入库")
+                        ocr_text = extract_text_from_image.fn(image_base64) if hasattr(extract_text_from_image, "fn") else extract_text_from_image(image_base64)
+                    # 文档类型与置信度：若验证器可用则融合其置信度
+                    if validate_medical_document:
+                        try:
+                            validation_json = validate_medical_document.fn(ocr_text) if hasattr(validate_medical_document, "fn") else validate_medical_document(ocr_text)
+                            val = json.loads(validation_json) if isinstance(validation_json, str) else (validation_json or {})
+                            document_type = val.get("document_type") or "unknown"
+                            vconf = val.get("confidence")
+                            if isinstance(vconf, (int, float)):
+                                confidence = max(float(confidence), float(vconf))
+                        except Exception as e:
+                            logger.warning(f"文档验证失败，使用默认类型: {e}")
                     # 验证医疗文档属性
                     validation = validate_medical_document.fn(ocr_text) if hasattr(validate_medical_document, "fn") else validate_medical_document(ocr_text)
 

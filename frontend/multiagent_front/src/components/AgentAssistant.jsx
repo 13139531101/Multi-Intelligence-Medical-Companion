@@ -49,6 +49,7 @@ const AgentAssistant = ({
   const [pollingIntervalId, setPollingIntervalId] = useState(null);
   const messagesEndRef = useRef(null);
   const processedEventIds = useRef(new Set());
+  const lastPendingStatusRef = useRef({});
 
   // 智能体配置映射
   const agentConfigs = {
@@ -173,11 +174,34 @@ const AgentAssistant = ({
           }
         }
 
-        // 处理完成判断
+        // 处理完成判断 & 显示pending状态文本
         const pending = await getProcessingMessages();
-        const stillPending = Array.isArray(pending)
-          ? pending.some((item) => typeof item === 'string' && item.includes(trackedMessageId))
-          : false;
+        let stillPending = false;
+        let statusText = '';
+        if (Array.isArray(pending)) {
+          for (const entry of pending) {
+            if (Array.isArray(entry) && entry.length >= 2) {
+              const [mid, text] = entry;
+              if (mid === trackedMessageId) {
+                stillPending = true;
+                statusText = typeof text === 'string' ? text : '';
+                break;
+              }
+            }
+          }
+        }
+
+        // 仅在状态文本变化时追加一条提示，避免重复刷屏
+        if (statusText && statusText.trim() !== '' && lastPendingStatusRef.current[trackedMessageId] !== statusText) {
+          lastPendingStatusRef.current[trackedMessageId] = statusText;
+          setMessages(prev => [...prev, {
+            id: `pending:${trackedMessageId}:${Date.now()}`,
+            text: statusText,
+            sender: 'bot',
+            timestamp: new Date()
+          }]);
+        }
+
         if (!stillPending) {
           clearInterval(intervalId);
           setPollingIntervalId(null);

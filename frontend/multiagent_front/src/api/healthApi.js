@@ -285,6 +285,18 @@ export const setMedicationReminder = async (reminderData) => {
   }
 };
 
+// 标记提醒为已服用
+export const markReminderTaken = async (reminderId, takenTime = '') => {
+  try {
+    const response = await healthApi.post(`/medication-reminders/${reminderId}/taken`, null, {
+      params: { taken_time: takenTime }
+    });
+    return response.data;
+  } catch (error) {
+    throw error.response?.data || { message: '标记服药失败' };
+  }
+};
+
 // === 就诊摘要API ===
 
 // 获取就诊摘要

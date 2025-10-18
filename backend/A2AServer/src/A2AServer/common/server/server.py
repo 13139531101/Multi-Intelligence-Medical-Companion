@@ -2,7 +2,9 @@ from starlette.applications import Starlette
 from starlette.middleware.cors import CORSMiddleware
 from starlette.responses import JSONResponse
 from sse_starlette.sse import EventSourceResponse
+import asyncio
 from starlette.requests import Request
+import sys
 from A2AServer.common.A2Atypes import (
     A2ARequest,
     JSONRPCResponse,
@@ -40,6 +42,8 @@ class A2AServer:
         self.host = host
         self.port = port
         self.endpoint = endpoint
+        # Gate requests until MCP tools preload completes
+        self.ready_event = asyncio.Event()
         self.task_manager = task_manager
         self.agent_card = agent_card
         self.app = Starlette()
@@ -55,6 +59,10 @@ class A2AServer:
             "/.well-known/agent.json", self._get_agent_card, methods=["GET"]
         )
 
+        # 在应用生命周期内统一调度 Agent 的异步初始化与清理，避免多次创建事件循环
+        self.app.add_event_handler("startup", self._on_startup)
+        self.app.add_event_handler("shutdown", self._on_shutdown)
+
     def start(self):
         if self.agent_card is None:
             raise ValueError("agent_card is not defined")
@@ -64,12 +72,17 @@ class A2AServer:
 
         import uvicorn
 
-        uvicorn.run(self.app, host=self.host, port=self.port)
+        uvicorn.run(self.app, host=self.host, port=self.port, lifespan="on", log_config=None)
 
     def _get_agent_card(self, request: Request) -> JSONResponse:
         return JSONResponse(self.agent_card.model_dump(exclude_none=True))
 
     async def _process_request(self, request: Request):
+        # If a task request arrives before MCP preload completes, reject fast
+        if request.method in ("POST", "PUT", "PATCH") and not self.ready_event.is_set():
+            return JSONResponse({
+                "error": "Server is initializing MCP tools. Please retry shortly."
+            }, status_code=503)
         try:
             body = await request.json()
             json_rpc_request = A2ARequest.validate_python(body)
@@ -100,6 +113,35 @@ class A2AServer:
 
         except Exception as e:
             return self._handle_exception(e)
+
+    async def _on_startup(self):
+        # 在服务器启动时预加载 MCP 工具，确保与主事件循环对齐
+        try:
+            if self.task_manager and hasattr(self.task_manager, "agent") and getattr(self.task_manager, "agent", None):
+                # 若主进程已预加载，则跳过重复加载
+                if not getattr(self.task_manager.agent, "tool_ready", False):
+                    logger.info("正在服务器启动阶段预加载 MCP 工具...")
+                    await self.task_manager.agent.setup_tools()
+                else:
+                    logger.info("检测到 MCP 工具已在主进程预加载，启动阶段跳过")
+                logger.info("MCP 工具预加载完成")
+                # Mark server ready to accept task requests
+                self.ready_event.set()
+        except Exception as e:
+            logger.error(f"MCP 工具预加载失败：{e}")
+
+    async def _on_shutdown(self):
+        # 在服务器关闭时清理 Agent 资源，避免后台 I/O 任务泄漏
+        try:
+            if self.task_manager and hasattr(self.task_manager, "agent") and getattr(self.task_manager, "agent", None):
+                await self.task_manager.agent.cleanup()
+                if sys.platform.startswith("win"):
+                    try:
+                        await asyncio.shield(asyncio.sleep(0.05))
+                    except BaseException:
+                        pass
+        except Exception as e:
+            logger.debug(f"忽略关闭阶段的清理错误: {e!r}")
 
     def _handle_exception(self, e: Exception) -> JSONResponse:
         if isinstance(e, json.decoder.JSONDecodeError):

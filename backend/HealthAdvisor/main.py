@@ -76,6 +76,8 @@ def main(host, port, agent_prompt_file, model_name, provider, mcp_config_path, a
             skills=[skill],
         )
         agent = BasicAgent(config_path=mcp_config_path, model_name=model_name, prompt_file=agent_prompt_file, provider=provider)
+
+        # 预加载逻辑在服务器 startup 事件中执行，避免与主事件循环不一致
         
         # 初始化记忆服务
         try:

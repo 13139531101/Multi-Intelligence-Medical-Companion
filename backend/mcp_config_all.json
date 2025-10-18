@@ -1,0 +1,157 @@
+{
+  "mcpServers": {
+    "HealthAdvisor_KnowledgeTool": {
+      "command": "python",
+      "args": ["mcpserver/knowledge_tool.py"],
+      "cwd": "HealthAdvisor"
+    },
+    "HealthAdvisor_DiagnosisTool": {
+      "command": "python",
+      "args": ["mcpserver/diagnosis_tool.py"],
+      "cwd": "HealthAdvisor"
+    },
+    "HealthAdvisor_MemoryIntegrationTool": {
+      "command": "python",
+      "args": ["mcpserver/memory_integration_tool.py"],
+      "cwd": "HealthAdvisor",
+      "env": {
+        "MEMORY_DB_HOST": "localhost",
+        "MEMORY_DB_PORT": "3306",
+        "MEMORY_DB_NAME": "agent_memory",
+        "MEMORY_DB_USER": "root",
+        "MEMORY_DB_PASSWORD": "root",
+        "EMBEDDING_MODEL": "all-MiniLM-L6-v2",
+        "MEMORY_ENCRYPTION_ENABLED": "false"
+      }
+    },
+
+    "HealthRecordsManager_OCRTool": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--with", "mcp[cli]",
+        "--with", "alibabacloud-ocr20191230",
+        "--with", "alibabacloud-ocr-api20210707",
+        "--with", "alibabacloud-tea-openapi",
+        "--with", "alibabacloud-tea-util",
+        "--with", "Pillow",
+        "--with", "pytesseract",
+        "--with", "requests",
+        "--with", "python-dotenv",
+        "mcpserver/ocr_tool.py"
+      ],
+      "cwd": "HealthRecordsManager",
+      "env": {
+        "OCR_PROVIDER": "local",
+        "OCR_LANG": "chi_sim+eng",
+        "TESSERACT_PATH": "C\\\\Program Files\\\\Tesseract-OCR\\\\tesseract.exe",
+        "TESSDATA_PREFIX": "C\\\\Program Files\\\\Tesseract-OCR\\\\tessdata"
+      }
+    },
+    "HealthRecordsManager_DataExtractionTool": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--with", "mcp[cli]",
+        "mcpserver/data_extraction_tool.py"
+      ],
+      "cwd": "HealthRecordsManager"
+    },
+    "HealthRecordsManager_StorageTool": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--with", "mcp[cli]",
+        "--with", "mysql-connector-python",
+        "--with", "cryptography",
+        "mcpserver/storage_tool.py"
+      ],
+      "cwd": "HealthRecordsManager"
+    },
+    "HealthRecordsManager_ReminderTool": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--with", "mcp[cli]",
+        "mcpserver/reminder_tool.py"
+      ],
+      "cwd": "HealthRecordsManager"
+    },
+    "HealthRecordsManager_MemoryIntegrationTool": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--with", "mcp[cli]",
+        "--with", "mysql-connector-python",
+        "--with", "cryptography",
+        "mcpserver/memory_integration_tool.py"
+      ],
+      "cwd": "HealthRecordsManager",
+      "env": {
+        "MEMORY_DB_HOST": "localhost",
+        "MEMORY_DB_PORT": "3306",
+        "MEMORY_DB_NAME": "agent_memory",
+        "MEMORY_DB_USER": "root",
+        "MEMORY_DB_PASSWORD": "root",
+        "MEMORY_EMBEDDING_MODEL": "all-MiniLM-L6-v2",
+        "MEMORY_LOG_LEVEL": "INFO"
+      }
+    },
+
+    "MedicationReminder_ReminderTool": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--with", "mcp[cli]",
+        "mcp",
+        "run",
+        "mcpserver/reminder_tool.py"
+      ],
+      "cwd": "MedicationReminder"
+    },
+    "MedicationReminder_NotificationTool": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--with", "mcp[cli]",
+        "mcp",
+        "run",
+        "mcpserver/notification_tool.py"
+      ],
+      "cwd": "MedicationReminder"
+    },
+    "MedicationReminder_MemoryIntegrationTool": {
+      "command": "python",
+      "args": ["memory_integration_tool.py"],
+      "cwd": "MedicationReminder",
+      "env": {
+        "DATABASE_URL": "sqlite:///medication_reminder_memory.db",
+        "EMBEDDING_MODEL": "text-embedding-3-small",
+        "LOG_LEVEL": "INFO"
+      }
+    },
+
+    "VisitSummaryGenerator_DocumentTool": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--with", "mcp[cli]",
+        "mcp",
+        "run",
+        "mcpserver/document_tool.py"
+      ],
+      "cwd": "VisitSummaryGenerator"
+    },
+    "VisitSummaryGenerator_AIAnalysisTool": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--with", "mcp[cli]",
+        "mcp",
+        "run",
+        "mcpserver/ai_analysis_tool.py"
+      ],
+      "cwd": "VisitSummaryGenerator"
+    }
+  }
+}

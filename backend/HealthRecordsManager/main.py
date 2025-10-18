@@ -3,12 +3,34 @@ import os
 import sys
 import logging
 import asyncio
+
+# 优先使用本仓库的 src 版本，避免误用 build/lib 或已安装旧版本
+_current_dir = os.path.dirname(__file__)
+_src_path = os.path.abspath(os.path.join(_current_dir, "..", "A2AServer", "src"))
+if _src_path not in sys.path:
+    sys.path.insert(0, _src_path)
+
 from A2AServer.common.server import A2AServer
 from A2AServer.common.A2Atypes import AgentCard, AgentCapabilities, AgentSkill, MissingAPIKeyError
 from A2AServer.task_manager import AgentTaskManager
 from A2AServer.agent import BasicAgent
 from dotenv import load_dotenv
 from memory_service import health_records_memory_service
+# 确保优先使用当前模块下的 database_config，避免与 AgentMemorySystem 同名模块冲突
+CUR_DIR = os.path.dirname(os.path.abspath(__file__))
+if CUR_DIR not in sys.path:
+    sys.path.insert(0, CUR_DIR)
+import importlib.util
+db_config_path = os.path.join(CUR_DIR, 'database_config.py')
+try:
+    _spec = importlib.util.spec_from_file_location("HRM_database_config", db_config_path)
+    _module = importlib.util.module_from_spec(_spec)
+    assert _spec and _spec.loader
+    _spec.loader.exec_module(_module)
+    get_db_manager = getattr(_module, 'get_db_manager')
+except Exception as _e:
+    logger.error(f"加载本地 database_config 失败：{_e}")
+    raise
 
 load_dotenv()
 
@@ -69,6 +91,26 @@ def main(host, port, agent_prompt_file, model_name, provider, mcp_config_path, a
             skills=[skill],
         )
         agent = BasicAgent(config_path=mcp_config_path, model_name=model_name, prompt_file=agent_prompt_file, provider=provider)
+
+        # 预加载逻辑在服务器 startup 事件中执行，避免与主事件循环不一致
+
+        # 启动前验证数据库连接（必要时进行初始化）
+        try:
+            db_manager = get_db_manager()
+            if db_manager.test_connection():
+                logger.info("数据库连接正常")
+            else:
+                logger.warning("数据库连接测试失败，尝试初始化数据库...")
+                try:
+                    db_manager.init_database()
+                except Exception as init_err:
+                    logger.error(f"数据库初始化失败：{init_err}")
+                if db_manager.test_connection():
+                    logger.info("数据库连接恢复正常")
+                else:
+                    logger.error("数据库初始化后仍无法连接，请检查 MySQL 服务与配置")
+        except Exception as e:
+            logger.error(f"数据库预检异常：{e}")
         
         # 初始化记忆服务（可通过环境变量 SKIP_MEMORY_INIT=1 跳过，加速调试）
         if os.getenv("SKIP_MEMORY_INIT", "0") == "1":

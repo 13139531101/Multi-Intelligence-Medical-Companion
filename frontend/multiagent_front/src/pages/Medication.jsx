@@ -55,7 +55,7 @@ import { AdapterDayjs } from '@mui/x-date-pickers/AdapterDayjs';
 import dayjs from 'dayjs';
 import Header from '../components/HealthHeader';
 import AgentAssistant from '../components/AgentAssistant';
-import { getMedications, addMedication, updateMedication, deleteMedication, getMedicationReminders } from '../api/healthApi';
+import { getMedications, addMedication, updateMedication, deleteMedication, getMedicationReminders, markReminderTaken } from '../api/healthApi';
 
 const Medication = () => {
   const [medications, setMedications] = useState([]);
@@ -87,6 +87,16 @@ const Medication = () => {
     { value: 'weekly', label: '每周', times: 1 },
     { value: 'as_needed', label: '按需服用', times: 0 }
   ];
+
+  // 频次显示：优先使用预设标签；否则根据 times 推断；再回退原文本
+  const renderFrequency = (med) => {
+    const predefined = frequencies.find(f => f.value === med.frequency)?.label;
+    if (predefined) return predefined;
+    if (Array.isArray(med.times) && med.times.length > 0) {
+      return `每日${med.times.length}次`;
+    }
+    return med.frequency || '按需服用';
+  };
 
   const medicationTypes = [
     { value: 'tablet', label: '片剂', icon: '💊' },
@@ -368,7 +378,7 @@ const Medication = () => {
                         </Box>
                         
                         <Typography variant="body2" sx={{ mb: 1 }}>
-                          <strong>频次：</strong>{frequencies.find(f => f.value === medication.frequency)?.label}
+                          <strong>频次：</strong>{renderFrequency(medication)}
                         </Typography>
                         
                         <Typography variant="body2" sx={{ mb: 1 }}>
@@ -376,7 +386,7 @@ const Medication = () => {
                           {medication.times.map((time, index) => (
                             <Chip
                               key={index}
-                              label={dayjs(time).format('HH:mm')}
+                              label={typeof time === 'string' ? time : dayjs(time).format('HH:mm')}
                               size="small"
                               sx={{ ml: 0.5 }}
                             />
@@ -479,8 +489,14 @@ const Medication = () => {
                                   size="small"
                                   variant="contained"
                                   color="success"
-                                  onClick={() => {
-                                    // 标记为已服用的逻辑
+                                  onClick={async () => {
+                                    try {
+                                      await markReminderTaken(reminder.id);
+                                      setReminders(prev => prev.map(r => r.id === reminder.id ? { ...r, taken: true } : r));
+                                    } catch (error) {
+                                      console.error('标记服药失败:', error);
+                                      alert(error?.message || '标记服药失败');
+                                    }
                                   }}
                                 >
                                   已服用

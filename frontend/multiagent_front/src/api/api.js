@@ -1,8 +1,8 @@
 import { v4 as uuidv4 } from 'uuid'
 import { fetchEventSource } from '@microsoft/fetch-event-source'
 
-const SERVER_URL = import.meta.env.VITE_HOSTAGENT_API;
-const SMART_CHAT_URL = import.meta.env.VITE_SMART_CHAT_API || 'http://localhost:8001';
+const SERVER_URL = import.meta.env.VITE_HOSTAGENT_API || 'http://127.0.0.1:13002';
+const SMART_CHAT_URL = import.meta.env.VITE_SMART_CHAT_API || SERVER_URL;
 const AGENT_CARD_PATH = '/.well-known/agent.json';
 
 
