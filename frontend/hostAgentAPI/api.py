@@ -32,9 +32,22 @@ logging.basicConfig(
 )
 app = FastAPI()
 
+# 更严格且兼容本地开发的 CORS 设置：明确允许本地前端来源
+frontend_origins = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+]
+extra_origin = os.getenv("FRONTEND_ORIGIN")
+if extra_origin:
+    try:
+        frontend_origins.append(extra_origin)
+    except Exception:
+        pass
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=frontend_origins,
+    allow_origin_regex=r"https?://(localhost|127\\.0\\.0\\.1)(:\\d+)?",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
