@@ -97,7 +97,7 @@ function App() {
             } />
             <Route path="/smart-chat" element={
               <ProtectedRoute>
-                <SmartChat />
+                <AgentChat />
               </ProtectedRoute>
             } />
             <Route path="/agent-chat" element={

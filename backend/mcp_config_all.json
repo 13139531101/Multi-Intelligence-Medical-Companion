@@ -1,18 +1,34 @@
 {
   "mcpServers": {
     "HealthAdvisor_KnowledgeTool": {
-      "command": "python",
-      "args": ["mcpserver/knowledge_tool.py"],
+      "command": "uv",
+      "args": [
+        "run",
+        "--with", "mcp[cli]",
+        "mcp", "run",
+        "mcpserver/knowledge_tool.py"
+      ],
       "cwd": "HealthAdvisor"
     },
     "HealthAdvisor_DiagnosisTool": {
-      "command": "python",
-      "args": ["mcpserver/diagnosis_tool.py"],
+      "command": "uv",
+      "args": [
+        "run",
+        "--with", "mcp[cli]",
+        "mcp", "run",
+        "mcpserver/diagnosis_tool.py"
+      ],
       "cwd": "HealthAdvisor"
     },
     "HealthAdvisor_MemoryIntegrationTool": {
-      "command": "python",
-      "args": ["mcpserver/memory_integration_tool.py"],
+      "command": "uv",
+      "args": [
+        "run",
+        "--with", "mcp[cli]",
+        "--with", "mysql-connector-python",
+        "--with", "cryptography",
+        "mcpserver/memory_integration_tool.py"
+      ],
       "cwd": "HealthAdvisor",
       "env": {
         "MEMORY_DB_HOST": "localhost",
@@ -121,8 +137,12 @@
       "cwd": "MedicationReminder"
     },
     "MedicationReminder_MemoryIntegrationTool": {
-      "command": "python",
-      "args": ["memory_integration_tool.py"],
+      "command": "uv",
+      "args": [
+        "run",
+        "--with", "mcp[cli]",
+        "mcpserver/memory_integration_tool.py"
+      ],
       "cwd": "MedicationReminder",
       "env": {
         "DATABASE_URL": "sqlite:///medication_reminder_memory.db",

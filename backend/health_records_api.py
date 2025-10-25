@@ -148,6 +148,7 @@ def init_database():
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS health_records (
                 id TEXT PRIMARY KEY,
+                user_id TEXT,
                 title TEXT NOT NULL,
                 record_type TEXT NOT NULL,
                 summary TEXT,
@@ -161,6 +162,26 @@ def init_database():
                 file_attachments TEXT
             )
         """)
+        # 迁移：如旧表缺少 user_id 列，则补充添加
+        try:
+            cursor.execute("PRAGMA table_info(health_records)")
+            cols = [row[1] for row in cursor.fetchall()]
+            if "user_id" not in cols:
+                cursor.execute("ALTER TABLE health_records ADD COLUMN user_id TEXT")
+        except Exception:
+            pass
+        
+        # 新增：为旧数据补齐 user_id（使用默认/当前用户）
+        try:
+            default_user = os.environ.get("A2A_CURRENT_USER_ID") or os.environ.get("DEFAULT_USER_ID")
+            if default_user:
+                cursor.execute(
+                    "UPDATE health_records SET user_id = ? WHERE user_id IS NULL OR user_id = ''",
+                    (default_user,)
+                )
+        except Exception:
+            # 不中断启动流程
+            pass
         
         # 创建文件附件表
         cursor.execute("""
@@ -280,9 +301,10 @@ async def get_health_records(
     importance: Optional[ImportanceLevel] = Query(None, description="重要性筛选"),
     search: Optional[str] = Query(None, description="搜索关键词"),
     start_date: Optional[date] = Query(None, description="开始日期"),
-    end_date: Optional[date] = Query(None, description="结束日期")
+    end_date: Optional[date] = Query(None, description="结束日期"),
+    user_id: Optional[str] = Query(None, description="用户ID过滤")
 ):
-    """获取健康档案列表"""
+    """获取健康档案列表（按用户隔离）"""
     try:
         with get_db_connection() as conn:
             cursor = conn.cursor()
@@ -290,6 +312,10 @@ async def get_health_records(
             # 构建查询条件
             conditions = []
             params = []
+            
+            if user_id:
+                conditions.append("user_id = ?")
+                params.append(user_id)
             
             if record_type:
                 conditions.append("record_type = ?")
@@ -332,16 +358,19 @@ async def get_health_records(
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/health-records/{record_id}", response_model=HealthRecord)
-async def get_health_record(record_id: str):
-    """获取单个健康档案详情"""
+async def get_health_record(record_id: str, user_id: Optional[str] = Query(None, description="用户ID过滤")):
+    """获取单个健康档案详情（按用户隔离）"""
     try:
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT * FROM health_records WHERE id = ?", (record_id,))
+            if user_id:
+                cursor.execute("SELECT * FROM health_records WHERE id = ? AND user_id = ?", (record_id, user_id))
+            else:
+                cursor.execute("SELECT * FROM health_records WHERE id = ?", (record_id,))
             row = cursor.fetchone()
             
             if not row:
-                raise HTTPException(status_code=404, detail="健康档案不存在")
+                raise HTTPException(status_code=404, detail="健康档案不存在或无权限访问")
             
             return row_to_health_record(row)
             
@@ -352,8 +381,8 @@ async def get_health_record(record_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/health-records", response_model=HealthRecord)
-async def create_health_record(record: HealthRecordCreate):
-    """创建健康档案"""
+async def create_health_record(record: HealthRecordCreate, user_id: Optional[str] = Query(None, description="用户ID")):
+    """创建健康档案（按用户隔离）"""
     try:
         # 后端保护：如请求体包含文件但未提供内容，返回400，避免产生空内容记录
         try:
@@ -362,8 +391,6 @@ async def create_health_record(record: HealthRecordCreate):
                 meta_files = record.metadata.get("files") or record.metadata.get("uploaded_files")
                 if isinstance(meta_files, list) and len(meta_files) > 0:
                     has_files = True
-            # 顶层 files 由网关可能转换为 metadata.uploaded_files，但也兼容直接传递
-            # Pydantic 模型中未定义顶层 files，此处仅基于 metadata 判断
             content_empty = (record.content is None) or (isinstance(record.content, str) and record.content.strip() == "")
             if has_files and content_empty:
                 raise HTTPException(
@@ -373,7 +400,6 @@ async def create_health_record(record: HealthRecordCreate):
         except HTTPException:
             raise
         except Exception:
-            # 不影响正常创建流程，保护逻辑失败时忽略
             pass
 
         record_id = generate_id()
@@ -383,11 +409,12 @@ async def create_health_record(record: HealthRecordCreate):
             cursor = conn.cursor()
             cursor.execute("""
                 INSERT INTO health_records (
-                    id, title, record_type, summary, content, importance,
+                    id, user_id, title, record_type, summary, content, importance,
                     tags, metadata, record_date, created_at, updated_at, file_attachments
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 record_id,
+                user_id,
                 record.title,
                 record.record_type.value,
                 record.summary,
@@ -402,7 +429,6 @@ async def create_health_record(record: HealthRecordCreate):
             ))
             conn.commit()
             
-            # 返回创建的记录
             cursor.execute("SELECT * FROM health_records WHERE id = ?", (record_id,))
             row = cursor.fetchone()
             return row_to_health_record(row)
@@ -412,17 +438,20 @@ async def create_health_record(record: HealthRecordCreate):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.put("/api/health-records/{record_id}", response_model=HealthRecord)
-async def update_health_record(record_id: str, record_update: HealthRecordUpdate):
-    """更新健康档案"""
+async def update_health_record(record_id: str, record_update: HealthRecordUpdate, user_id: Optional[str] = Query(None, description="用户ID")):
+    """更新健康档案（按用户隔离）"""
     try:
         with get_db_connection() as conn:
             cursor = conn.cursor()
             
-            # 检查记录是否存在
-            cursor.execute("SELECT * FROM health_records WHERE id = ?", (record_id,))
+            # 检查记录是否存在并属于用户
+            if user_id:
+                cursor.execute("SELECT * FROM health_records WHERE id = ? AND user_id = ?", (record_id, user_id))
+            else:
+                cursor.execute("SELECT * FROM health_records WHERE id = ?", (record_id,))
             existing_record = cursor.fetchone()
             if not existing_record:
-                raise HTTPException(status_code=404, detail="健康档案不存在")
+                raise HTTPException(status_code=404, detail="健康档案不存在或无权限访问")
             
             # 构建更新字段
             update_fields = []
@@ -469,12 +498,20 @@ async def update_health_record(record_id: str, record_update: HealthRecordUpdate
             params.append(datetime.now().isoformat())
             params.append(record_id)
             
-            query = f"UPDATE health_records SET {', '.join(update_fields)} WHERE id = ?"
+            # 如果提供 user_id，确保只更新该用户的记录
+            if user_id:
+                query = f"UPDATE health_records SET {', '.join(update_fields)} WHERE id = ? AND user_id = ?"
+                params.append(user_id)
+            else:
+                query = f"UPDATE health_records SET {', '.join(update_fields)} WHERE id = ?"
             cursor.execute(query, params)
             conn.commit()
             
             # 返回更新后的记录
-            cursor.execute("SELECT * FROM health_records WHERE id = ?", (record_id,))
+            if user_id:
+                cursor.execute("SELECT * FROM health_records WHERE id = ? AND user_id = ?", (record_id, user_id))
+            else:
+                cursor.execute("SELECT * FROM health_records WHERE id = ?", (record_id,))
             row = cursor.fetchone()
             return row_to_health_record(row)
             
@@ -485,16 +522,19 @@ async def update_health_record(record_id: str, record_update: HealthRecordUpdate
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.delete("/api/health-records/{record_id}")
-async def delete_health_record(record_id: str):
-    """删除健康档案"""
+async def delete_health_record(record_id: str, user_id: Optional[str] = Query(None, description="用户ID")):
+    """删除健康档案（按用户隔离）"""
     try:
         with get_db_connection() as conn:
             cursor = conn.cursor()
             
-            # 检查记录是否存在
-            cursor.execute("SELECT * FROM health_records WHERE id = ?", (record_id,))
+            # 检查记录是否存在并属于用户
+            if user_id:
+                cursor.execute("SELECT * FROM health_records WHERE id = ? AND user_id = ?", (record_id, user_id))
+            else:
+                cursor.execute("SELECT * FROM health_records WHERE id = ?", (record_id,))
             if not cursor.fetchone():
-                raise HTTPException(status_code=404, detail="健康档案不存在")
+                raise HTTPException(status_code=404, detail="健康档案不存在或无权限访问")
             
             # 删除相关文件附件
             cursor.execute("SELECT file_path FROM file_attachments WHERE record_id = ?", (record_id,))
@@ -506,7 +546,10 @@ async def delete_health_record(record_id: str):
             
             # 删除数据库记录
             cursor.execute("DELETE FROM file_attachments WHERE record_id = ?", (record_id,))
-            cursor.execute("DELETE FROM health_records WHERE id = ?", (record_id,))
+            if user_id:
+                cursor.execute("DELETE FROM health_records WHERE id = ? AND user_id = ?", (record_id, user_id))
+            else:
+                cursor.execute("DELETE FROM health_records WHERE id = ?", (record_id,))
             conn.commit()
             
             return {"message": "健康档案删除成功"}
@@ -884,12 +927,13 @@ async def upload_file(file: UploadFile = File(...), user_id: str = Form("default
                     cursor.execute(
                         """
                         INSERT INTO health_records (
-                            id, title, record_type, summary, content, importance,
+                            id, user_id, title, record_type, summary, content, importance,
                             tags, metadata, record_date, created_at, updated_at, file_attachments
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             record_id,
+                            user_id,
                             title,
                             record_type,
                             ocr_text_str[:300] if ocr_text_str else None,

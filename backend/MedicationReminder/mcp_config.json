@@ -23,8 +23,13 @@
       ]
     },
     "MemoryIntegrationTool": {
-      "command": "python",
-      "args": ["memory_integration_tool.py"],
+      "command": "uv",
+      "args": [
+        "run",
+        "--with",
+        "mcp[cli]",
+        "mcpserver/memory_integration_tool.py"
+      ],
       "cwd": ".",
       "env": {
         "DATABASE_URL": "sqlite:///medication_reminder_memory.db",

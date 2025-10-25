@@ -646,7 +646,7 @@ const Summary = () => {
               </Grid>
               <Grid item xs={12}>
                 <FileUpload
-                  onUpload={(files) => handleFileUpload(files, true)}
+                  onUploadComplete={(files) => handleFileUpload(files, true)}
                   accept=".pdf,.jpg,.jpeg,.png,.doc,.docx"
                   multiple
                   title="上传就诊文件"
@@ -831,7 +831,7 @@ const Summary = () => {
               
               <Grid item xs={12}>
                 <FileUpload
-                  onUpload={handleFileUpload}
+                  onUploadComplete={handleFileUpload}
                   accept=".pdf,.jpg,.jpeg,.png,.doc,.docx"
                   multiple
                   title="上传相关文件"
@@ -842,7 +842,7 @@ const Summary = () => {
           </DialogContent>
           <DialogActions>
             <Button onClick={handleCloseDialog}>取消</Button>
-            <Button onClick={handleSubmit} variant="contained">
+            <Button onClick={(e) => { e.stopPropagation(); handleSubmit(); }} variant="contained">
               {editingSummary ? '更新' : '添加'}
             </Button>
           </DialogActions>

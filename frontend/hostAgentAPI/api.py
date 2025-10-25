@@ -12,19 +12,15 @@ from dotenv import load_dotenv
 import json
 from datetime import date, datetime
 
-# 加载 hostAgentAPI 的 .env
-load_dotenv()
+load_dotenv(override=True)
 
-# 额外加载后端 backend/.env（不覆盖已有环境变量）
 backend_env_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "backend", ".env"))
 try:
     if os.path.exists(backend_env_path):
         load_dotenv(backend_env_path, override=False)
 except Exception:
-    # 避免因环境文件问题影响服务启动
     pass
 
-# 配置日志
 logfile = "api.log"
 logging.basicConfig(
     level=logging.INFO,
@@ -36,7 +32,6 @@ logging.basicConfig(
 )
 app = FastAPI()
 
-# Enable CORS for frontend React app
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -45,7 +40,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 在HostAgentAPI启动时预热后端工具（记忆系统与OCR），避免首次调用时冷启动
 @app.on_event("startup")
 async def _host_api_startup_warmup():
     logger = logging.getLogger(__name__)
@@ -352,6 +346,7 @@ try:
         search: str | None = None,
         start_date: str | None = None,
         end_date: str | None = None,
+        user: dict = Depends(get_current_user),
     ):
         # 将字符串参数转换为后端所需的枚举与日期类型
         rt = None
@@ -378,6 +373,7 @@ try:
                 ed = date.fromisoformat(end_date)
             except Exception:
                 ed = None
+        user_id = str(user.get("id") or user.get("user_id") or user.get("uid") or "")
         result = await health_api.get_health_records(
             skip=skip,
             limit=limit,
@@ -386,43 +382,50 @@ try:
             search=search,
             start_date=sd,
             end_date=ed,
+            user_id=user_id,
         )
         # 统一映射为前端需要的字段
         return [to_front_record(r) for r in result]
 
     @health_router.get("/api/health-records/{record_id}")
-    async def get_record_proxy(record_id: str):
-        r = await health_api.get_health_record(record_id)
+    async def get_record_proxy(record_id: str, user: dict = Depends(get_current_user)):
+        user_id = str(user.get("id") or user.get("user_id") or user.get("uid") or "")
+        r = await health_api.get_health_record(record_id, user_id=user_id)
         return to_front_record(r)
 
     @health_router.post("/api/health-records")
-    async def create_record_proxy(request: Request):
+    async def create_record_proxy(request: Request, user: dict = Depends(get_current_user)):
         payload = await request.json()
         converted = transform_record_payload(payload or {})
         record = health_api.HealthRecordCreate(**converted)
-        r = await health_api.create_health_record(record)
+        user_id = str(user.get("id") or user.get("user_id") or user.get("uid") or "")
+        r = await health_api.create_health_record(record, user_id=user_id)
         return to_front_record(r)
 
     @health_router.put("/api/health-records/{record_id}")
-    async def update_record_proxy(record_id: str, request: Request):
+    async def update_record_proxy(record_id: str, request: Request, user: dict = Depends(get_current_user)):
         payload = await request.json()
         converted = transform_update_payload(payload or {})
         record = health_api.HealthRecordUpdate(**converted)
-        r = await health_api.update_health_record(record_id, record)
+        user_id = str(user.get("id") or user.get("user_id") or user.get("uid") or "")
+        r = await health_api.update_health_record(record_id, record, user_id=user_id)
         return to_front_record(r)
 
     @health_router.delete("/api/health-records/{record_id}")
-    async def delete_record_proxy(record_id: str):
-        return await health_api.delete_health_record(record_id)
+    async def delete_record_proxy(record_id: str, user: dict = Depends(get_current_user)):
+        user_id = str(user.get("id") or user.get("user_id") or user.get("uid") or "")
+        return await health_api.delete_health_record(record_id, user_id=user_id)
 
     @health_router.post("/api/health-records/upload")
-    async def upload_file_proxy(file: UploadFile = File(...)):
-        return await health_api.upload_file(file)
+    async def upload_file_proxy(file: UploadFile = File(...), user: dict = Depends(get_current_user)):
+        user_id = str(user.get("id") or user.get("user_id") or user.get("uid") or "")
+        return await health_api.upload_file(file, user_id=user_id)
 
     # 新增：批量上传代理，转发到后端批量上传端点
     @health_router.post("/api/health-records/upload/multiple")
-    async def upload_files_proxy(files: List[UploadFile] = File(...)):
-        return await health_api.upload_multiple_files(files)
+    async def upload_files_proxy(files: List[UploadFile] = File(...), user: dict = Depends(get_current_user)):
+        user_id = str(user.get("id") or user.get("user_id") or user.get("uid") or "")
+        return await health_api.upload_multiple_files(files, user_id=user_id)
 
     # 新增：文件直链转发（按file_id读取并以内联方式返回）
     @health_router.get("/api/health-records/files/{file_id}")
@@ -638,11 +641,33 @@ try:
                     except Exception:
                         pass
                 scheduled = f"{str(target_date)} {str(r.get('reminder_time'))}:00"
+
+                # 计算已服用状态：查询当天对应提醒的日志
+                taken_flag = False
+                if dbm:
+                    try:
+                        # 先查主提醒ID（medication_reminders.reminder_id）
+                        rid_rows = dbm.execute_query(
+                            "SELECT reminder_id FROM medication_reminders WHERE id = %s",
+                            (r.get("id"),)
+                        )
+                        main_rid = rid_rows[0].get("reminder_id") if rid_rows else None
+                        if main_rid:
+                            log_rows = dbm.execute_query(
+                                "SELECT status FROM reminder_logs WHERE reminder_id = %s AND user_id = %s AND scheduled_time = %s ORDER BY completion_time DESC LIMIT 1",
+                                (main_rid, user_id, scheduled)
+                            )
+                            if log_rows:
+                                status = str(log_rows[0].get("status") or "").lower()
+                                taken_flag = status in ("completed", "taken")
+                    except Exception:
+                        taken_flag = False
+
                 result.append({
                     "id": r.get("id"),
                     "medicationId": med_id,
                     "scheduledTime": scheduled,
-                    "taken": False,
+                    "taken": taken_flag,
                 })
             return result
         except Exception as e:
@@ -808,7 +833,152 @@ async def send_consultation_message(cid: str, request: Request):
         ]
     }
 
-# 添加 ping 路由
+SUMMARIES_DB_PATH = os.path.join(os.path.dirname(__file__), "visit_summaries.json")
+
+def _load_user_summaries(user_id: str) -> list:
+    try:
+        if not os.path.exists(SUMMARIES_DB_PATH):
+            return []
+        with open(SUMMARIES_DB_PATH, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        if isinstance(data, list):
+            # 旧版本：文件内容为列表，视为所有用户共享
+            return data
+        return data.get(user_id, [])
+    except Exception:
+        return []
+
+def _save_user_summaries(user_id: str, items: list) -> None:
+    try:
+        db = {}
+        if os.path.exists(SUMMARIES_DB_PATH):
+            try:
+                with open(SUMMARIES_DB_PATH, 'r', encoding='utf-8') as f:
+                    db = json.load(f)
+            except Exception:
+                db = {}
+        if isinstance(db, list):
+            db = {user_id: items}
+        else:
+            db[user_id] = items
+        with open(SUMMARIES_DB_PATH, 'w', encoding='utf-8') as f:
+            json.dump(db, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logging.error(f"保存用户就诊摘要失败: {e}")
+
+@app.get("/summaries")
+async def list_summaries(user: dict = Depends(get_current_user)):
+    items = _load_user_summaries(str(user.get("id")))
+    try:
+        items.sort(key=lambda x: x.get('visitDate', ''), reverse=True)
+    except Exception:
+        pass
+    return items
+
+@app.post("/summaries")
+async def create_summary(request: Request, user: dict = Depends(get_current_user)):
+    payload = await request.json()
+    items = _load_user_summaries(str(user.get("id")))
+    new_id = uuid.uuid4().hex
+    summary = {
+        "id": new_id,
+        "title": payload.get("title") or "就诊摘要",
+        "visitDate": _normalize_date(payload.get("visitDate")),
+        "doctor": payload.get("doctor") or "",
+        "hospital": payload.get("hospital") or "",
+        "department": payload.get("department") or "",
+        "chiefComplaint": payload.get("chiefComplaint") or "",
+        "symptoms": payload.get("symptoms") or "",
+        "examination": payload.get("examination") or "",
+        "diagnosis": payload.get("diagnosis") or "",
+        "treatment": payload.get("treatment") or "",
+        "prescription": payload.get("prescription") or "",
+        "followUp": payload.get("followUp") or "",
+        "notes": payload.get("notes") or "",
+        "files": payload.get("files") or [],
+        "createdAt": datetime.utcnow().isoformat(),
+        "updatedAt": datetime.utcnow().isoformat(),
+        "userId": str(user.get("id")),
+    }
+    items.append(summary)
+    _save_user_summaries(str(user.get("id")), items)
+    return summary
+
+@app.put("/summaries/{sid}")
+async def update_summary(sid: str, request: Request, user: dict = Depends(get_current_user)):
+    payload = await request.json()
+    items = _load_user_summaries(str(user.get("id")))
+    updated = None
+    for i, s in enumerate(items):
+        if str(s.get("id")) == str(sid):
+            s.update({
+                "title": payload.get("title", s.get("title")),
+                "visitDate": _normalize_date(payload.get("visitDate", s.get("visitDate"))),
+                "doctor": payload.get("doctor", s.get("doctor")),
+                "hospital": payload.get("hospital", s.get("hospital")),
+                "department": payload.get("department", s.get("department")),
+                "chiefComplaint": payload.get("chiefComplaint", s.get("chiefComplaint")),
+                "symptoms": payload.get("symptoms", s.get("symptoms")),
+                "examination": payload.get("examination", s.get("examination")),
+                "diagnosis": payload.get("diagnosis", s.get("diagnosis")),
+                "treatment": payload.get("treatment", s.get("treatment")),
+                "prescription": payload.get("prescription", s.get("prescription")),
+                "followUp": payload.get("followUp", s.get("followUp")),
+                "notes": payload.get("notes", s.get("notes")),
+                "files": payload.get("files", s.get("files")),
+                "updatedAt": datetime.utcnow().isoformat(),
+            })
+            s["userId"] = str(user.get("id"))
+            updated = s
+            items[i] = s
+            break
+    if updated is None:
+        return {"success": False, "message": "摘要不存在"}
+    _save_user_summaries(str(user.get("id")), items)
+    return updated
+
+@app.delete("/summaries/{sid}")
+async def delete_summary(sid: str, user: dict = Depends(get_current_user)):
+    items = _load_user_summaries(str(user.get("id")))
+    new_items = [s for s in items if str(s.get("id")) != str(sid)]
+    _save_user_summaries(str(user.get("id")), new_items)
+    return {"success": True, "deleted": str(sid)}
+
+@app.post("/summaries/generate")
+async def generate_ai_summary(request: Request, user: dict = Depends(get_current_user)):
+    payload = await request.json()
+    visit_date = _normalize_date(payload.get("visitDate"))
+    doctor = payload.get("doctor") or ""
+    hospital = payload.get("hospital") or ""
+    additional = payload.get("additionalInfo") or ""
+    files = payload.get("files") or []
+    title = payload.get("title") or f"{doctor or '未填医生'} - {visit_date}"
+
+    generated = {
+        "id": uuid.uuid4().hex,
+        "title": title,
+        "visitDate": visit_date,
+        "doctor": doctor,
+        "hospital": hospital,
+        "department": payload.get("department") or "",
+        "chiefComplaint": (payload.get("chiefComplaint") or (additional[:100] if additional else "")),
+        "symptoms": payload.get("symptoms") or "",
+        "examination": payload.get("examination") or "",
+        "diagnosis": payload.get("diagnosis") or "",
+        "treatment": payload.get("treatment") or "",
+        "prescription": payload.get("prescription") or "",
+        "followUp": payload.get("followUp") or "",
+        "notes": payload.get("notes") or "",
+        "files": files,
+        "createdAt": datetime.utcnow().isoformat(),
+        "updatedAt": datetime.utcnow().isoformat(),
+        "userId": str(user.get("id")),
+    }
+    items = _load_user_summaries(str(user.get("id")))
+    items.append(generated)
+    _save_user_summaries(str(user.get("id")), items)
+    return generated
+
 @app.api_route("/ping", methods=["GET", "POST"])
 async def ping():
     return "Pong"
@@ -898,5 +1068,40 @@ app.include_router(router)       # 会话路由
 # 启动服务
 if __name__ == "__main__":
     import uvicorn
-    print(f"启动A2A的多Agent协调者后端服务，端口为13002")
-    uvicorn.run(app, host="0.0.0.0", port=13002)
+    import socket
+    # 允许通过环境变量配置绑定地址与端口，默认与现状一致
+    env_port = os.getenv("HOST_API_PORT", "13002")
+    host = os.getenv("HOST_API_BIND", "0.0.0.0")
+
+    def _resolve_port(port_str: str, bind_host: str) -> int:
+        """支持 auto/0：自动选择可用端口"""
+        try:
+            p = int(port_str)
+            if p > 0:
+                return p
+        except Exception:
+            pass
+        if str(port_str).lower() in ("auto", "0"):
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.bind((bind_host if bind_host else "127.0.0.1", 0))
+            p = s.getsockname()[1]
+            s.close()
+            return p
+        # 非法值时回退默认
+        return 13002
+
+    port = _resolve_port(env_port, host)
+    print(f"启动A2A的多Agent协调者后端服务，地址 {host}，端口为{port}")
+    try:
+        uvicorn.run(app, host=host, port=port)
+    except OSError as e:
+        # Windows 上若遇到 [WinError 10013] 权限不允许，自动回退到 127.0.0.1
+        winerr = getattr(e, "winerror", None)
+        if winerr == 10013 or getattr(e, "errno", None) == 13:
+            fallback_host = "127.0.0.1"
+            # 若原端口受限，尝试自动选择可用端口
+            alt_port = _resolve_port("auto" if str(env_port).lower() != "auto" else env_port, fallback_host)
+            logging.error(f"[HostAPI] 绑定 {host}:{port} 失败（权限/防火墙限制），回退到 {fallback_host}:{alt_port}")
+            uvicorn.run(app, host=fallback_host, port=alt_port)
+        else:
+            raise

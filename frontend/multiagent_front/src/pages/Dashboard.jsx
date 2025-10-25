@@ -96,11 +96,11 @@ const Dashboard = () => {
       count: healthSummary?.summariesCount || 0
     },
     {
-      title: '智能聊天',
+      title: '智能助手',
       description: '一句话调用所有健康智能体',
       icon: <SmartToy sx={{ fontSize: 40 }} />,
       color: '#E91E63',
-      path: '/smart-chat',
+      path: '/agent-chat',
       count: '新功能'
     }
   ];

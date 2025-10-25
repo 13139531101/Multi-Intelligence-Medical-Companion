@@ -18,7 +18,7 @@ const TestChat = () => {
     setResponse('');
     setLogs([]);
     
-    addLog('开始测试智能聊天');
+    addLog('开始测试智能助手');
     
     try {
       addLog('调用smartChat函数...');
@@ -44,7 +44,7 @@ const TestChat = () => {
 
   return (
     <div style={{ padding: '20px', maxWidth: '800px', margin: '0 auto' }}>
-      <h1>智能聊天测试页面</h1>
+      <h1>智能助手测试页面</h1>
       
       <div style={{ marginBottom: '20px' }}>
         <input

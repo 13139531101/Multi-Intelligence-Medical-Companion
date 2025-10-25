@@ -295,8 +295,7 @@ const AgentAssistant = ({
 
   const getPositionStyles = () => {
     const baseStyles = {
-      position: 'fixed',
-      zIndex: 1300
+      position: 'fixed'
     };
 
     switch (position) {
@@ -335,6 +334,7 @@ const AgentAssistant = ({
         onClick={() => setOpen(true)}
         sx={{
           ...getPositionStyles(),
+          zIndex: 1200,
           bgcolor: currentAgent.color,
           '&:hover': {
             bgcolor: currentAgent.color,
@@ -350,6 +350,7 @@ const AgentAssistant = ({
       <Dialog
         open={open}
         onClose={() => setOpen(false)}
+        hideBackdrop
         maxWidth={false}
         PaperProps={{
           sx: {
@@ -357,6 +358,7 @@ const AgentAssistant = ({
             height: sizeConfig.height,
             maxHeight: '90vh',
             position: 'fixed',
+            zIndex: 1300,
             ...getPositionStyles(),
             m: 0
           }

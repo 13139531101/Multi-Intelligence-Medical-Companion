@@ -1,20 +1,39 @@
 {
   "mcpServers": {
     "KnowledgeTool": {
-      "command": "python",
+      "command": "uv",
       "args": [
+        "run",
+        "--with",
+        "mcp[cli]",
+        "mcp",
+        "run",
         "mcpserver/knowledge_tool.py"
       ]
     },
     "DiagnosisTool": {
-      "command": "python",
+      "command": "uv",
       "args": [
+        "run",
+        "--with",
+        "mcp[cli]",
+        "mcp",
+        "run",
         "mcpserver/diagnosis_tool.py"
       ]
     },
     "MemoryIntegrationTool": {
-      "command": "python",
-      "args": ["mcpserver/memory_integration_tool.py"],
+      "command": "uv",
+      "args": [
+        "run",
+        "--with",
+        "mcp[cli]",
+        "--with",
+        "mysql-connector-python",
+        "--with",
+        "cryptography",
+        "mcpserver/memory_integration_tool.py"
+      ],
       "env": {
         "MEMORY_DB_HOST": "localhost",
         "MEMORY_DB_PORT": "3306",

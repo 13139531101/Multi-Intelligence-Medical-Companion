@@ -18,6 +18,7 @@ import { Send as SendIcon, ExpandMore as ExpandMoreIcon } from '@mui/icons-mater
 import { smartChat, queryEvents, getProcessingMessages, SMART_CHAT_URL } from '../api/api';
 import { v4 as uuidv4 } from 'uuid';
 import axios from 'axios';
+import { useNavigate } from 'react-router-dom';
 
 const SmartChat = () => {
   const [messages, setMessages] = useState([
@@ -40,6 +41,7 @@ const SmartChat = () => {
   const processedEventIds = useRef(new Set());
   const maxPollingTime = 30000; // 30秒最大轮询时间
   const pollingStartTime = useRef(null);
+  const navigate = useNavigate();
   
   // 智能路由API实例
   const smartChatApi = axios.create({
@@ -352,6 +354,10 @@ const SmartChat = () => {
 
   return (
     <Container maxWidth="md" sx={{ py: 3 }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2 }}>
+        <Typography variant="h4">智能健康助手</Typography>
+        <Button variant="outlined" onClick={() => navigate('/dashboard')}>返回仪表盘</Button>
+      </Box>
       {/* 标题 */}
       <Box textAlign="center" mb={4}>
         <Typography variant="h4" component="h1" gutterBottom>
