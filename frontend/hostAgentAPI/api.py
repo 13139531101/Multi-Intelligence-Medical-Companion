@@ -848,6 +848,23 @@ async def send_consultation_message(cid: str, request: Request):
 
 SUMMARIES_DB_PATH = os.path.join(os.path.dirname(__file__), "visit_summaries.json")
 
+def _normalize_date(val) -> str:
+    """标准化日期格式，返回 YYYY-MM-DD 字符串"""
+    if not val:
+        return ""
+    try:
+        # 允许完整ISO日期时间字符串，提取日期部分
+        s = str(val)
+        if len(s) >= 10:
+            # 提取前10个字符作为日期部分 (YYYY-MM-DD)
+            date_part = s[:10]
+            # 验证格式是否正确
+            date.fromisoformat(date_part)
+            return date_part
+        return ""
+    except Exception:
+        return ""
+
 def _load_user_summaries(user_id: str) -> list:
     try:
         if not os.path.exists(SUMMARIES_DB_PATH):

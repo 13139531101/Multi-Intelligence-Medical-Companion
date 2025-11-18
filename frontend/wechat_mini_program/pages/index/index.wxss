@@ -1,104 +1,38 @@
 /**index.wxss**/
+.container {
+  padding: 20rpx;
+  background-color: #f8f9fa;
+  min-height: 100vh;
+}
+
+/* 用户信息区域 */
 .userinfo {
   display: flex;
   flex-direction: column;
   align-items: center;
-  color: #aaa;
+  background: white;
+  border-radius: 20rpx;
+  padding: 30rpx;
+  margin-bottom: 30rpx;
+  box-shadow: 0 4rpx 20rpx rgba(0, 0, 0, 0.08);
 }
 
-.userinfo-avatar {
-  overflow: hidden;
-  width: 128rpx;
-  height: 128rpx;
-  margin: 20rpx;
-  border-radius: 50%;
-}
-
-.usermotto {
-  margin-top: 200px;
-}
-
-.button-container {
-  margin-top: 20px;
-}
-
-.upload-btn {
-  background-color: #007aff;
-  color: white;
-  border-radius: 8px;
-  padding: 10px 20px;
-}
-
-.image-container {
-  margin-top: 20px;
-  position: relative;
-  width: 200px;
-  height: 200px;
-  background-color: #f0f0f0;
-  border-radius: 8px;
-  overflow: hidden;
-}
-
-.uploaded-image {
-  width: 100%;
-  height: 100%;
-}
-
-.image-overlay {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  background-color: rgba(0, 122, 255, 0.7);
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  opacity: 0;
-  transition: opacity 0.3s;
-}
-
-.image-container:hover .image-overlay {
-  opacity: 1;
-}
-
-.preview-text {
-  color: white;
-  font-size: 16px;
-}
-
-.api-status {
-  margin-top: 10px;
-  color: #888;
-  font-size: 14px;
-}
-
-.entry-section {
-  margin-top: 20px;
-}
-
-.entry-btn {
-  background-color: #007aff;
-  color: white;
-}
-
-/* 登录用户信息样式 */
 .login-userinfo {
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 20rpx;
 }
 
 .avatar-placeholder {
-  width: 128rpx;
-  height: 128rpx;
+  width: 120rpx;
+  height: 120rpx;
   border-radius: 50%;
   background: linear-gradient(135deg, #007aff 0%, #0056cc 100%);
   display: flex;
   align-items: center;
   justify-content: center;
   margin-bottom: 20rpx;
+  box-shadow: 0 8rpx 24rpx rgba(0, 122, 255, 0.3);
 }
 
 .avatar-text {
@@ -121,4 +55,357 @@
   border-radius: 20rpx;
   padding: 10rpx 30rpx;
   font-size: 24rpx;
+}
+
+/* 区域标题 */
+.section-title {
+  font-size: 36rpx;
+  font-weight: 600;
+  color: #333;
+  margin-bottom: 30rpx;
+  display: block;
+}
+
+/* 快速操作区域 */
+.quick-actions {
+  margin-bottom: 40rpx;
+}
+
+.action-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20rpx;
+}
+
+.action-item {
+  background: white;
+  border-radius: 20rpx;
+  padding: 30rpx 20rpx;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  box-shadow: 0 4rpx 20rpx rgba(0, 0, 0, 0.08);
+  position: relative;
+  transition: all 0.3s ease;
+}
+
+.action-item:active {
+  transform: scale(0.98);
+  box-shadow: 0 2rpx 10rpx rgba(0, 0, 0, 0.12);
+}
+
+.action-icon {
+  width: 80rpx;
+  height: 80rpx;
+  border-radius: 20rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 20rpx;
+}
+
+.action-icon.health-records {
+  background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+}
+
+.action-icon.health-consult {
+  background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%);
+}
+
+.action-icon.medication {
+  background: linear-gradient(135deg, #fa709a 0%, #fee140 100%);
+}
+
+.action-icon.visit-summary {
+  background: linear-gradient(135deg, #a8edea 0%, #fed6e3 100%);
+}
+
+.action-icon .icon {
+  font-size: 40rpx;
+}
+
+.action-title {
+  font-size: 28rpx;
+  font-weight: 600;
+  color: #333;
+  margin-bottom: 10rpx;
+}
+
+.action-desc {
+  font-size: 22rpx;
+  color: #666;
+  line-height: 1.4;
+  margin-bottom: 15rpx;
+}
+
+.action-badge {
+  position: absolute;
+  top: 15rpx;
+  right: 15rpx;
+  background: #007aff;
+  color: white;
+  font-size: 20rpx;
+  padding: 4rpx 12rpx;
+  border-radius: 20rpx;
+  font-weight: 500;
+}
+
+.action-badge.new {
+  background: #ff4757;
+}
+
+/* 智能助手区域 */
+.smart-assistant {
+  margin-bottom: 40rpx;
+}
+
+.assistant-card {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border-radius: 20rpx;
+  padding: 30rpx;
+  display: flex;
+  align-items: center;
+  color: white;
+  position: relative;
+  box-shadow: 0 8rpx 32rpx rgba(102, 126, 234, 0.3);
+}
+
+.assistant-icon {
+  width: 80rpx;
+  height: 80rpx;
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 20rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-right: 20rpx;
+}
+
+.assistant-icon .icon {
+  font-size: 40rpx;
+}
+
+.assistant-content {
+  flex: 1;
+}
+
+.assistant-title {
+  font-size: 32rpx;
+  font-weight: 600;
+  margin-bottom: 8rpx;
+  display: block;
+}
+
+.assistant-desc {
+  font-size: 24rpx;
+  opacity: 0.9;
+}
+
+.assistant-badge {
+  position: absolute;
+  top: 15rpx;
+  right: 15rpx;
+  background: #ff4757;
+  color: white;
+  font-size: 20rpx;
+  padding: 4rpx 12rpx;
+  border-radius: 20rpx;
+  font-weight: 500;
+}
+
+/* 最近活动区域 */
+.recent-activity {
+  margin-bottom: 40rpx;
+}
+
+.activity-list {
+  background: white;
+  border-radius: 20rpx;
+  overflow: hidden;
+  box-shadow: 0 4rpx 20rpx rgba(0, 0, 0, 0.08);
+}
+
+.activity-item {
+  display: flex;
+  align-items: center;
+  padding: 25rpx 30rpx;
+  border-bottom: 1rpx solid #f0f0f0;
+}
+
+.activity-item:last-child {
+  border-bottom: none;
+}
+
+.activity-icon {
+  width: 60rpx;
+  height: 60rpx;
+  background: #f8f9fa;
+  border-radius: 15rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-right: 20rpx;
+}
+
+.activity-icon .icon {
+  font-size: 28rpx;
+}
+
+.activity-content {
+  flex: 1;
+}
+
+.activity-title {
+  font-size: 28rpx;
+  color: #333;
+  margin-bottom: 5rpx;
+  display: block;
+}
+
+.activity-time {
+  font-size: 22rpx;
+  color: #999;
+}
+
+.no-activity {
+  background: white;
+  border-radius: 20rpx;
+  padding: 60rpx 30rpx;
+  text-align: center;
+  color: #999;
+  font-size: 28rpx;
+  box-shadow: 0 4rpx 20rpx rgba(0, 0, 0, 0.08);
+}
+
+.view-all {
+  text-align: center;
+  padding: 20rpx;
+  color: #007aff;
+  font-size: 26rpx;
+  background: white;
+  border-radius: 0 0 20rpx 20rpx;
+  margin-top: -10rpx;
+  box-shadow: 0 4rpx 20rpx rgba(0, 0, 0, 0.08);
+}
+
+/* 健康趋势区域 */
+.health-trend {
+  margin-bottom: 40rpx;
+}
+
+.trend-card {
+  background: linear-gradient(135deg, #84fab0 0%, #8fd3f4 100%);
+  border-radius: 20rpx;
+  padding: 30rpx;
+  display: flex;
+  align-items: center;
+  color: white;
+  box-shadow: 0 8rpx 32rpx rgba(132, 250, 176, 0.3);
+}
+
+.trend-icon {
+  width: 80rpx;
+  height: 80rpx;
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 20rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-right: 20rpx;
+}
+
+.trend-icon .icon {
+  font-size: 40rpx;
+}
+
+.trend-content {
+  flex: 1;
+}
+
+.trend-title {
+  font-size: 28rpx;
+  font-weight: 600;
+  margin-bottom: 8rpx;
+  display: block;
+}
+
+.trend-desc {
+  font-size: 22rpx;
+  opacity: 0.9;
+}
+
+.trend-action {
+  background: rgba(255, 255, 255, 0.2);
+  padding: 15rpx 25rpx;
+  border-radius: 20rpx;
+  font-size: 24rpx;
+  font-weight: 500;
+}
+
+/* 空状态 */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 60rpx 0;
+  color: #999;
+}
+
+.empty-icon {
+  font-size: 80rpx;
+  margin-bottom: 20rpx;
+  opacity: 0.5;
+}
+
+.empty-text {
+  font-size: 28rpx;
+  color: #999;
+}
+
+/* 系统状态 */
+.system-status {
+  text-align: center;
+  padding: 20rpx;
+  margin-top: 20rpx;
+}
+
+.status-text {
+  font-size: 22rpx;
+  color: #999;
+}
+
+.status-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 15rpx 0;
+  border-bottom: 1rpx solid #f0f0f0;
+}
+
+.status-item:last-child {
+  border-bottom: none;
+}
+
+.status-label {
+  font-size: 28rpx;
+  color: #666;
+}
+
+.status-value {
+  font-size: 28rpx;
+  font-weight: 500;
+}
+
+.status-success {
+  color: #52c41a;
+}
+
+.status-error {
+  color: #ff4d4f;
+}
+
+.status-info {
+  color: #1890ff;
 }

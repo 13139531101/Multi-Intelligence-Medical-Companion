@@ -1,0 +1,7 @@
+{
+  "navigationBarTitleText": "健康档案",
+  "navigationBarBackgroundColor": "#1890ff",
+  "navigationBarTextStyle": "white",
+  "enablePullDownRefresh": true,
+  "backgroundTextStyle": "dark"
+}

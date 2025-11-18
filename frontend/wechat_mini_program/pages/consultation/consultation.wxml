@@ -1,0 +1,114 @@
+<!--consultation.wxml-->
+<view class="container">
+  <!-- 页面标题 -->
+  <view class="page-header">
+    <view class="page-title">健康咨询</view>
+    <view class="page-desc">AI智能健康咨询服务</view>
+  </view>
+
+  <!-- 快速咨询入口 -->
+  <view class="quick-consult-section">
+    <view class="section-title">快速咨询</view>
+    <view class="quick-consult-grid">
+      <view class="consult-item" bindtap="startConsultation" data-type="symptom">
+        <view class="consult-icon">🤒</view>
+        <view class="consult-title">症状咨询</view>
+        <view class="consult-desc">描述症状获取建议</view>
+      </view>
+      <view class="consult-item" bindtap="startConsultation" data-type="medication">
+        <view class="consult-icon">💊</view>
+        <view class="consult-title">用药咨询</view>
+        <view class="consult-desc">药物使用相关问题</view>
+      </view>
+      <view class="consult-item" bindtap="startConsultation" data-type="health">
+        <view class="consult-icon">💪</view>
+        <view class="consult-title">健康管理</view>
+        <view class="consult-desc">日常健康管理建议</view>
+      </view>
+      <view class="consult-item" bindtap="startConsultation" data-type="report">
+        <view class="consult-icon">📊</view>
+        <view class="consult-title">报告解读</view>
+        <view class="consult-desc">医疗报告专业解读</view>
+      </view>
+    </view>
+  </view>
+
+  <!-- 咨询历史 -->
+  <view class="history-section">
+    <view class="section-header">
+      <view class="section-title">咨询历史</view>
+      <view class="section-more" bindtap="viewAllHistory">查看全部</view>
+    </view>
+    
+    <view class="history-list" wx:if="{{consultationHistory.length > 0}}">
+      <view class="history-item" wx:for="{{consultationHistory}}" wx:key="id" bindtap="viewConsultation" data-id="{{item.id}}">
+        <view class="history-header">
+          <view class="history-type">{{item.type_name}}</view>
+          <view class="history-date">{{item.formatted_date}}</view>
+        </view>
+        <view class="history-title">{{item.title}}</view>
+        <view class="history-preview">{{item.preview}}</view>
+        <view class="history-footer">
+          <view class="history-status {{item.status}}">{{item.status_name}}</view>
+          <view class="history-messages">{{item.message_count}}条对话</view>
+        </view>
+      </view>
+    </view>
+
+    <view class="empty-state" wx:else>
+      <view class="empty-icon">💬</view>
+      <view class="empty-title">暂无咨询记录</view>
+      <view class="empty-desc">开始您的第一次健康咨询吧</view>
+    </view>
+  </view>
+
+  <!-- 专家推荐 -->
+  <view class="expert-section">
+    <view class="section-title">AI健康顾问</view>
+    <view class="expert-card">
+      <view class="expert-avatar">🤖</view>
+      <view class="expert-info">
+        <view class="expert-name">智能健康助手</view>
+        <view class="expert-desc">基于医学知识库的AI助手，24小时在线服务</view>
+        <view class="expert-tags">
+          <view class="tag">症状分析</view>
+          <view class="tag">用药指导</view>
+          <view class="tag">健康建议</view>
+        </view>
+      </view>
+      <view class="expert-status online">在线</view>
+    </view>
+  </view>
+
+  <!-- 温馨提示 */
+  <view class="tips-section">
+    <view class="tips-title">⚠️ 温馨提示</view>
+    <view class="tips-content">
+      <view class="tip-item">• AI咨询仅供参考，不能替代专业医疗诊断</view>
+      <view class="tip-item">• 如有严重症状，请及时就医</view>
+      <view class="tip-item">• 用药请遵医嘱，不要自行调整剂量</view>
+    </view>
+  </view>
+</view>
+
+<!-- 咨询类型选择弹窗 -->
+<view class="modal" wx:if="{{showTypeModal}}" bindtap="closeTypeModal">
+  <view class="modal-content" catchtap="true">
+    <view class="modal-header">
+      <view class="modal-title">选择咨询类型</view>
+      <view class="modal-close" bindtap="closeTypeModal">×</view>
+    </view>
+    <view class="modal-body">
+      <view class="type-list">
+        <view class="type-item" wx:for="{{consultationTypes}}" wx:key="value" bindtap="selectType" data-type="{{item.value}}">
+          <view class="type-icon">{{item.icon}}</view>
+          <view class="type-info">
+            <view class="type-name">{{item.name}}</view>
+            <view class="type-desc">{{item.description}}</view>
+          </view>
+          <view class="type-arrow">></view>
+        </view>
+      </view>
+    </view>
+  </view>
+</view>

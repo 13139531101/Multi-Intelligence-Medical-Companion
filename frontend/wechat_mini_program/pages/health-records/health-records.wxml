@@ -1,0 +1,116 @@
+<!--health-records.wxml-->
+<view class="container">
+  <!-- 页面标题 -->
+  <view class="page-header">
+    <view class="page-title">健康档案</view>
+    <view class="page-desc">管理您的健康档案信息</view>
+  </view>
+
+  <!-- 搜索和筛选 -->
+  <view class="search-section">
+    <view class="search-bar">
+      <input class="search-input" placeholder="搜索档案..." bindinput="onSearchInput" value="{{searchKeyword}}" />
+      <view class="search-icon">🔍</view>
+    </view>
+    <view class="filter-tabs">
+      <view class="filter-tab {{activeFilter === 'all' ? 'active' : ''}}" bindtap="setFilter" data-filter="all">
+        全部
+      </view>
+      <view class="filter-tab {{activeFilter === 'report' ? 'active' : ''}}" bindtap="setFilter" data-filter="report">
+        检查报告
+      </view>
+      <view class="filter-tab {{activeFilter === 'prescription' ? 'active' : ''}}" bindtap="setFilter" data-filter="prescription">
+        处方单
+      </view>
+      <view class="filter-tab {{activeFilter === 'other' ? 'active' : ''}}" bindtap="setFilter" data-filter="other">
+        其他
+      </view>
+    </view>
+  </view>
+
+  <!-- 档案列表 -->
+  <view class="records-list" wx:if="{{filteredRecords.length > 0}}">
+    <view class="record-item" wx:for="{{filteredRecords}}" wx:key="id" bindtap="viewRecord" data-id="{{item.id}}">
+      <view class="record-header">
+        <view class="record-type">{{item.record_type}}</view>
+        <view class="record-date">{{item.formatted_date}}</view>
+      </view>
+      <view class="record-title">{{item.title}}</view>
+      <view class="record-desc" wx:if="{{item.description}}">{{item.description}}</view>
+      <view class="record-footer">
+        <view class="record-hospital" wx:if="{{item.hospital}}">{{item.hospital}}</view>
+        <view class="record-actions">
+          <view class="action-btn edit" bindtap="editRecord" data-id="{{item.id}}" catchtap="true">编辑</view>
+          <view class="action-btn delete" bindtap="deleteRecord" data-id="{{item.id}}" catchtap="true">删除</view>
+        </view>
+      </view>
+    </view>
+  </view>
+
+  <!-- 空状态 -->
+  <view class="empty-state" wx:else>
+    <view class="empty-icon">📋</view>
+    <view class="empty-title">暂无健康档案</view>
+    <view class="empty-desc">点击下方按钮添加您的第一个健康档案</view>
+  </view>
+
+  <!-- 加载更多 -->
+  <view class="load-more" wx:if="{{hasMore && filteredRecords.length > 0}}" bindtap="loadMore">
+    <view class="load-more-text" wx:if="{{!loading}}">加载更多</view>
+    <view class="load-more-text" wx:else>加载中...</view>
+  </view>
+
+  <!-- 添加按钮 -->
+  <view class="add-btn" bindtap="addRecord">
+    <view class="add-icon">+</view>
+  </view>
+</view>
+
+<!-- 添加/编辑弹窗 -->
+<view class="modal" wx:if="{{showModal}}" bindtap="closeModal">
+  <view class="modal-content" catchtap="true">
+    <view class="modal-header">
+      <view class="modal-title">{{isEditing ? '编辑档案' : '添加档案'}}</view>
+      <view class="modal-close" bindtap="closeModal">×</view>
+    </view>
+    <view class="modal-body">
+      <view class="form-group">
+        <view class="form-label">档案标题</view>
+        <input class="form-input" placeholder="请输入档案标题" bindinput="onTitleInput" value="{{formData.title}}" />
+      </view>
+      <view class="form-group">
+        <view class="form-label">档案类型</view>
+        <picker class="form-picker" bindchange="onTypeChange" value="{{typeIndex}}" range="{{typeOptions}}">
+          <view class="picker-text">{{typeOptions[typeIndex] || '请选择类型'}}</view>
+        </picker>
+      </view>
+      <view class="form-group">
+        <view class="form-label">医院/机构</view>
+        <input class="form-input" placeholder="请输入医院或机构名称" bindinput="onHospitalInput" value="{{formData.hospital}}" />
+      </view>
+      <view class="form-group">
+        <view class="form-label">档案描述</view>
+        <textarea class="form-textarea" placeholder="请输入档案描述" bindinput="onDescInput" value="{{formData.description}}"></textarea>
+      </view>
+      <view class="form-group">
+        <view class="form-label">上传文件</view>
+        <view class="upload-section">
+          <view class="upload-btn" bindtap="uploadFile">
+            <view class="upload-icon">📎</view>
+            <view class="upload-text">选择文件</view>
+          </view>
+          <view class="uploaded-files" wx:if="{{formData.file_url}}">
+            <view class="file-item">
+              <view class="file-name">{{formData.file_name || '已上传文件'}}</view>
+              <view class="file-remove" bindtap="removeFile">×</view>
+            </view>
+          </view>
+        </view>
+      </view>
+    </view>
+    <view class="modal-footer">
+      <view class="btn btn-cancel" bindtap="closeModal">取消</view>
+      <view class="btn btn-primary" bindtap="saveRecord">{{isEditing ? '保存' : '添加'}}</view>
+    </view>
+  </view>
+</view>

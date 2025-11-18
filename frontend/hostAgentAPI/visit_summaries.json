@@ -1,0 +1,39 @@
+{
+  "None": [
+    {
+      "id": "83e72f30fb8c4049bd21bbe6947fa764",
+      "title": "1",
+      "visitDate": "2025-10-25",
+      "doctor": "1",
+      "hospital": "1",
+      "department": "外科",
+      "chiefComplaint": "1",
+      "symptoms": "1",
+      "examination": "1",
+      "diagnosis": "1",
+      "treatment": "1",
+      "prescription": "1",
+      "followUp": "1",
+      "notes": "",
+      "files": [
+        {
+          "id": "472f4aac-327a-44e9-8cee-83d98510d405",
+          "file_id": "472f4aac-327a-44e9-8cee-83d98510d405",
+          "record_id": "09e9ae37-4228-4c6a-ade1-70a70e99fd0f",
+          "filename": "472f4aac-327a-44e9-8cee-83d98510d405.png",
+          "original_filename": "v2-67fbec49e8aa15ada58e1e3ec82d2eac_720w.png",
+          "name": "472f4aac-327a-44e9-8cee-83d98510d405.png",
+          "size": 239123,
+          "type": "image/png",
+          "mime_type": "image/png",
+          "url": null,
+          "status": "success",
+          "uploadedAt": "2025-10-25T08:21:55.584Z"
+        }
+      ],
+      "createdAt": "2025-10-25T08:21:56.765038",
+      "updatedAt": "2025-10-25T08:21:56.765038",
+      "userId": "None"
+    }
+  ]
+}

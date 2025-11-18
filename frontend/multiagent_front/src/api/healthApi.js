@@ -422,24 +422,42 @@ export const deleteFile = async (fileId) => {
 
 // === 健康数据API ===
 
-// 获取健康数据 - 返回模拟数据
+// 获取健康数据 - 真实聚合自各模块接口
 export const getHealthData = async (params = {}) => {
   try {
-    // 返回模拟的健康数据摘要
+    const [recordsRes, consultationsRes, medicationsRes, remindersRes, summariesRes] = await Promise.all([
+      healthApi.get('/api/health-records', { params: { limit: 100, ...(params || {}) } }).catch(() => ({ data: [] })),
+      healthApi.get('/consultations').catch(() => ({ data: [] })),
+      healthApi.get('/medications', { params: { is_active: true } }).catch(() => ({ data: [] })),
+      healthApi.get('/api/medication-reminders', { params: { active_only: true } }).catch(() => ({ data: [] })),
+      healthApi.get('/summaries').catch(() => ({ data: [] })),
+    ]);
+    const records = Array.isArray(recordsRes.data) ? recordsRes.data : [];
+    const consultations = Array.isArray(consultationsRes.data) ? consultationsRes.data : [];
+    const medications = Array.isArray(medicationsRes.data) ? medicationsRes.data : [];
+    const reminders = Array.isArray(remindersRes.data) ? remindersRes.data : [];
+    const summaries = Array.isArray(summariesRes.data) ? summariesRes.data : [];
+
+    const remindersCount = reminders.filter((r) => !r.taken).length;
+
     return {
-      totalRecords: 15,
-      recentConsultations: 3,
-      activeMedications: 2,
-      healthScore: 82,
-      riskLevel: '中等',
-      recommendations: [
-        '保持规律的运动，每周至少进行150分钟中等强度有氧运动',
-        '注意饮食均衡，增加蔬菜水果摄入，控制高糖高脂食物',
-        '保持良好的作息时间，保证充足的睡眠',
-      ],
+      recordsCount: records.length,
+      consultationsCount: consultations.length,
+      medicationsCount: medications.length,
+      summariesCount: summaries.length,
+      hasReminders: remindersCount > 0,
+      remindersCount,
     };
   } catch (error) {
-    throw error.response?.data || { message: '获取健康数据失败' };
+    // 返回安全的默认值，避免仪表盘白屏
+    return {
+      recordsCount: 0,
+      consultationsCount: 0,
+      medicationsCount: 0,
+      summariesCount: 0,
+      hasReminders: false,
+      remindersCount: 0,
+    };
   }
 };
 

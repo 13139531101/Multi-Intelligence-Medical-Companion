@@ -3,7 +3,11 @@
     "pages/login/login",
     "pages/register/register",
     "pages/index/index",
-    "pages/agent_chat/agent_chat"
+    "pages/agent_chat/agent_chat",
+    "pages/health-records/health-records",
+    "pages/consultation/consultation",
+    "pages/medication/medication",
+    "pages/visit-summary/visit-summary"
   ],
   "tabBar": {
     "color": "#7A7E83",

@@ -1,49 +1,99 @@
 <!--index.wxml-->
 <view class="container">
-  <view class="userinfo">
-    <block wx:if="{{isLoggedIn}}">
-      <view class="login-userinfo">
-        <view class="avatar-placeholder">
-          <text class="avatar-text">{{loginUserInfo.username.charAt(0).toUpperCase()}}</text>
+  <!-- 快速操作 -->
+  <view class="section">
+    <view class="section-title">快速操作</view>
+    <view class="quick-actions">
+      <view class="action-item" bindtap="goToHealthRecords">
+        <view class="action-icon">📋</view>
+        <view class="action-title">健康档案</view>
+        <view class="action-desc">管理您的健康档案信息</view>
+        <view class="action-count">{{healthRecordsCount}}</view>
+      </view>
+      <view class="action-item" bindtap="goToConsultation">
+        <view class="action-icon">🩺</view>
+        <view class="action-title">健康咨询</view>
+        <view class="action-desc">AI智能健康咨询服务</view>
+        <view class="action-count">新</view>
+      </view>
+      <view class="action-item" bindtap="goToMedication">
+        <view class="action-icon">💊</view>
+        <view class="action-title">用药管理</view>
+        <view class="action-desc">管理您的用药计划提醒</view>
+        <view class="action-count">{{medicationCount}}</view>
+      </view>
+      <view class="action-item" bindtap="goToSummary">
+        <view class="action-icon">📝</view>
+        <view class="action-title">就诊摘要</view>
+        <view class="action-desc">查看您的就诊记录摘要</view>
+        <view class="action-count">{{summaryCount}}</view>
+      </view>
+    </view>
+  </view>
+
+  <!-- 智能助手 -->
+  <view class="section">
+    <view class="ai-assistant" bindtap="goToAIAssistant">
+      <view class="ai-icon">🤖</view>
+      <view class="ai-content">
+        <view class="ai-title">智能助手</view>
+        <view class="ai-desc">一站式健康咨询智能服务</view>
+      </view>
+      <view class="ai-status">在线</view>
+    </view>
+  </view>
+
+  <!-- 最近活动 -->
+  <view class="section">
+    <view class="section-header">
+      <view class="section-title">最近活动</view>
+      <view class="section-more" bindtap="viewMoreActivities">查看全部</view>
+    </view>
+    <view class="activity-list" wx:if="{{recentActivities.length > 0}}">
+      <view class="activity-item" wx:for="{{recentActivities}}" wx:key="id">
+        <view class="activity-icon">{{item.icon}}</view>
+        <view class="activity-content">
+          <view class="activity-title">{{item.title}}</view>
+          <view class="activity-time">{{item.time}}</view>
         </view>
-        <text class="username">欢迎，{{loginUserInfo.username}}</text>
-        <button class="logout-btn" size="mini" bindtap="logout">退出登录</button>
       </view>
-    </block>
-    <block wx:elif="{{canIUseOpenData}}">
-      <view class="userinfo-avatar" bindtap="bindViewTap">
-        <open-data type="userAvatarUrl"></open-data>
+    </view>
+    <view class="empty-state" wx:else>
+      <view class="empty-icon">📝</view>
+      <view class="empty-text">暂无最近活动</view>
+    </view>
+  </view>
+
+  <!-- 健康趋势 -->
+  <view class="section">
+    <view class="section-header">
+      <view class="section-title">健康趋势</view>
+      <view class="section-more" bindtap="viewDetailedTrends">详细报告</view>
+    </view>
+    <view class="trend-chart">
+      <view class="trend-icon">📈</view>
+      <view class="trend-content">
+        <view class="trend-title">您的健康数据正在稳步改善</view>
+        <view class="trend-desc">基于最近30天的数据分析</view>
       </view>
-      <open-data type="userNickName"></open-data>
-    </block>
-    <block wx:elif="{{!hasUserInfo && canIUseGetUserProfile}}">
-      <button bindtap="getUserProfile"> 获取头像昵称 </button>
-    </block>
-    <block wx:else>
-      <image bindtap="bindViewTap" class="userinfo-avatar" src="{{userInfo.avatarUrl}}" mode="cover"></image>
-      <text class="userinfo-nickname">{{userInfo.nickName}}</text>
-    </block>
-  </view>
-  <view class="usermotto">
-    <text class="user-motto">{{motto}}</text>
+    </view>
   </view>
 
-  <view class="api-status">
-    <text>Backend Status: {{apiStatus}}</text>
-  </view>
-
-  <view class="button-container">
-    <button class="upload-btn" type="primary" bindtap="uploadImage">上传图片</button>
-  </view>
-
-  <view class="button-container">
-    <button class="entry-btn" type="primary" bindtap="goToAgentChat">AI诊室</button>
-  </view>
-
-  <view wx:if="{{uploadedImage}}" class="image-container" bindtap="previewImage">
-    <image class="uploaded-image" src="{{uploadedImage}}" mode="aspectFit"></image>
-    <view class="image-overlay">
-      <text class="preview-text">点击查看原图</text>
+  <!-- 系统状态 -->
+  <view class="section">
+    <view class="section-header">
+      <view class="section-title">系统状态</view>
+      <view class="section-more" bindtap="refreshData">刷新</view>
+    </view>
+    <view class="status-item">
+      <view class="status-label">API连接状态</view>
+      <view class="status-value {{apiStatus === 'Connected' ? 'status-success' : 'status-error'}}">
+        {{apiStatus}}
+      </view>
+    </view>
+    <view class="status-item" wx:if="{{loginUserInfo}}">
+      <view class="status-label">当前用户</view>
+      <view class="status-value status-info">{{loginUserInfo.username || '已登录'}}</view>
     </view>
   </view>
 </view>
