@@ -316,7 +316,9 @@ class MemoryStorage:
         """存储标签"""
         for tag in tags:
             insert_tag_sql = """
-                INSERT IGNORE INTO memory_tags (memory_id, tag) VALUES (%s, %s)
+                INSERT INTO memory_tags (memory_id, tag)
+                VALUES (%s, %s)
+                ON CONFLICT (memory_id, tag) DO NOTHING
             """
             cursor.execute(insert_tag_sql, (memory_id, tag))
     
