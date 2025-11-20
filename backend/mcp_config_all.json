@@ -141,7 +141,7 @@
       "args": [
         "run",
         "--with", "mcp[cli]",
-        "mcpserver/memory_integration_tool.py"
+        "memory_integration_tool.py"
       ],
       "cwd": "MedicationReminder",
       "env": {

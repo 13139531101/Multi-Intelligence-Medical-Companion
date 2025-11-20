@@ -1,0 +1,14 @@
+# MedicationReminder 服务专属精简依赖，避免不必要的大包导致安装缓慢或哈希异常
+fastapi>=0.111.0
+uvicorn[standard]>=0.30.0
+fastmcp>=0.3.0
+openai>=1.30.0
+requests>=2.32.0
+python-dotenv>=1.0.1
+orjson>=3.10.0
+loguru>=0.7.2
+schedule>=1.2.1
+typing-extensions>=4.12.0
+psycopg[binary]>=3.1.8
+psycopg_pool>=3.1.8
+numpy>=1.26.0

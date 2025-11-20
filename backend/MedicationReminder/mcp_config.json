@@ -1,36 +1,25 @@
 {
   "mcpServers": {
     "ReminderTool": {
-      "command": "uv",
+      "command": "python",
       "args": [
-        "run",
-        "--with",
-        "mcp[cli]",
-        "mcp",
-        "run",
         "mcpserver/reminder_tool.py"
-      ]
+      ],
+      "cwd": "/app/MedicationReminder"
     },
     "NotificationTool": {
-      "command": "uv",
+      "command": "python",
       "args": [
-        "run",
-        "--with",
-        "mcp[cli]",
-        "mcp",
-        "run",
         "mcpserver/notification_tool.py"
-      ]
+      ],
+      "cwd": "/app/MedicationReminder"
     },
     "MemoryIntegrationTool": {
-      "command": "uv",
+      "command": "python",
       "args": [
-        "run",
-        "--with",
-        "mcp[cli]",
-        "mcpserver/memory_integration_tool.py"
+        "memory_integration_tool.py"
       ],
-      "cwd": ".",
+      "cwd": "/app/MedicationReminder",
       "env": {
         "DATABASE_URL": "sqlite:///medication_reminder_memory.db",
         "EMBEDDING_MODEL": "text-embedding-3-small",

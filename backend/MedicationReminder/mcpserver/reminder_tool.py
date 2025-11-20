@@ -1,73 +1,80 @@
 from mcp.server.fastmcp import FastMCP
 import json
-import sqlite3
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time
 from typing import Dict, List, Any, Optional
 import os
+import psycopg
+from psycopg.rows import dict_row
+from psycopg.types.json import Json
 
 # 创建 FastMCP 应用
 mcp = FastMCP("ReminderTool")
 
-# 数据库文件路径
-DB_PATH = "medication_reminders.db"
+# PostgreSQL 连接字符串
+PG_DSN = (
+    os.environ.get("PG_DSN")
+    or os.environ.get("DATABASE_URL")
+    # 默认回退到容器网络中的 postgres 服务与项目数据库
+    or "postgresql://pha:pha_pass@postgres:5432/personal_health_assistant"
+)
+
+def get_pg_conn():
+    return psycopg.connect(PG_DSN, row_factory=dict_row)
 
 def init_database():
-    """初始化数据库"""
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    
-    # 创建用药提醒表
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS medication_reminders (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id TEXT NOT NULL,
-            medication_name TEXT NOT NULL,
-            dosage TEXT NOT NULL,
-            frequency TEXT NOT NULL,
-            start_date TEXT NOT NULL,
-            end_date TEXT,
-            reminder_times TEXT NOT NULL,
-            notes TEXT,
-            is_active INTEGER DEFAULT 1,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-        )
-    ''')
-    
-    # 创建提醒记录表
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS reminder_logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            reminder_id INTEGER NOT NULL,
-            scheduled_time TEXT NOT NULL,
-            actual_time TEXT,
-            status TEXT NOT NULL,
-            notes TEXT,
-            created_at TEXT NOT NULL,
-            FOREIGN KEY (reminder_id) REFERENCES medication_reminders (id)
-        )
-    ''')
-    
-    # 创建复诊提醒表
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS appointment_reminders (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id TEXT NOT NULL,
-            doctor_name TEXT NOT NULL,
-            department TEXT NOT NULL,
-            appointment_date TEXT NOT NULL,
-            appointment_time TEXT NOT NULL,
-            hospital TEXT NOT NULL,
-            notes TEXT,
-            reminder_advance_days INTEGER DEFAULT 1,
-            is_active INTEGER DEFAULT 1,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-        )
-    ''')
-    
-    conn.commit()
-    conn.close()
+    """初始化PostgreSQL数据库（防御性创建表）"""
+    with get_pg_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS medication_reminders (
+                    id SERIAL PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    medication_name TEXT NOT NULL,
+                    dosage TEXT NOT NULL,
+                    frequency TEXT NOT NULL,
+                    start_date DATE NOT NULL,
+                    end_date DATE,
+                    reminder_times JSONB NOT NULL,
+                    notes TEXT,
+                    is_active BOOLEAN DEFAULT TRUE,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+                """
+            )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS reminder_logs (
+                    id SERIAL PRIMARY KEY,
+                    reminder_id INTEGER NOT NULL REFERENCES medication_reminders(id) ON DELETE CASCADE,
+                    scheduled_time TIMESTAMPTZ NOT NULL,
+                    actual_time TIMESTAMPTZ,
+                    status TEXT NOT NULL,
+                    notes TEXT,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+                """
+            )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS appointment_reminders (
+                    id SERIAL PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    doctor_name TEXT NOT NULL,
+                    department TEXT NOT NULL,
+                    appointment_date DATE NOT NULL,
+                    appointment_time TIME NOT NULL,
+                    hospital TEXT NOT NULL,
+                    notes TEXT,
+                    reminder_advance_days INTEGER DEFAULT 1,
+                    is_active BOOLEAN DEFAULT TRUE,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+                """
+            )
+            conn.commit()
 
 # 初始化数据库
 init_database()
@@ -93,23 +100,32 @@ def add_medication_reminder(user_id: str, medication_name: str, dosage: str, fre
         添加结果
     """
     try:
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        
-        current_time = datetime.now().isoformat()
-        reminder_times_json = json.dumps(reminder_times)
-        
-        cursor.execute('''
-            INSERT INTO medication_reminders 
-            (user_id, medication_name, dosage, frequency, start_date, end_date, 
-             reminder_times, notes, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (user_id, medication_name, dosage, frequency, start_date, end_date,
-              reminder_times_json, notes, current_time, current_time))
-        
-        reminder_id = cursor.lastrowid
-        conn.commit()
-        conn.close()
+        now = datetime.now()
+        with get_pg_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO medication_reminders
+                    (user_id, medication_name, dosage, frequency, start_date, end_date,
+                     reminder_times, notes, created_at, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    RETURNING id
+                    """,
+                    (
+                        user_id,
+                        medication_name,
+                        dosage,
+                        frequency,
+                        datetime.strptime(start_date, "%Y-%m-%d").date(),
+                        datetime.strptime(end_date, "%Y-%m-%d").date() if end_date else None,
+                        Json(reminder_times),
+                        notes,
+                        now,
+                        now,
+                    ),
+                )
+                reminder_id = cur.fetchone()["id"]
+                conn.commit()
         
         return {
             "status": "success",
@@ -143,40 +159,46 @@ def get_medication_reminders(user_id: str, active_only: bool = True) -> Dict[str
         用药提醒列表
     """
     try:
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        
-        if active_only:
-            cursor.execute('''
-                SELECT * FROM medication_reminders 
-                WHERE user_id = ? AND is_active = 1
-                ORDER BY created_at DESC
-            ''', (user_id,))
-        else:
-            cursor.execute('''
-                SELECT * FROM medication_reminders 
-                WHERE user_id = ?
-                ORDER BY created_at DESC
-            ''', (user_id,))
-        
-        reminders = cursor.fetchall()
-        conn.close()
-        
+        with get_pg_conn() as conn:
+            with conn.cursor() as cur:
+                if active_only:
+                    cur.execute(
+                        """
+                        SELECT id, user_id, medication_name, dosage, frequency, start_date, end_date,
+                               reminder_times, notes, is_active, created_at
+                        FROM medication_reminders
+                        WHERE user_id = %s AND is_active = TRUE
+                        ORDER BY created_at DESC
+                        """,
+                        (user_id,),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        SELECT id, user_id, medication_name, dosage, frequency, start_date, end_date,
+                               reminder_times, notes, is_active, created_at
+                        FROM medication_reminders
+                        WHERE user_id = %s
+                        ORDER BY created_at DESC
+                        """,
+                        (user_id,),
+                    )
+                reminders = cur.fetchall()
+
         reminder_list = []
-        for reminder in reminders:
-            reminder_dict = {
-                "id": reminder[0],
-                "medication_name": reminder[2],
-                "dosage": reminder[3],
-                "frequency": reminder[4],
-                "start_date": reminder[5],
-                "end_date": reminder[6],
-                "reminder_times": json.loads(reminder[7]),
-                "notes": reminder[8],
-                "is_active": bool(reminder[9]),
-                "created_at": reminder[10]
-            }
-            reminder_list.append(reminder_dict)
+        for r in reminders:
+            reminder_list.append({
+                "id": r["id"],
+                "medication_name": r["medication_name"],
+                "dosage": r["dosage"],
+                "frequency": r["frequency"],
+                "start_date": r["start_date"].isoformat() if r["start_date"] else None,
+                "end_date": r["end_date"].isoformat() if r["end_date"] else None,
+                "reminder_times": r["reminder_times"] or [],
+                "notes": r["notes"],
+                "is_active": bool(r["is_active"]),
+                "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+            })
         
         return {
             "status": "success",
@@ -201,31 +223,31 @@ def get_today_reminders(user_id: str) -> Dict[str, Any]:
         今日用药提醒列表
     """
     try:
-        today = datetime.now().strftime("%Y-%m-%d")
-        
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        
-        cursor.execute('''
-            SELECT * FROM medication_reminders 
-            WHERE user_id = ? AND is_active = 1 
-            AND start_date <= ? 
-            AND (end_date IS NULL OR end_date >= ?)
-        ''', (user_id, today, today))
-        
-        reminders = cursor.fetchall()
-        conn.close()
-        
+        today = datetime.now().date()
+        with get_pg_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT id, medication_name, dosage, reminder_times, notes
+                    FROM medication_reminders
+                    WHERE user_id = %s AND is_active = TRUE
+                      AND start_date <= %s
+                      AND (end_date IS NULL OR end_date >= %s)
+                    """,
+                    (user_id, today, today),
+                )
+                reminders = cur.fetchall()
+
         today_reminders = []
-        for reminder in reminders:
-            reminder_times = json.loads(reminder[7])
-            for time in reminder_times:
+        for r in reminders:
+            reminder_times = r["reminder_times"] or []
+            for t in reminder_times:
                 today_reminders.append({
-                    "id": reminder[0],
-                    "medication_name": reminder[2],
-                    "dosage": reminder[3],
-                    "time": time,
-                    "notes": reminder[8]
+                    "id": r["id"],
+                    "medication_name": r["medication_name"],
+                    "dosage": r["dosage"],
+                    "time": t,
+                    "notes": r["notes"],
                 })
         
         # 按时间排序
@@ -257,23 +279,30 @@ def log_medication_taken(reminder_id: int, actual_time: Optional[str] = None, no
         记录结果
     """
     try:
+        now = datetime.now()
         if actual_time is None:
-            actual_time = datetime.now().isoformat()
-        
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        
-        current_time = datetime.now().isoformat()
-        scheduled_time = datetime.now().strftime("%H:%M")
-        
-        cursor.execute('''
-            INSERT INTO reminder_logs 
-            (reminder_id, scheduled_time, actual_time, status, notes, created_at)
-            VALUES (?, ?, ?, ?, ?, ?)
-        ''', (reminder_id, scheduled_time, actual_time, "taken", notes, current_time))
-        
-        conn.commit()
-        conn.close()
+            actual_dt = now
+        else:
+            try:
+                # HH:MM provided
+                hh, mm = actual_time.split(":")
+                actual_dt = datetime.combine(now.date(), time(int(hh), int(mm)))
+            except Exception:
+                actual_dt = now
+
+        scheduled_dt = datetime.combine(now.date(), now.time().replace(second=0, microsecond=0))
+
+        with get_pg_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO reminder_logs
+                    (reminder_id, scheduled_time, actual_time, status, notes, created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    """,
+                    (reminder_id, scheduled_dt, actual_dt, "taken", notes, now),
+                )
+                conn.commit()
         
         return {
             "status": "success",
@@ -307,22 +336,32 @@ def add_appointment_reminder(user_id: str, doctor_name: str, department: str,
         添加结果
     """
     try:
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        
-        current_time = datetime.now().isoformat()
-        
-        cursor.execute('''
-            INSERT INTO appointment_reminders 
-            (user_id, doctor_name, department, appointment_date, appointment_time, 
-             hospital, reminder_advance_days, notes, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (user_id, doctor_name, department, appointment_date, appointment_time,
-              hospital, reminder_advance_days, notes, current_time, current_time))
-        
-        appointment_id = cursor.lastrowid
-        conn.commit()
-        conn.close()
+        now = datetime.now()
+        with get_pg_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO appointment_reminders
+                    (user_id, doctor_name, department, appointment_date, appointment_time,
+                     hospital, reminder_advance_days, notes, created_at, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    RETURNING id
+                    """,
+                    (
+                        user_id,
+                        doctor_name,
+                        department,
+                        datetime.strptime(appointment_date, "%Y-%m-%d").date(),
+                        datetime.strptime(appointment_time, "%H:%M").time(),
+                        hospital,
+                        reminder_advance_days,
+                        notes,
+                        now,
+                        now,
+                    ),
+                )
+                appointment_id = cur.fetchone()["id"]
+                conn.commit()
         
         return {
             "status": "success",
@@ -358,33 +397,33 @@ def get_upcoming_appointments(user_id: str, days_ahead: int = 7) -> Dict[str, An
     try:
         today = datetime.now().date()
         end_date = today + timedelta(days=days_ahead)
-        
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        
-        cursor.execute('''
-            SELECT * FROM appointment_reminders 
-            WHERE user_id = ? AND is_active = 1 
-            AND appointment_date BETWEEN ? AND ?
-            ORDER BY appointment_date, appointment_time
-        ''', (user_id, today.isoformat(), end_date.isoformat()))
-        
-        appointments = cursor.fetchall()
-        conn.close()
-        
+        with get_pg_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT id, doctor_name, department, appointment_date, appointment_time,
+                           hospital, notes, reminder_advance_days
+                    FROM appointment_reminders
+                    WHERE user_id = %s AND is_active = TRUE
+                      AND appointment_date BETWEEN %s AND %s
+                    ORDER BY appointment_date, appointment_time
+                    """,
+                    (user_id, today, end_date),
+                )
+                appointments = cur.fetchall()
+
         appointment_list = []
-        for appointment in appointments:
-            appointment_dict = {
-                "id": appointment[0],
-                "doctor_name": appointment[2],
-                "department": appointment[3],
-                "appointment_date": appointment[4],
-                "appointment_time": appointment[5],
-                "hospital": appointment[6],
-                "notes": appointment[7],
-                "reminder_advance_days": appointment[8]
-            }
-            appointment_list.append(appointment_dict)
+        for a in appointments:
+            appointment_list.append({
+                "id": a["id"],
+                "doctor_name": a["doctor_name"],
+                "department": a["department"],
+                "appointment_date": a["appointment_date"].isoformat() if a["appointment_date"] else None,
+                "appointment_time": a["appointment_time"].strftime("%H:%M") if a["appointment_time"] else None,
+                "hospital": a["hospital"],
+                "notes": a["notes"],
+                "reminder_advance_days": a["reminder_advance_days"],
+            })
         
         return {
             "status": "success",

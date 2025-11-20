@@ -26,12 +26,11 @@ class HealthRecordsMemoryConfig:
         self.memory_config = {
             # 数据库配置
             "database": {
-                "host": os.getenv("MEMORY_DB_HOST", "localhost"),
-                "port": int(os.getenv("MEMORY_DB_PORT", "3306")),
-                "database": os.getenv("MEMORY_DB_NAME", "agent_memory"),
-                "user": os.getenv("MEMORY_DB_USER", "root"),
-                "password": os.getenv("MEMORY_DB_PASSWORD", "password"),
-                "charset": "utf8mb4",
+                "host": os.getenv("MEMORY_DB_HOST", "postgres"),
+                "port": int(os.getenv("MEMORY_DB_PORT", "5432")),
+                "database": os.getenv("MEMORY_DB_NAME", os.getenv("POSTGRES_DB", "personal_health_assistant")),
+                "user": os.getenv("MEMORY_DB_USER", "pha"),
+                "password": os.getenv("MEMORY_DB_PASSWORD", "pha_pass"),
                 "autocommit": True
             },
             

@@ -5,182 +5,113 @@
 # @Desc  : 数据库配置和连接管理
 
 import os
-import mysql.connector
-from mysql.connector import Error
 import logging
 from contextlib import contextmanager
-from typing import Optional, Dict, Any
+from typing import Dict, Any, Optional
+import psycopg
+from psycopg.rows import dict_row
 
 logger = logging.getLogger(__name__)
 
 class DatabaseConfig:
-    """数据库配置类"""
-    
+    """数据库配置类（PostgreSQL）"""
+
     def __init__(self):
-        # MySQL数据库配置
+        # PostgreSQL 数据库配置
         self.config = {
             'host': os.getenv('DB_HOST', 'localhost'),
-            'port': int(os.getenv('DB_PORT', 3306)),
-            'user': os.getenv('DB_USER', 'root'),
-            'password': os.getenv('DB_PASSWORD', 'root'),
-            'database': os.getenv('DB_NAME', 'personal_health_assistant'),
-            'charset': 'utf8mb4',
-            'collation': 'utf8mb4_unicode_ci',
+            'port': int(os.getenv('DB_PORT', 5432)),
+            'user': os.getenv('DB_USER', 'pha'),
+            'password': os.getenv('DB_PASSWORD', 'pha_pwd'),
+            'dbname': os.getenv('DB_NAME', os.getenv('POSTGRES_DB', 'personal_health_assistant')),
             'autocommit': False,
-            'raise_on_warnings': True,
-            'use_unicode': True
         }
-        
-        # 连接池配置
-        self.pool_config = {
-            'pool_name': 'health_records_pool',
-            'pool_size': 10,
-            'pool_reset_session': True
-        }
-    
+
     def get_connection_config(self) -> Dict[str, Any]:
         """获取数据库连接配置"""
         return self.config.copy()
-    
-    def get_pool_config(self) -> Dict[str, Any]:
-        """获取连接池配置"""
-        config = self.config.copy()
-        config.update(self.pool_config)
-        return config
 
 class DatabaseManager:
-    """数据库管理类"""
-    
+    """数据库管理类（PostgreSQL）"""
+
     def __init__(self):
         self.config = DatabaseConfig()
-        self._connection_pool = None
-        # 延迟初始化连接池，避免在导入阶段因为数据库未就绪而导致进程退出
-        # 如需使用连接池，可在应用启动完成后主动调用 self._init_connection_pool()
-    
-    def _init_connection_pool(self):
-        """初始化连接池"""
-        try:
-            pool_config = self.config.get_pool_config()
-            self._connection_pool = mysql.connector.pooling.MySQLConnectionPool(**pool_config)
-            logger.info("数据库连接池初始化成功")
-        except Error as e:
-            logger.error(f"数据库连接池初始化失败: {e}")
-            raise
-    
+
     @contextmanager
     def get_connection(self):
         """获取数据库连接（上下文管理器）"""
-        connection = None
+        conn = None
         try:
-            if self._connection_pool:
-                connection = self._connection_pool.get_connection()
-            else:
-                connection = mysql.connector.connect(**self.config.get_connection_config())
-            
-            yield connection
-            
-        except Error as e:
-            if connection:
-                connection.rollback()
+            cfg = self.config.get_connection_config()
+            conn = psycopg.connect(
+                host=cfg['host'],
+                port=cfg['port'],
+                user=cfg['user'],
+                password=cfg['password'],
+                dbname=cfg['dbname'],
+            )
+            conn.autocommit = cfg.get('autocommit', False)
+            yield conn
+        except Exception as e:
+            if conn:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
             logger.error(f"数据库操作失败: {e}")
             raise
         finally:
-            if connection and connection.is_connected():
-                connection.close()
+            if conn:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
     
     def execute_query(self, query: str, params: tuple = None) -> list:
-        """执行查询语句"""
+        """执行查询语句，返回字典列表"""
         with self.get_connection() as conn:
-            cursor = conn.cursor(dictionary=True)
-            cursor.execute(query, params or ())
-            result = cursor.fetchall()
-            cursor.close()
-            return result
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(query, params or ())
+                return cur.fetchall()
     
     def execute_update(self, query: str, params: tuple = None) -> int:
-        """执行更新语句"""
+        """执行更新语句，返回影响行数"""
         with self.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(query, params or ())
-            conn.commit()
-            affected_rows = cursor.rowcount
-            cursor.close()
-            return affected_rows
+            with conn.cursor() as cur:
+                cur.execute(query, params or ())
+                conn.commit()
+                return cur.rowcount
     
-    def execute_insert(self, query: str, params: tuple = None) -> int:
-        """执行插入语句并返回插入的ID"""
+    def execute_insert(self, query: str, params: tuple = None) -> Optional[int]:
+        """执行插入语句，优先通过 RETURNING 返回插入ID，否则返回影响行数"""
         with self.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(query, params or ())
-            conn.commit()
-            last_id = cursor.lastrowid
-            cursor.close()
-            return last_id
+            with conn.cursor() as cur:
+                cur.execute(query, params or ())
+                returning = 'RETURNING' in query.upper()
+                inserted_id = None
+                if returning:
+                    row = cur.fetchone()
+                    if row and len(row) >= 1:
+                        inserted_id = row[0]
+                conn.commit()
+                return inserted_id if returning else cur.rowcount
     
     def test_connection(self) -> bool:
         """测试数据库连接"""
         try:
             with self.get_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("SELECT 1")
-                cursor.fetchone()
-                cursor.close()
-                logger.info("数据库连接测试成功")
-                return True
-        except Error as e:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT 1")
+                    cur.fetchone()
+            logger.info("数据库连接测试成功")
+            return True
+        except Exception as e:
             logger.error(f"数据库连接测试失败: {e}")
             return False
     
     def init_database(self):
-        """初始化数据库（创建数据库和表）"""
-        try:
-            # 首先连接到MySQL服务器（不指定数据库）
-            temp_config = self.config.get_connection_config()
-            database_name = temp_config.pop('database')
-            
-            with mysql.connector.connect(**temp_config) as conn:
-                cursor = conn.cursor()
-                
-                # 创建数据库
-                try:
-                    cursor.execute(f"CREATE DATABASE IF NOT EXISTS {database_name} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci")
-                    logger.info(f"数据库 {database_name} 创建成功或已存在")
-                except Error as e:
-                    if "database exists" in str(e).lower():
-                        logger.info(f"数据库 {database_name} 已存在")
-                    else:
-                        raise e
-                
-                cursor.execute(f"USE {database_name}")
-                
-                # 读取并执行SQL文件
-                sql_file_path = r'i:\A2A\3\A2AServer\database\personal_health_assistant.sql'
-                
-                if os.path.exists(sql_file_path):
-                    with open(sql_file_path, 'r', encoding='utf-8') as f:
-                        sql_content = f.read()
-                    
-                    # 分割SQL语句并执行
-                    statements = sql_content.split(';')
-                    for statement in statements:
-                        statement = statement.strip()
-                        if statement and not statement.startswith('--'):
-                            try:
-                                cursor.execute(statement)
-                            except Error as e:
-                                if "already exists" not in str(e).lower():
-                                    logger.warning(f"执行SQL语句时出现警告: {e}")
-                    
-                    conn.commit()
-                    logger.info("数据库表结构初始化成功")
-                else:
-                    logger.warning(f"SQL文件不存在: {sql_file_path}")
-                
-                cursor.close()
-                
-        except Error as e:
-            logger.error(f"数据库初始化失败: {e}")
-            raise
+        """初始化数据库（PostgreSQL 环境下由容器初始化脚本完成，这里跳过）"""
+        logger.info("数据库初始化由容器启动脚本负责（pgvector + schema），此处不执行。")
 
 # 全局数据库管理器实例
 db_manager = DatabaseManager()

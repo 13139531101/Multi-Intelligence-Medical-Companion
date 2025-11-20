@@ -4,6 +4,7 @@ import os
 import sys
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional, Tuple
+from psycopg.rows import dict_row
 
 # 确保当前目录在路径中
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -65,7 +66,7 @@ class MemoryRetrieval:
                 return self._search_by_text_match(query, agent_id, user_id, memory_types, limit)
             
             connection = self.db_config.get_connection()
-            cursor = connection.cursor(dictionary=True)
+            cursor = connection.cursor(row_factory=dict_row)
             
             # 构建基础查询
             base_conditions = "m.agent_id = %s AND m.user_id = %s"
@@ -157,7 +158,7 @@ class MemoryRetrieval:
         connection = None
         try:
             connection = self.db_config.get_connection()
-            cursor = connection.cursor(dictionary=True)
+            cursor = connection.cursor(row_factory=dict_row)
             
             # 构建查询条件
             conditions = "agent_id = %s AND user_id = %s AND created_at BETWEEN %s AND %s"
@@ -221,7 +222,7 @@ class MemoryRetrieval:
         connection = None
         try:
             connection = self.db_config.get_connection()
-            cursor = connection.cursor(dictionary=True)
+            cursor = connection.cursor(row_factory=dict_row)
             
             # 构建标签查询
             if match_all:
@@ -321,7 +322,7 @@ class MemoryRetrieval:
         connection = None
         try:
             connection = self.db_config.get_connection()
-            cursor = connection.cursor(dictionary=True)
+            cursor = connection.cursor(row_factory=dict_row)
             
             # 构建查询条件
             conditions = "agent_id = %s AND user_id = %s AND importance_score >= %s"
@@ -376,7 +377,7 @@ class MemoryRetrieval:
         connection = None
         try:
             connection = self.db_config.get_connection()
-            cursor = connection.cursor(dictionary=True)
+            cursor = connection.cursor(row_factory=dict_row)
             
             # 获取关联记忆
             select_associations_sql = """
@@ -415,7 +416,7 @@ class MemoryRetrieval:
         connection = None
         try:
             connection = self.db_config.get_connection()
-            cursor = connection.cursor(dictionary=True)
+            cursor = connection.cursor(row_factory=dict_row)
             
             # 构建查询条件
             conditions = "agent_id = %s AND user_id = %s AND content_text LIKE %s"

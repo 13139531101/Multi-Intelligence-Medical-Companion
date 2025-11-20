@@ -136,10 +136,28 @@ class ConversationServer:
       with open('agents.json', 'r', encoding='utf-8') as f:
         agents = json.load(f)
       for agent in agents:
-        try:
-          self.manager.register_agent(agent.get('url'))
-        except Exception as e:
-          logging.warning(f"Register agent failed for {agent.get('url')}: {e}")
+        url = agent.get('url')
+        if not url:
+          continue
+        # 重试注册，解决容器刚启动端口未就绪导致的连接拒绝
+        max_attempts = 12
+        delay_seconds = 5
+        for attempt in range(1, max_attempts + 1):
+          try:
+            logging.info(f"尝试注册代理 {url} (第{attempt}/{max_attempts}次)")
+            self.manager.register_agent(url)
+            logging.info(f"代理注册成功: {url}")
+            break
+          except Exception as e:
+            if attempt == max_attempts:
+              logging.warning(f"代理注册失败（已达最大重试次数）: {url}: {e}")
+            else:
+              logging.warning(f"注册失败，{delay_seconds}s后重试: {url}: {e}")
+              try:
+                import time
+                time.sleep(delay_seconds)
+              except Exception:
+                pass
     except FileNotFoundError:
       logging.warning("agents.json not found, no agents registered.")
     except json.JSONDecodeError:

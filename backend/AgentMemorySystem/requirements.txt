@@ -1,8 +1,8 @@
 # 智能体记忆系统依赖包
 
-# 数据库相关
-mysql-connector-python==8.2.0
-PyMySQL==1.1.0
+# 数据库相关（迁移到 PostgreSQL）
+psycopg[binary]==3.2.1
+psycopg_pool==3.2.1
 SQLAlchemy==2.0.23
 
 # 机器学习和嵌入

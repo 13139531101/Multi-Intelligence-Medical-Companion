@@ -13,8 +13,8 @@ from typing import Optional, Dict, Any
 from fastapi import APIRouter, HTTPException, Depends, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, EmailStr
-import mysql.connector
-from mysql.connector import Error
+import psycopg
+from psycopg.rows import dict_row
 import os
 from dotenv import load_dotenv
 import logging
@@ -32,12 +32,10 @@ JWT_EXPIRATION_HOURS = 24
 # 数据库配置
 DB_CONFIG = {
     'host': os.getenv('DB_HOST', 'localhost'),
-    'port': int(os.getenv('DB_PORT', 3306)),
-    'user': os.getenv('DB_USER', 'root'),
+    'port': int(os.getenv('DB_PORT', 5432)),
+    'user': os.getenv('DB_USER', 'pha'),
     'password': os.getenv('DB_PASSWORD', ''),
-    'database': os.getenv('DB_NAME', 'personal_health_assistant'),
-    'charset': 'utf8mb4',
-    'autocommit': True
+    'dbname': os.getenv('DB_NAME', 'personal_health_assistant'),
 }
 
 # 安全相关
@@ -76,18 +74,70 @@ class AuthService:
     
     def __init__(self):
         self.db_config = DB_CONFIG
+        # 在初始化时确保数据库表存在
+        try:
+            self.init_schema()
+        except Exception as e:
+            logger.warning(f"初始化认证表失败: {e}")
     
     def get_db_connection(self):
-        """获取数据库连接"""
+        """获取数据库连接（psycopg3）"""
         try:
-            connection = mysql.connector.connect(**self.db_config)
+            connection = psycopg.connect(**self.db_config)
+            try:
+                connection.autocommit = True
+            except Exception:
+                pass
             return connection
-        except Error as e:
+        except Exception as e:
             logger.error(f"数据库连接失败: {e}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="数据库连接失败"
             )
+
+    def init_schema(self):
+        """初始化 users 与 user_sessions 表（Postgres）"""
+        conn = psycopg.connect(**self.db_config)
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS users (
+                            id SERIAL PRIMARY KEY,
+                            user_id VARCHAR(64) NOT NULL UNIQUE,
+                            username VARCHAR(50) NOT NULL UNIQUE,
+                            password_hash VARCHAR(255) NOT NULL,
+                            salt VARCHAR(32) NOT NULL,
+                            email VARCHAR(100) UNIQUE,
+                            phone VARCHAR(20) UNIQUE,
+                            avatar_url VARCHAR(255),
+                            last_login_at TIMESTAMP NULL,
+                            login_count INTEGER DEFAULT 0,
+                            status SMALLINT DEFAULT 1,
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                        );
+                        """
+                    )
+                    cur.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS user_sessions (
+                            id SERIAL PRIMARY KEY,
+                            user_id VARCHAR(64) NOT NULL,
+                            token_hash VARCHAR(255) NOT NULL,
+                            expires_at TIMESTAMP NOT NULL,
+                            ip_address VARCHAR(45),
+                            user_agent TEXT,
+                            is_active SMALLINT DEFAULT 1,
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                        );
+                        """
+                    )
+        finally:
+            conn.close()
     
     def generate_salt(self) -> str:
         """生成密码盐值"""
@@ -134,13 +184,12 @@ class AuthService:
     def register_user(self, user_data: UserRegister) -> Dict[str, Any]:
         """用户注册"""
         connection = self.get_db_connection()
-        cursor = connection.cursor(dictionary=True)
+        cursor = connection.cursor(row_factory=dict_row)
         
         try:
             # 检查用户名是否已存在
             cursor.execute("SELECT id FROM users WHERE username = %s", (user_data.username,))
             result = cursor.fetchone()
-            cursor.fetchall()  # 清除所有剩余结果
             if result:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
@@ -151,7 +200,6 @@ class AuthService:
             if user_data.email:
                 cursor.execute("SELECT id FROM users WHERE email = %s", (user_data.email,))
                 result = cursor.fetchone()
-                cursor.fetchall()  # 清除所有剩余结果
                 if result:
                     raise HTTPException(
                         status_code=status.HTTP_400_BAD_REQUEST,
@@ -162,7 +210,6 @@ class AuthService:
             if user_data.phone:
                 cursor.execute("SELECT id FROM users WHERE phone = %s", (user_data.phone,))
                 result = cursor.fetchone()
-                cursor.fetchall()  # 清除所有剩余结果
                 if result:
                     raise HTTPException(
                         status_code=status.HTTP_400_BAD_REQUEST,
@@ -188,7 +235,7 @@ class AuthService:
             
             # 关闭当前游标，创建新游标来查询
             cursor.close()
-            cursor = connection.cursor(dictionary=True)
+            cursor = connection.cursor(row_factory=dict_row)
             
             # 获取创建的用户信息
             cursor.execute("""
@@ -224,7 +271,7 @@ class AuthService:
     def authenticate_user(self, login_data: UserLogin) -> Dict[str, Any]:
         """用户登录认证"""
         connection = self.get_db_connection()
-        cursor = connection.cursor(dictionary=True)
+        cursor = connection.cursor(row_factory=dict_row)
         
         try:
             # 获取用户信息
@@ -256,11 +303,14 @@ class AuthService:
                 )
             
             # 更新登录信息
-            cursor.execute("""
-                UPDATE users 
+            cursor.execute(
+                """
+                UPDATE users
                 SET last_login_at = CURRENT_TIMESTAMP, login_count = login_count + 1
                 WHERE user_id = %s
-            """, (user['user_id'],))
+                """,
+                (user['user_id'],)
+            )
             
             # 提交事务
             connection.commit()
@@ -289,7 +339,7 @@ class AuthService:
     def get_user_by_id(self, user_id: str) -> Dict[str, Any]:
         """根据用户ID获取用户信息"""
         connection = self.get_db_connection()
-        cursor = connection.cursor(dictionary=True)
+        cursor = connection.cursor(row_factory=dict_row)
         
         try:
             cursor.execute("""

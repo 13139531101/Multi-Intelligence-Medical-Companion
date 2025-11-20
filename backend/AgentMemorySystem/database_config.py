@@ -1,9 +1,9 @@
 import os
-import mysql.connector
-from mysql.connector import pooling
 from typing import Dict, Any, Optional
 import logging
 from datetime import datetime
+import psycopg
+from psycopg_pool import ConnectionPool
 
 logger = logging.getLogger(__name__)
 
@@ -13,36 +13,44 @@ class MemoryDatabaseConfig:
     def __init__(self):
         self.config = {
             'host': os.getenv('MEMORY_DB_HOST', 'localhost'),
-            'port': int(os.getenv('MEMORY_DB_PORT', 3306)),
-            'user': os.getenv('MEMORY_DB_USER', 'root'),
+            'port': int(os.getenv('MEMORY_DB_PORT', 5432)),
+            'user': os.getenv('MEMORY_DB_USER', 'postgres'),
             'password': os.getenv('MEMORY_DB_PASSWORD', ''),
             'database': os.getenv('MEMORY_DB_NAME', 'agent_memory'),
-            'charset': 'utf8mb4',
-            'collation': 'utf8mb4_unicode_ci',
             'autocommit': True,
-            'time_zone': '+00:00'
         }
-        
+
         self.pool_config = {
             'pool_name': 'memory_pool',
             'pool_size': int(os.getenv('MEMORY_DB_POOL_SIZE', 10)),
-            'pool_reset_session': True,
-            'buffered': True
         }
-        
+
         self._connection_pool = None
         self._enabled = False
         self._initialize_pool()
     
     def _initialize_pool(self):
-        """初始化数据库连接池"""
+        """初始化数据库连接池（PostgreSQL）"""
         try:
-            pool_config = {**self.config, **self.pool_config}
-            self._connection_pool = pooling.MySQLConnectionPool(**pool_config)
+            # 优先使用 DSN：MEMORY_DATABASE_URL 或 DATABASE_URL
+            dsn = os.getenv('MEMORY_DATABASE_URL') or os.getenv('DATABASE_URL')
+
+            if not dsn:
+                # 由离散参数拼接 DSN
+                user = self.config['user']
+                password = self.config['password']
+                host = self.config['host']
+                port = self.config['port']
+                database = self.config['database']
+                auth = f"{user}:{password}" if password else f"{user}"
+                dsn = f"postgresql://{auth}@{host}:{port}/{database}"
+
+            # 使用 psycopg3 的连接池
+            self._connection_pool = ConnectionPool(dsn, max_size=max(self.pool_config['pool_size'], 1))
             self._enabled = True
-            logger.info("记忆系统数据库连接池初始化成功")
+            logger.info("记忆系统 PostgreSQL 连接池初始化成功")
         except Exception as e:
-            logger.error(f"记忆系统数据库连接池初始化失败: {e}")
+            logger.error(f"记忆系统 PostgreSQL 连接池初始化失败: {e}")
             logger.warning("记忆系统将以无数据库模式运行（仅日志与内存特性可用）")
             self._connection_pool = None
             self._enabled = False
@@ -57,10 +65,25 @@ class MemoryDatabaseConfig:
         if not self._enabled or self._connection_pool is None:
             raise RuntimeError("Memory DB is disabled: connection pool not initialized")
         try:
-            return self._connection_pool.get_connection()
+            # psycopg3 连接池接口
+            conn = self._connection_pool.getconn()
+            try:
+                conn.autocommit = False
+            except Exception:
+                pass
+            return conn
         except Exception as e:
             logger.error(f"获取数据库连接失败: {e}")
             raise
+
+    def _put_connection(self, connection):
+        """归还连接到连接池"""
+        try:
+            if connection and self._connection_pool:
+                # psycopg3 连接池接口
+                self._connection_pool.putconn(connection)
+        except Exception as e:
+            logger.error(f"归还数据库连接失败: {e}")
     
     def create_tables(self):
         """创建记忆系统所需的数据库表"""
@@ -71,26 +94,31 @@ class MemoryDatabaseConfig:
         try:
             connection = self.get_connection()
             cursor = connection.cursor()
-            
+
             # 创建记忆主表
             cursor.execute(self._get_memories_table_sql())
             logger.info("记忆主表创建成功")
-            
+
             # 创建记忆向量表
             cursor.execute(self._get_memory_embeddings_table_sql())
             logger.info("记忆向量表创建成功")
-            
+
             # 创建记忆关联表
             cursor.execute(self._get_memory_associations_table_sql())
             logger.info("记忆关联表创建成功")
-            
+
             # 创建记忆标签表
             cursor.execute(self._get_memory_tags_table_sql())
             logger.info("记忆标签表创建成功")
-            
+
+            # 创建索引（PostgreSQL 需单独创建）
+            for sql in self._get_indexes_sql_list():
+                cursor.execute(sql)
+            logger.info("记忆系统索引创建完成")
+
             connection.commit()
             logger.info("所有记忆系统表创建完成")
-            
+
         except Exception as e:
             logger.error(f"创建数据库表失败: {e}")
             if connection:
@@ -98,7 +126,7 @@ class MemoryDatabaseConfig:
             raise
         finally:
             if connection:
-                connection.close()
+                self._put_connection(connection)
     
     def _get_memories_table_sql(self) -> str:
         """获取记忆主表的创建SQL"""
@@ -107,21 +135,17 @@ class MemoryDatabaseConfig:
             memory_id VARCHAR(36) PRIMARY KEY,
             agent_id VARCHAR(50) NOT NULL,
             user_id VARCHAR(50) NOT NULL,
-            memory_type ENUM('short_term', 'working', 'long_term', 'meta') NOT NULL,
+            memory_type VARCHAR(20) NOT NULL,
             content_text TEXT,
-            content_structured JSON,
-            metadata JSON,
-            importance_score FLOAT DEFAULT 0.5,
-            access_count INT DEFAULT 0,
-            last_accessed TIMESTAMP NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-            expires_at TIMESTAMP NULL,
-            INDEX idx_agent_user (agent_id, user_id),
-            INDEX idx_type_importance (memory_type, importance_score),
-            INDEX idx_created_at (created_at),
-            INDEX idx_expires_at (expires_at)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+            content_structured JSONB,
+            metadata JSONB,
+            importance_score REAL DEFAULT 0.5,
+            access_count INTEGER DEFAULT 0,
+            last_accessed TIMESTAMPTZ NULL,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            expires_at TIMESTAMPTZ NULL
+        );
         """
     
     def _get_memory_embeddings_table_sql(self) -> str:
@@ -130,41 +154,50 @@ class MemoryDatabaseConfig:
         CREATE TABLE IF NOT EXISTS memory_embeddings (
             memory_id VARCHAR(36) PRIMARY KEY,
             embedding_model VARCHAR(50) NOT NULL,
-            embedding_vector JSON NOT NULL,
-            vector_dimension INT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            embedding_vector JSONB NOT NULL,
+            vector_dimension INTEGER NOT NULL,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (memory_id) REFERENCES memories(memory_id) ON DELETE CASCADE
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        );
         """
     
     def _get_memory_associations_table_sql(self) -> str:
         """获取记忆关联表的创建SQL"""
         return """
         CREATE TABLE IF NOT EXISTS memory_associations (
-            id INT AUTO_INCREMENT PRIMARY KEY,
+            id BIGSERIAL PRIMARY KEY,
             source_memory_id VARCHAR(36) NOT NULL,
             target_memory_id VARCHAR(36) NOT NULL,
             relation_type VARCHAR(50) NOT NULL,
-            strength FLOAT DEFAULT 0.5,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            strength REAL DEFAULT 0.5,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (source_memory_id) REFERENCES memories(memory_id) ON DELETE CASCADE,
             FOREIGN KEY (target_memory_id) REFERENCES memories(memory_id) ON DELETE CASCADE,
-            UNIQUE KEY unique_association (source_memory_id, target_memory_id, relation_type)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+            UNIQUE (source_memory_id, target_memory_id, relation_type)
+        );
         """
     
     def _get_memory_tags_table_sql(self) -> str:
         """获取记忆标签表的创建SQL"""
         return """
         CREATE TABLE IF NOT EXISTS memory_tags (
-            id INT AUTO_INCREMENT PRIMARY KEY,
+            id BIGSERIAL PRIMARY KEY,
             memory_id VARCHAR(36) NOT NULL,
             tag VARCHAR(50) NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (memory_id) REFERENCES memories(memory_id) ON DELETE CASCADE,
-            UNIQUE KEY unique_memory_tag (memory_id, tag)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+            UNIQUE (memory_id, tag)
+        );
         """
+
+    def _get_indexes_sql_list(self) -> list:
+        """返回需要创建的索引 SQL 列表（PostgreSQL）"""
+        return [
+            "CREATE INDEX IF NOT EXISTS idx_agent_user ON memories (agent_id, user_id);",
+            "CREATE INDEX IF NOT EXISTS idx_type_importance ON memories (memory_type, importance_score);",
+            "CREATE INDEX IF NOT EXISTS idx_created_at ON memories (created_at);",
+            "CREATE INDEX IF NOT EXISTS idx_expires_at ON memories (expires_at);",
+        ]
     
     def check_connection(self) -> bool:
         """检查数据库连接是否正常"""
@@ -182,7 +215,7 @@ class MemoryDatabaseConfig:
             return False
         finally:
             if connection:
-                connection.close()
+                self._put_connection(connection)
     
     def get_table_info(self) -> Dict[str, Any]:
         """获取数据库表信息"""
@@ -192,19 +225,19 @@ class MemoryDatabaseConfig:
         try:
             connection = self.get_connection()
             cursor = connection.cursor()
-            
+
             tables_info = {}
             tables = ['memories', 'memory_embeddings', 'memory_associations', 'memory_tags']
-            
+
             for table in tables:
                 cursor.execute(f"SELECT COUNT(*) FROM {table}")
                 count = cursor.fetchone()[0]
                 tables_info[table] = {'count': count}
-            
+
             return tables_info
         except Exception as e:
             logger.error(f"获取表信息失败: {e}")
             return {}
         finally:
             if connection:
-                connection.close()
+                self._put_connection(connection)

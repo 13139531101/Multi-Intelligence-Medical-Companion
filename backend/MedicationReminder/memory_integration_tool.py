@@ -18,6 +18,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'AgentMemorySystem
 from mcp.server.models import InitializationOptions
 import mcp.types as types
 from mcp.server import NotificationOptions, Server
+from mcp.server.fastmcp import FastMCP
 from memory_system import AgentMemorySystem
 
 # 配置日志
@@ -26,9 +27,31 @@ logger = logging.getLogger("medication_memory_integration")
 
 # 创建服务器实例
 server = Server("medication-memory-integration")
+# FastMCP 高层封装（用于简化运行与注册）
+mcp = FastMCP("MemoryIntegrationTool")
 
 # 全局记忆系统实例
 memory_system: Optional[AgentMemorySystem] = None
+
+# 惰性初始化记忆系统（CLI 运行时不会触发 __main__）
+async def ensure_memory_system() -> None:
+    global memory_system
+    if memory_system is not None:
+        return
+    try:
+        database_url = os.getenv('DATABASE_URL', 'sqlite:///medication_reminder_memory.db')
+        embedding_model = os.getenv('EMBEDDING_MODEL', 'text-embedding-3-small')
+
+        ms = AgentMemorySystem(
+            database_url=database_url,
+            embedding_model=embedding_model
+        )
+        await ms.initialize()
+        memory_system = ms
+        logger.info("用药提醒记忆系统初始化成功(惰性)")
+    except Exception as e:
+        logger.error(f"惰性初始化记忆系统失败: {e}")
+        memory_system = None
 
 @server.list_resources()
 async def handle_list_resources() -> list[types.Resource]:
@@ -309,10 +332,10 @@ async def handle_list_tools() -> list[types.Tool]:
 @server.call_tool()
 async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent]:
     """处理工具调用"""
-    if not memory_system:
-        return [types.TextContent(type="text", text=json.dumps({"error": "记忆系统未初始化"}, ensure_ascii=False))]
-    
     try:
+        # 惰性初始化，确保记忆系统可用
+        await ensure_memory_system()
+
         if name == "store_medication_record":
             result = await _store_medication_record(arguments)
         elif name == "search_medication_history":
@@ -339,7 +362,10 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
 # 工具实现函数
 async def _store_medication_record(args: dict) -> dict:
     """存储用药记录"""
+    await ensure_memory_system()
     try:
+        if memory_system is None:
+            return {"error": "记忆系统未初始化"}
         # 构建记录内容
         record_content = {
             "medication_name": args["medication_name"],
@@ -378,9 +404,38 @@ async def _store_medication_record(args: dict) -> dict:
     except Exception as e:
         return {"success": False, "error": str(e)}
 
+# FastMCP 工具封装（确保与原有工具名称一致的语义）
+@mcp.tool()
+async def store_medication_record(
+    user_id: str,
+    medication_name: str,
+    dosage: str,
+    frequency: str,
+    start_date: str,
+    end_date: str | None = None,
+    doctor_name: str | None = None,
+    notes: str | None = None,
+    tags: list[str] | None = None,
+) -> dict:
+    args = {
+        "user_id": user_id,
+        "medication_name": medication_name,
+        "dosage": dosage,
+        "frequency": frequency,
+        "start_date": start_date,
+        "end_date": end_date,
+        "doctor_name": doctor_name,
+        "notes": notes,
+        "tags": tags or [],
+    }
+    return await _store_medication_record(args)
+
 async def _search_medication_history(args: dict) -> dict:
     """搜索用药历史"""
+    await ensure_memory_system()
     try:
+        if memory_system is None:
+            return {"error": "记忆系统未初始化"}
         # 构建搜索过滤器
         filters = {"memory_type": "medication_record"}
         if args.get("user_id"):
@@ -420,9 +475,27 @@ async def _search_medication_history(args: dict) -> dict:
     except Exception as e:
         return {"success": False, "error": str(e)}
 
+@mcp.tool()
+async def search_medication_history(
+    query: str,
+    user_id: str | None = None,
+    medication_name: str | None = None,
+    limit: int = 10,
+) -> dict:
+    args = {
+        "query": query,
+        "user_id": user_id,
+        "medication_name": medication_name,
+        "limit": limit,
+    }
+    return await _search_medication_history(args)
+
 async def _store_adherence_record(args: dict) -> dict:
     """存储依从性记录"""
+    await ensure_memory_system()
     try:
+        if memory_system is None:
+            return {"error": "记忆系统未初始化"}
         # 构建记录内容
         adherence_content = {
             "user_id": args["user_id"],
@@ -461,9 +534,33 @@ async def _store_adherence_record(args: dict) -> dict:
     except Exception as e:
         return {"success": False, "error": str(e)}
 
+@mcp.tool()
+async def store_adherence_record(
+    user_id: str,
+    medication_name: str,
+    adherence_rate: float,
+    missed_doses: int = 0,
+    reasons: list[str] | None = None,
+    period: str | None = None,
+    notes: str | None = None,
+) -> dict:
+    args = {
+        "user_id": user_id,
+        "medication_name": medication_name,
+        "adherence_rate": adherence_rate,
+        "missed_doses": missed_doses,
+        "reasons": reasons or [],
+        "period": period or "",
+        "notes": notes or "",
+    }
+    return await _store_adherence_record(args)
+
 async def _store_medication_profile(args: dict) -> dict:
     """存储用药档案"""
+    await ensure_memory_system()
     try:
+        if memory_system is None:
+            return {"error": "记忆系统未初始化"}
         # 构建档案内容
         profile_content = {
             "user_id": args["user_id"],
@@ -500,9 +597,31 @@ async def _store_medication_profile(args: dict) -> dict:
     except Exception as e:
         return {"success": False, "error": str(e)}
 
+@mcp.tool()
+async def store_medication_profile(
+    user_id: str,
+    allergies: list[str] | None = None,
+    drug_interactions: list[str] | None = None,
+    preferences: dict | None = None,
+    medical_conditions: list[str] | None = None,
+    emergency_contacts: list[dict] | None = None,
+) -> dict:
+    args = {
+        "user_id": user_id,
+        "allergies": allergies or [],
+        "drug_interactions": drug_interactions or [],
+        "preferences": preferences or {},
+        "medical_conditions": medical_conditions or [],
+        "emergency_contacts": emergency_contacts or [],
+    }
+    return await _store_medication_profile(args)
+
 async def _store_appointment_record(args: dict) -> dict:
     """存储预约记录"""
+    await ensure_memory_system()
     try:
+        if memory_system is None:
+            return {"error": "记忆系统未初始化"}
         # 构建记录内容
         appointment_content = {
             "user_id": args["user_id"],
@@ -543,9 +662,37 @@ async def _store_appointment_record(args: dict) -> dict:
     except Exception as e:
         return {"success": False, "error": str(e)}
 
+@mcp.tool()
+async def store_appointment_record(
+    user_id: str,
+    appointment_date: str,
+    doctor_name: str,
+    department: str | None = None,
+    purpose: str | None = None,
+    outcome: str | None = None,
+    next_appointment: str | None = None,
+    medications_prescribed: list[str] | None = None,
+    notes: str | None = None,
+) -> dict:
+    args = {
+        "user_id": user_id,
+        "appointment_date": appointment_date,
+        "doctor_name": doctor_name,
+        "department": department or "",
+        "purpose": purpose or "",
+        "outcome": outcome or "",
+        "next_appointment": next_appointment or "",
+        "medications_prescribed": medications_prescribed or [],
+        "notes": notes or "",
+    }
+    return await _store_appointment_record(args)
+
 async def _get_medication_insights(args: dict) -> dict:
     """获取用药洞察"""
+    await ensure_memory_system()
     try:
+        if memory_system is None:
+            return {"error": "记忆系统未初始化"}
         user_id = args["user_id"]
         analysis_type = args.get("analysis_type", "recommendations")
         time_period = args.get("time_period", 30)
@@ -615,9 +762,25 @@ async def _get_medication_insights(args: dict) -> dict:
     except Exception as e:
         return {"success": False, "error": str(e)}
 
+@mcp.tool()
+async def get_medication_insights(
+    user_id: str,
+    analysis_type: str = "recommendations",
+    time_period: int = 30,
+) -> dict:
+    args = {
+        "user_id": user_id,
+        "analysis_type": analysis_type,
+        "time_period": time_period,
+    }
+    return await _get_medication_insights(args)
+
 async def _cleanup_medication_memories(args: dict) -> dict:
     """清理用药记忆"""
+    await ensure_memory_system()
     try:
+        if memory_system is None:
+            return {"error": "记忆系统未初始化"}
         user_id = args.get("user_id")
         older_than_days = args.get("older_than_days", 365)
         
@@ -638,9 +801,23 @@ async def _cleanup_medication_memories(args: dict) -> dict:
     except Exception as e:
         return {"success": False, "error": str(e)}
 
+@mcp.tool()
+async def cleanup_medication_memories(
+    user_id: str | None = None,
+    older_than_days: int = 365,
+) -> dict:
+    args = {
+        "user_id": user_id,
+        "older_than_days": older_than_days,
+    }
+    return await _cleanup_medication_memories(args)
+
 async def _generate_medication_insights() -> dict:
     """生成用药洞察"""
+    await ensure_memory_system()
     try:
+        if memory_system is None:
+            return {"error": "记忆系统未初始化"}
         # 获取最近的用药数据
         recent_medications = await memory_system.search_memories(
             query="medication",
@@ -687,39 +864,6 @@ async def _generate_medication_insights() -> dict:
         logger.error(f"生成用药洞察失败: {e}")
         return {"error": str(e)}
 
-async def main():
-    """主函数"""
-    global memory_system
-    
-    # 初始化记忆系统
-    try:
-        database_url = os.getenv('DATABASE_URL', 'sqlite:///medication_reminder_memory.db')
-        embedding_model = os.getenv('EMBEDDING_MODEL', 'text-embedding-3-small')
-        
-        memory_system = AgentMemorySystem(
-            database_url=database_url,
-            embedding_model=embedding_model
-        )
-        
-        await memory_system.initialize()
-        logger.info("用药提醒记忆系统初始化成功")
-        
-    except Exception as e:
-        logger.error(f"记忆系统初始化失败: {e}")
-        memory_system = None
-    
-    # 运行服务器
-    async with server.run_stdio() as streams:
-        await server.run(
-            streams[0], streams[1], InitializationOptions(
-                server_name="medication-memory-integration",
-                server_version="1.0.0",
-                capabilities=server.get_capabilities(
-                    notification_options=NotificationOptions(),
-                    experimental_capabilities={},
-                ),
-            )
-        )
-
+# FastMCP 显式运行入口
 if __name__ == "__main__":
-    asyncio.run(main())
+    mcp.run()

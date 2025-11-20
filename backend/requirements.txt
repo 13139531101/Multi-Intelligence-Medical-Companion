@@ -4,6 +4,7 @@
 fastmcp>=0.1.0
 fastapi>=0.104.0
 uvicorn>=0.24.0
+openai>=1.0.0
 
 # 环境变量管理
 python-dotenv>=1.0.0
@@ -13,6 +14,9 @@ requests>=2.31.0
 
 # 数据库
 # sqlite3  # Python内置，无需安装
+# 统一迁移到 PostgreSQL（psycopg3）
+psycopg[binary]>=3.1.8
+psycopg_pool>=3.1.8
 
 # 数据处理
 pandas>=2.1.0

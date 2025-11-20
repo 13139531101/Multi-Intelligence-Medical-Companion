@@ -1,39 +1,25 @@
 {
   "mcpServers": {
     "KnowledgeTool": {
-      "command": "uv",
+      "command": "python",
       "args": [
-        "run",
-        "--with",
-        "mcp[cli]",
-        "mcp",
-        "run",
         "mcpserver/knowledge_tool.py"
-      ]
+      ],
+      "cwd": "/app/HealthAdvisor"
     },
     "DiagnosisTool": {
-      "command": "uv",
+      "command": "python",
       "args": [
-        "run",
-        "--with",
-        "mcp[cli]",
-        "mcp",
-        "run",
         "mcpserver/diagnosis_tool.py"
-      ]
+      ],
+      "cwd": "/app/HealthAdvisor"
     },
     "MemoryIntegrationTool": {
-      "command": "uv",
+      "command": "python",
       "args": [
-        "run",
-        "--with",
-        "mcp[cli]",
-        "--with",
-        "mysql-connector-python",
-        "--with",
-        "cryptography",
         "mcpserver/memory_integration_tool.py"
       ],
+      "cwd": "/app/HealthAdvisor",
       "env": {
         "MEMORY_DB_HOST": "localhost",
         "MEMORY_DB_PORT": "3306",

@@ -55,13 +55,14 @@ reminder_manager = ReminderManager()
 
 @mcp.tool()
 def add_medication_reminder(user_id: str, medication_name: str, dosage: str,
-                          reminder_times: str, start_date: str = "",
+                          frequency: str, reminder_times: str, start_date: str = "",
                           end_date: str = "", notes: str = "") -> str:
     """
     添加用药提醒
     :param user_id: 用户ID
     :param medication_name: 药物名称
     :param dosage: 剂量
+    :param frequency: 频率文本（兼容调用方，不参与入参校验）
     :param reminder_times: 提醒时间（JSON格式，如：["08:00", "12:00", "18:00"]）
     :param start_date: 开始日期 (YYYY-MM-DD)
     :param end_date: 结束日期 (YYYY-MM-DD)

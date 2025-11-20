@@ -6,6 +6,7 @@ from collections import defaultdict
 import statistics
 from .database_config import MemoryDatabaseConfig
 from .embedding_service import EmbeddingService
+from psycopg.rows import dict_row
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +29,7 @@ class MemoryManager:
         connection = None
         try:
             connection = self.db_config.get_connection()
-            cursor = connection.cursor(dictionary=True)
+            cursor = connection.cursor(row_factory=dict_row)
             
             # 获取记忆信息
             select_sql = """
@@ -121,7 +122,7 @@ class MemoryManager:
         connection = None
         try:
             connection = self.db_config.get_connection()
-            cursor = connection.cursor(dictionary=True)
+            cursor = connection.cursor(row_factory=dict_row)
             
             # 获取候选压缩记忆
             candidates = self._get_compression_candidates(cursor, agent_id, user_id, memory_type)
@@ -241,7 +242,7 @@ class MemoryManager:
         connection = None
         try:
             connection = self.db_config.get_connection()
-            cursor = connection.cursor(dictionary=True)
+            cursor = connection.cursor(row_factory=dict_row)
             
             # 获取目标记忆
             target_memory = self._get_memory_with_embedding(cursor, memory_id)
@@ -290,7 +291,7 @@ class MemoryManager:
         connection = None
         try:
             connection = self.db_config.get_connection()
-            cursor = connection.cursor(dictionary=True)
+            cursor = connection.cursor(row_factory=dict_row)
             
             # 时间范围
             start_date = datetime.now() - timedelta(days=days)

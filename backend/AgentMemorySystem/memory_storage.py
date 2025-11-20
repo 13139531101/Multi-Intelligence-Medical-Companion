@@ -5,6 +5,7 @@ import os
 import sys
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
+from psycopg.rows import dict_row
 
 # 确保当前目录在路径中
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -295,7 +296,7 @@ class MemoryStorage:
         connection = None
         try:
             connection = self.db_config.get_connection()
-            cursor = connection.cursor(dictionary=True)
+            cursor = connection.cursor(row_factory=dict_row)
             
             # 获取记忆主数据
             select_sql = """

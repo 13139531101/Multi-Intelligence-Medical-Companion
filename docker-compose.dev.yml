@@ -1,0 +1,18 @@
+services:
+  hostapi:
+    volumes:
+      - ./frontend/hostAgentAPI:/app
+      - ./backend/A2AServer/src/A2AServer:/app/A2AServer
+      - ./backend:/app/backend
+
+  health_records:
+    volumes:
+      - ./backend/HealthRecordsManager:/app/HealthRecordsManager
+
+  medication_reminder:
+    volumes:
+      - ./backend/MedicationReminder:/app/MedicationReminder
+
+  visit_summary:
+    volumes:
+      - ./backend/VisitSummaryGenerator:/app/VisitSummaryGenerator

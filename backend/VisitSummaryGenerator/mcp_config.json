@@ -1,26 +1,18 @@
 {
   "mcpServers": {
     "DocumentTool": {
-      "command": "uv",
+      "command": "python",
       "args": [
-        "run",
-        "--with",
-        "mcp[cli]",
-        "mcp",
-        "run",
         "mcpserver/document_tool.py"
-      ]
+      ],
+      "cwd": "/app/VisitSummaryGenerator"
     },
     "AIAnalysisTool": {
-      "command": "uv",
+      "command": "python",
       "args": [
-        "run",
-        "--with",
-        "mcp[cli]",
-        "mcp",
-        "run",
         "mcpserver/ai_analysis_tool.py"
-      ]
+      ],
+      "cwd": "/app/VisitSummaryGenerator"
     }
   }
 }

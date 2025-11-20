@@ -1,7 +1,12 @@
 import os
 import logging
 from typing import List, Optional, Dict, Any
-import numpy as np
+try:
+    import numpy as np  # type: ignore
+    _HAS_NUMPY = True
+except Exception:
+    np = None  # type: ignore
+    _HAS_NUMPY = False
 # from sentence_transformers import SentenceTransformer
 try:
     from sentence_transformers import SentenceTransformer  # type: ignore
@@ -156,22 +161,23 @@ class EmbeddingService:
             float: 相似度分数 (0-1)
         """
         try:
-            vec1 = np.array(embedding1)
-            vec2 = np.array(embedding2)
-            
-            # 计算余弦相似度
-            dot_product = np.dot(vec1, vec2)
-            norm1 = np.linalg.norm(vec1)
-            norm2 = np.linalg.norm(vec2)
-            
+            if _HAS_NUMPY:
+                vec1 = np.array(embedding1)
+                vec2 = np.array(embedding2)
+                dot_product = np.dot(vec1, vec2)
+                norm1 = np.linalg.norm(vec1)
+                norm2 = np.linalg.norm(vec2)
+            else:
+                # 纯 Python 余弦相似度实现
+                dot_product = sum(a * b for a, b in zip(embedding1, embedding2))
+                norm1 = (sum(a * a for a in embedding1)) ** 0.5
+                norm2 = (sum(b * b for b in embedding2)) ** 0.5
+
             if norm1 == 0 or norm2 == 0:
                 return 0.0
-            
+
             similarity = dot_product / (norm1 * norm2)
-            
-            # 确保结果在0-1范围内
             return max(0.0, min(1.0, (similarity + 1) / 2))
-            
         except Exception as e:
             logger.error(f"计算相似度失败: {e}")
             return 0.0
@@ -293,12 +299,17 @@ class EmbeddingService:
             # 检查维度
             if len(embedding) != self.dimension:
                 return False
-            
+
             # 检查数值有效性
-            vec = np.array(embedding)
-            if np.isnan(vec).any() or np.isinf(vec).any():
-                return False
-            
+            if _HAS_NUMPY:
+                vec = np.array(embedding)
+                if np.isnan(vec).any() or np.isinf(vec).any():
+                    return False
+            else:
+                import math
+                for x in embedding:
+                    if not math.isfinite(x):
+                        return False
             return True
         except Exception:
             return False

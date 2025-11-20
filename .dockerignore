@@ -1,0 +1,30 @@
+# Git and VCS
+.git
+.githooks
+
+# Node
+node_modules
+npm-debug.log
+yarn.lock
+
+# Python
+__pycache__
+*.pyc
+.pytest_cache
+
+# Env and secrets
+.env
+.env.*
+*.key
+
+# Build outputs
+dist
+build
+
+# Editor/OS junk
+.DS_Store
+Thumbs.db
+
+# Logs
+logs
+*.log

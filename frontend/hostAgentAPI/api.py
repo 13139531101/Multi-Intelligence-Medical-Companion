@@ -450,29 +450,201 @@ try:
         return {"status": "ok"}
 
     app.include_router(health_router)
+except Exception as e:
+    # 集成失败不阻塞 HostAPI，降级为警告以避免噪音
+    logging.warning(f"集成健康档案API失败（未挂载 backend 或模块缺失）: {e}")
 
-    # === 用药管理与提醒 API ===
+# === 用药管理与提醒 API ===
+try:
+    # 优先将 backend 下的具体 Agent 目录按文件路径动态加载，避免 "mcpserver" 包名冲突
+    import importlib.util
+    backend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "backend"))
+    hrm_dir = os.path.join(backend_dir, "HealthRecordsManager")
+    mr_dir = os.path.join(backend_dir, "MedicationReminder")
+
+    def _load_module(module_name: str, file_path: str):
+        spec = importlib.util.spec_from_file_location(module_name, file_path)
+        if spec is None or spec.loader is None:
+            raise ImportError(f"无法加载模块 {module_name}，路径: {file_path}")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
+    # 加载 HealthRecordsManager 的存储工具（提供 save_medication / get_medications）
+    storage_mod = _load_module(
+        "hrm_storage_tool",
+        os.path.join(hrm_dir, "mcpserver", "storage_tool.py")
+    )
+    save_medication = storage_mod.save_medication
+    storage_get_medications = storage_mod.get_medications
+
+    # 优先加载 HealthRecordsManager 的提醒工具，避免 MedicationReminder 导入时立即连接数据库
     try:
-        # 优先将 HealthRecordsManager 根目录置于 sys.path 前端，避免 database_config 名称冲突
-        backend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "backend"))
-        hrm_dir = os.path.join(backend_dir, "HealthRecordsManager")
-        if hrm_dir not in sys.path:
-            sys.path.insert(0, hrm_dir)
-        # 导入 MySQL 存储与提醒工具（使用 hrm_dir 下的模块）
-        from mcpserver.storage_tool import save_medication, get_medications as storage_get_medications
-        from mcpserver.reminder_tool import (
-            add_medication_reminder,
-            get_medication_reminders as storage_get_reminders,
-            mark_reminder_taken as storage_mark_taken,
+        hrm_reminder_mod = _load_module(
+            "hrm_reminder_tool",
+            os.path.join(hrm_dir, "mcpserver", "reminder_tool.py")
         )
-        from database_config import get_db_manager
-    except Exception as e:
+        add_medication_reminder = hrm_reminder_mod.add_medication_reminder
+        storage_get_reminders = hrm_reminder_mod.get_medication_reminders
+        storage_mark_taken = hrm_reminder_mod.mark_reminder_taken
+    except Exception:
+        # 回退加载 MedicationReminder 的提醒工具（提供 add/get/log 等函数）
+        reminder_mod = _load_module(
+            "mr_reminder_tool",
+            os.path.join(mr_dir, "mcpserver", "reminder_tool.py")
+        )
+        add_medication_reminder = reminder_mod.add_medication_reminder
+        storage_get_reminders = reminder_mod.get_medication_reminders
+        # 对应“标记已服用”的接口为 log_medication_taken
+        storage_mark_taken = reminder_mod.log_medication_taken
+
+    # 统一封装：兼容两种提醒函数签名与装饰器包装
+    def _call_add_reminder(user_id: str, drug_name: str, dosage: str, frequency: str,
+                           start_date: str, times_list: list, end_date: str, notes: str):
+        fn = add_medication_reminder
+        impl = getattr(fn, "fn", fn)
+        import inspect
+        try:
+            sig = inspect.signature(impl)
+            params = sig.parameters
+            # 构造关键字参数，兼容不同参数名
+            kwargs = {}
+            # user_id
+            kwargs["user_id"] = user_id
+            # medication/drug name
+            if "medication_name" in params:
+                kwargs["medication_name"] = drug_name
+            elif "drug_name" in params:
+                kwargs["drug_name"] = drug_name
+            else:
+                # 若函数使用通用名称 name
+                kwargs["name"] = drug_name
+            # dosage
+            if "dosage" in params:
+                kwargs["dosage"] = dosage
+            # frequency
+            if "frequency" in params:
+                kwargs["frequency"] = frequency
+            # start/end date
+            if "start_date" in params:
+                kwargs["start_date"] = start_date
+            if "end_date" in params:
+                kwargs["end_date"] = end_date
+            # notes
+            if "notes" in params:
+                kwargs["notes"] = notes
+
+            # reminder_times：根据注解类型选择 list 或 JSON 字符串
+            if "reminder_times" in params:
+                ann = params["reminder_times"].annotation
+                try:
+                    # 注解为 str 或未标注时默认字符串（HRM 风格）
+                    if ann is str:
+                        kwargs["reminder_times"] = json.dumps(times_list)
+                    else:
+                        kwargs["reminder_times"] = times_list
+                except Exception:
+                    kwargs["reminder_times"] = times_list
+
+            # 以关键字参数调用以避免位置参数不匹配
+            return impl(**kwargs)
+        except Exception:
+            # 失败时仅传递被实现函数签名支持的关键字参数，避免位置参数/多余参数
+            try:
+                sig2 = inspect.signature(impl)
+                params2 = sig2.parameters
+                kwargs2 = {}
+                if "user_id" in params2:
+                    kwargs2["user_id"] = user_id
+                if "medication_name" in params2:
+                    kwargs2["medication_name"] = drug_name
+                elif "drug_name" in params2:
+                    kwargs2["drug_name"] = drug_name
+                elif "name" in params2:
+                    kwargs2["name"] = drug_name
+                if "dosage" in params2:
+                    kwargs2["dosage"] = dosage
+                if "frequency" in params2:
+                    kwargs2["frequency"] = frequency
+                if "start_date" in params2:
+                    kwargs2["start_date"] = start_date
+                if "end_date" in params2:
+                    kwargs2["end_date"] = end_date
+                if "notes" in params2:
+                    kwargs2["notes"] = notes
+                if "reminder_times" in params2:
+                    ann2 = params2["reminder_times"].annotation
+                    try:
+                        kwargs2["reminder_times"] = (json.dumps(times_list) if ann2 is str else times_list)
+                    except Exception:
+                        kwargs2["reminder_times"] = times_list
+                return impl(**kwargs2)
+            except Exception:
+                raise
+
+    # 统一封装：兼容两种“标记服药”函数签名（HRM: 需要 user_id；MR: 不需要）
+    def _call_mark_taken(reminder_id: int, taken_time: str, user_id: str):
+        fn = storage_mark_taken
+        impl = getattr(fn, "fn", fn)
+        import inspect
+        try:
+            sig = inspect.signature(impl)
+            params = sig.parameters
+            kwargs = {}
+            # 参数名兼容
+            if "reminder_id" in params:
+                kwargs["reminder_id"] = reminder_id
+            elif "id" in params:
+                kwargs["id"] = reminder_id
+            if "taken_time" in params:
+                kwargs["taken_time"] = taken_time
+            elif "actual_time" in params:
+                kwargs["actual_time"] = taken_time
+            # HRM 需要 user_id
+            if "user_id" in params:
+                kwargs["user_id"] = user_id
+            return impl(**kwargs)
+        except Exception:
+            # 二次尝试：仅传递存在的关键字参数
+            try:
+                sig2 = inspect.signature(impl)
+                params2 = sig2.parameters
+                kwargs2 = {}
+                if "reminder_id" in params2:
+                    kwargs2["reminder_id"] = reminder_id
+                elif "id" in params2:
+                    kwargs2["id"] = reminder_id
+                if "taken_time" in params2:
+                    kwargs2["taken_time"] = taken_time
+                elif "actual_time" in params2:
+                    kwargs2["actual_time"] = taken_time
+                if "user_id" in params2:
+                    kwargs2["user_id"] = user_id
+                return impl(**kwargs2)
+            except Exception:
+                raise
+
+    # 加载 HRM 的数据库管理器（用于直接更新 user_medications）
+    db_config_mod = _load_module(
+        "hrm_database_config",
+        os.path.join(hrm_dir, "database_config.py")
+    )
+    get_db_manager = db_config_mod.get_db_manager
+except Exception as e:
         logging.error(f"加载用药工具失败: {e}")
         # 回退：提供安全的占位实现，避免前端白屏
         def storage_get_medications(user_id: str, is_active: bool = True):
             return json.dumps({"medications": []})
-        def add_medication_reminder(user_id: str, drug_name: str, dosage: str, reminder_times: str, start_date: str, end_date: str, notes: str):
-            return json.dumps({"success": True, "reminders": []})
+        # 与远程提醒工具保持一致的函数签名（包含 frequency）
+        def add_medication_reminder(user_id: str, drug_name: str, dosage: str, frequency: str, reminder_times: list, start_date: str, end_date: str, notes: str):
+            # 仅作为占位实现：返回成功但不实际持久化提醒
+            return json.dumps({
+                "success": True,
+                "message": "提醒模块加载失败，已使用占位实现",
+                "reminders": [],
+                "frequency": frequency,
+                "times": reminder_times or []
+            }, ensure_ascii=False)
         def storage_get_reminders(user_id: str, date: str = "", active_only: bool = True):
             return json.dumps({"reminders": []})
         def storage_mark_taken(user_id: str, reminder_id: int, taken_time: str = ""):
@@ -483,7 +655,47 @@ try:
         def storage_update_medication(user_id: str, medication_id: int, drug_name: str, dosage: str, frequency: str, start_date: str, end_date: str, notes: str):
             return json.dumps({"success": True, "medication_id": medication_id})
 
-    meds_router = APIRouter()
+meds_router = APIRouter()
+
+# 调试：查看当前绑定的 add_medication_reminder 函数签名与来源
+@meds_router.get("/debug/reminder-signature")
+async def debug_reminder_signature():
+    try:
+        fn = add_medication_reminder
+        import inspect
+        sig = str(inspect.signature(getattr(fn, 'fn', fn)))
+        src = inspect.getsource(getattr(fn, 'fn', fn))
+        return {
+            "signature": sig,
+            "module": getattr(fn, "__module__", ""),
+            "name": getattr(fn, "__name__", ""),
+            "source_preview": src.splitlines()[:3]
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+@meds_router.get("/api/debug/reminder-signature")
+async def debug_reminder_signature_api_prefix():
+    return await debug_reminder_signature()
+
+@meds_router.get("/api/debug/reminder-params")
+async def debug_reminder_params():
+    try:
+        fn = add_medication_reminder
+        import inspect
+        impl = getattr(fn, 'fn', fn)
+        sig = inspect.signature(impl)
+        params = [
+            {
+                "name": p.name,
+                "kind": str(p.kind),
+                "has_default": p.default is not inspect._empty,
+                "annotation": str(p.annotation) if p.annotation is not inspect._empty else ""
+            } for p in sig.parameters.values()
+        ]
+        return {"params": params}
+    except Exception as e:
+        return {"error": str(e)}
 
     @meds_router.get("/medications")
     @meds_router.get("/api/medications")
@@ -549,13 +761,23 @@ try:
             end_date = (str(end_date)[:10] if end_date else "")
 
             if enable_reminder and norm_times:
-                reminder_times = json.dumps(norm_times)
-                raw = add_medication_reminder(user_id, drug_name, dosage, reminder_times, start_date, end_date, notes)
+                try:
+                    # 统一通过封装调用，兼容不同签名与装饰器
+                    raw = _call_add_reminder(user_id, drug_name, dosage, frequency, start_date, norm_times, end_date, notes)
+                    data = json.loads(raw) if isinstance(raw, str) else raw
+                    return data
+                except Exception as e:
+                    # 远端提醒创建失败，回退到本地文件存储
+                    try:
+                        local = _create_local_reminder(user_id, drug_name, dosage, frequency, start_date, norm_times, end_date, notes)
+                        return {"success": True, "message": "已回退到本地提醒", "reminder": local}
+                    except Exception as ie:
+                        logging.error(f"本地提醒持久化失败: {ie}")
+                        raise e
             else:
                 raw = save_medication(user_id, drug_name, dosage, frequency, start_date, end_date, notes)
-
-            data = json.loads(raw) if isinstance(raw, str) else raw
-            return data
+                data = json.loads(raw) if isinstance(raw, str) else raw
+                return data
         except Exception as e:
             logging.error(f"创建用药失败: {e}")
             return {"success": False, "message": f"创建用药失败: {str(e)}"}
@@ -633,7 +855,8 @@ try:
     async def list_medication_reminders(date: str = "", active_only: bool = True, user: dict = Depends(get_current_user)):
         try:
             user_id = str(user.get("id") or user.get("user_id") or user.get("uid"))
-            raw = storage_get_reminders(user_id, date, active_only)
+            # 提醒工具的获取接口为 get_medication_reminders(user_id, active_only=True)
+            raw = storage_get_reminders(user_id, active_only)
             data = json.loads(raw) if isinstance(raw, str) else raw
             rows = data.get("reminders") if isinstance(data, dict) else data
             from datetime import datetime
@@ -717,8 +940,9 @@ try:
             start_date = (str(start_date)[:10] if start_date else "")
             end_date = (str(end_date)[:10] if end_date else "")
 
-            reminder_times = json.dumps(norm_times) if norm_times else "[]"
-            raw = add_medication_reminder(user_id, name, dosage, reminder_times, start_date, end_date, notes)
+            # 构造频率描述；提醒工具需要 frequency 和 times 列表
+            frequency = f"每日{len(norm_times)}次" if norm_times else (payload.get("frequency") or "")
+            raw = _call_add_reminder(user_id, name, dosage, frequency, start_date, norm_times, end_date, notes)
             data = json.loads(raw) if isinstance(raw, str) else raw
             return data
         except Exception as e:
@@ -729,18 +953,99 @@ try:
     @meds_router.post("/api/medication-reminders/{reminder_id}/taken")
     async def mark_medication_taken(reminder_id: int, taken_time: str = "", user: dict = Depends(get_current_user)):
         try:
-            user_id = str(user.get("id") or user.get("user_id") or user.get("uid"))
-            raw = storage_mark_taken(user_id, reminder_id, taken_time)
-            data = json.loads(raw) if isinstance(raw, str) else raw
-            return data
+            # 记录服药接口签名为 log_medication_taken(reminder_id, actual_time=None, notes=None)
+            try:
+                user_id = str(user.get("id") or user.get("user_id") or user.get("uid"))
+                raw = _call_mark_taken(reminder_id, taken_time, user_id)
+                data = json.loads(raw) if isinstance(raw, str) else raw
+                return data
+            except Exception:
+                # 回退更新本地提醒状态
+                ok = _mark_local_taken(reminder_id, taken_time)
+                return {"success": ok}
         except Exception as e:
             logging.error(f"标记服药失败: {e}")
             return {"success": False, "message": f"标记服药失败: {str(e)}"}
 
-    app.include_router(meds_router)
+app.include_router(meds_router)
 
-except Exception as e:
-    logging.error(f"集成健康档案API失败: {e}")
+# 直接挂载到 app 的调试端点，便于排查提醒函数签名
+@app.get("/debug/reminder-signature")
+async def _debug_reminder_signature_app_level():
+    try:
+        fn = add_medication_reminder
+        import inspect
+        return {
+            "signature": str(inspect.signature(getattr(fn, 'fn', fn))),
+            "module": getattr(fn, "__module__", ""),
+            "name": getattr(fn, "__name__", ""),
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+# === 本地提醒回退存储（当远端提醒模块不可用时） ===
+_REM_DB_PATH = os.path.join(os.path.dirname(__file__), "reminders.json")
+
+def _load_local_reminders() -> dict:
+    try:
+        if not os.path.exists(_REM_DB_PATH):
+            return {"reminders": []}
+        with open(_REM_DB_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {"reminders": []}
+
+def _save_local_reminders(data: dict) -> None:
+    try:
+        with open(_REM_DB_PATH, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logging.error(f"保存本地提醒失败: {e}")
+
+def _create_local_reminder(user_id: str, drug_name: str, dosage: str, frequency: str,
+                           start_date: str, times_list: list, end_date: str, notes: str) -> dict:
+    db = _load_local_reminders()
+    items = db.get("reminders", [])
+    new_id = (max([r.get("id", 0) for r in items]) + 1) if items else 1
+    rec = {
+        "id": new_id,
+        "user_id": user_id,
+        "medication_name": drug_name,
+        "dosage": dosage,
+        "frequency": frequency,
+        "reminder_times": times_list,
+        "start_date": start_date,
+        "end_date": end_date,
+        "notes": notes,
+        "status": "scheduled",
+        "created_at": datetime.utcnow().isoformat()
+    }
+    items.append(rec)
+    db["reminders"] = items
+    _save_local_reminders(db)
+    return rec
+
+def _mark_local_taken(reminder_id: int, taken_time: str = "") -> bool:
+    db = _load_local_reminders()
+    items = db.get("reminders", [])
+    ok = False
+    for r in items:
+        if int(r.get("id", 0)) == int(reminder_id):
+            r["status"] = "taken"
+            r["last_taken_at"] = taken_time or datetime.utcnow().isoformat()
+            ok = True
+            break
+    if ok:
+        _save_local_reminders({"reminders": items})
+    return ok
+
+@app.get("/api/medication-reminders")
+async def list_medication_reminders(user: dict = Depends(get_current_user)):
+    # 仅返回本地提醒列表（远端列表接口不稳定时的调试回退）
+    db = _load_local_reminders()
+    uid = str(user.get("id") or user.get("user_id") or user.get("uid"))
+    res = [r for r in db.get("reminders", []) if str(r.get("user_id")) == uid]
+    return {"reminders": res}
 
 # === 新增：健康咨询简易端点（供前端 /consultations 使用） ===
 CONSULT_DB_PATH = os.path.join(os.path.dirname(__file__), "consultations.json")

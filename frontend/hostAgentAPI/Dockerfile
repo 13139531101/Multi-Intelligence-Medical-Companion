@@ -1,0 +1,37 @@
+FROM python:3.11-slim
+
+# Prevent interactive tzdata prompts
+ENV DEBIAN_FRONTEND=noninteractive
+
+WORKDIR /app
+
+# System deps (if any lightweight ones are needed)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Python deps
+COPY frontend/hostAgentAPI/requirements.txt ./requirements.txt
+# 使用国内 PyPI 镜像以加速依赖安装，并允许 pip 缓存以提升重复构建速度
+ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+ENV PIP_INDEX_URL=${PIP_INDEX_URL}
+RUN pip install -i ${PIP_INDEX_URL} -r requirements.txt
+
+# App source (Host API)
+COPY frontend/hostAgentAPI ./
+
+# Provide A2AServer package required by Host API
+COPY backend/A2AServer/src/A2AServer ./A2AServer
+
+# Ensure Python can resolve local package
+ENV PYTHONPATH=/app
+
+# Runtime env with sensible defaults
+ENV HOST_API_PORT=13002
+ENV HOST_API_BIND=0.0.0.0
+
+# Expose service port
+EXPOSE 13002
+
+# Start FastAPI via uvicorn
+CMD ["python", "-m", "uvicorn", "api:app", "--host", "0.0.0.0", "--port", "13002"]

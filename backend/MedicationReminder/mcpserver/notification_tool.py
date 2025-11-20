@@ -1,14 +1,24 @@
 from mcp.server.fastmcp import FastMCP
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time
 from typing import Dict, List, Any, Optional
-import sqlite3
+import psycopg
+from psycopg.rows import dict_row
+import os
 
 # 创建 FastMCP 应用
 mcp = FastMCP("NotificationTool")
 
-# 数据库文件路径
-DB_PATH = "medication_reminders.db"
+# PostgreSQL 连接字符串
+PG_DSN = (
+    os.environ.get("PG_DSN")
+    or os.environ.get("DATABASE_URL")
+    # 默认回退到容器网络中的 postgres 服务与项目数据库
+    or "postgresql://pha:pha_pass@postgres:5432/personal_health_assistant"
+)
+
+def get_pg_conn():
+    return psycopg.connect(PG_DSN, row_factory=dict_row)
 
 @mcp.tool()
 def send_medication_notification(user_id: str, medication_name: str, dosage: str, 
@@ -138,61 +148,70 @@ def check_overdue_medications(user_id: str, tolerance_minutes: int = 30) -> Dict
         逾期用药列表
     """
     try:
-        current_time = datetime.now()
-        current_date = current_time.strftime("%Y-%m-%d")
-        current_time_str = current_time.strftime("%H:%M")
+        now = datetime.now()
+        today = now.date()
+        current_time_str = now.strftime("%H:%M")
         
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        
-        # 获取今日活跃的用药提醒
-        cursor.execute('''
-            SELECT * FROM medication_reminders 
-            WHERE user_id = ? AND is_active = 1 
-            AND start_date <= ? 
-            AND (end_date IS NULL OR end_date >= ?)
-        ''', (user_id, current_date, current_date))
-        
-        reminders = cursor.fetchall()
+        with get_pg_conn() as conn:
+            with conn.cursor() as cur:
+                # 获取今日活跃的用药提醒
+                cur.execute(
+                    """
+                    SELECT id, medication_name, dosage, reminder_times
+                    FROM medication_reminders
+                    WHERE user_id = %s AND is_active = TRUE
+                      AND start_date <= %s
+                      AND (end_date IS NULL OR end_date >= %s)
+                    """,
+                    (user_id, today, today),
+                )
+                reminders = cur.fetchall()
         
         overdue_medications = []
         
-        for reminder in reminders:
-            reminder_times = json.loads(reminder[7])
+        for r in reminders:
+            reminder_times = r["reminder_times"] or []
             
-            for time_str in reminder_times:
-                # 解析提醒时间
-                reminder_time = datetime.strptime(f"{current_date} {time_str}", "%Y-%m-%d %H:%M")
+            for t in reminder_times:
+                # 解析提醒时间（当日 + HH:MM）
+                try:
+                    hh, mm = t.split(":")
+                    reminder_dt = datetime.combine(today, time(int(hh), int(mm)))
+                except Exception:
+                    # 跳过非法时间字符串
+                    continue
                 
                 # 计算是否逾期
-                time_diff = current_time - reminder_time
+                time_diff = now - reminder_dt
                 
                 if time_diff.total_seconds() > tolerance_minutes * 60:
-                    # 检查是否已经记录用药
-                    cursor.execute('''
-                        SELECT COUNT(*) FROM reminder_logs 
-                        WHERE reminder_id = ? AND scheduled_time = ? 
-                        AND DATE(created_at) = ? AND status = 'taken'
-                    ''', (reminder[0], time_str, current_date))
-                    
-                    taken_count = cursor.fetchone()[0]
+                    # 检查是否已经记录用药（按当日该时刻）
+                    with get_pg_conn() as conn:
+                        with conn.cursor() as cur:
+                            cur.execute(
+                                """
+                                SELECT COUNT(*) AS cnt FROM reminder_logs
+                                WHERE reminder_id = %s AND scheduled_time = %s
+                                  AND DATE(created_at) = %s AND status = 'taken'
+                                """,
+                                (r["id"], reminder_dt, today),
+                            )
+                            taken_count = cur.fetchone()["cnt"]
                     
                     if taken_count == 0:  # 未记录用药
                         overdue_medications.append({
-                            "reminder_id": reminder[0],
-                            "medication_name": reminder[2],
-                            "dosage": reminder[3],
-                            "scheduled_time": time_str,
-                            "overdue_minutes": int(time_diff.total_seconds() / 60)
+                            "reminder_id": r["id"],
+                            "medication_name": r["medication_name"],
+                            "dosage": r["dosage"],
+                            "scheduled_time": t,
+                            "overdue_minutes": int(time_diff.total_seconds() / 60),
                         })
-        
-        conn.close()
         
         return {
             "status": "success",
             "overdue_medications": overdue_medications,
             "count": len(overdue_medications),
-            "check_time": current_time.isoformat()
+            "check_time": now.isoformat(),
         }
     except Exception as e:
         return {
@@ -216,66 +235,75 @@ def generate_daily_summary(user_id: str, date: Optional[str] = None) -> Dict[str
         if date is None:
             date = datetime.now().strftime("%Y-%m-%d")
         
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        
-        # 获取当日的用药提醒
-        cursor.execute('''
-            SELECT * FROM medication_reminders 
-            WHERE user_id = ? AND is_active = 1 
-            AND start_date <= ? 
-            AND (end_date IS NULL OR end_date >= ?)
-        ''', (user_id, date, date))
-        
-        reminders = cursor.fetchall()
-        
+        target_date = datetime.strptime(date, "%Y-%m-%d").date()
+
         total_doses = 0
         taken_doses = 0
         missed_doses = 0
-        medication_details = []
-        
-        for reminder in reminders:
-            reminder_times = json.loads(reminder[7])
-            
-            for time_str in reminder_times:
-                total_doses += 1
-                
-                # 检查是否已服药
-                cursor.execute('''
-                    SELECT * FROM reminder_logs 
-                    WHERE reminder_id = ? AND scheduled_time = ? 
-                    AND DATE(created_at) = ? AND status = 'taken'
-                ''', (reminder[0], time_str, date))
-                
-                log = cursor.fetchone()
-                
-                if log:
-                    taken_doses += 1
-                    status = "已服用"
-                    actual_time = log[3] if log[3] else "未记录"
-                else:
-                    # 检查是否已过时间
-                    current_time = datetime.now()
-                    scheduled_datetime = datetime.strptime(f"{date} {time_str}", "%Y-%m-%d %H:%M")
-                    
-                    if current_time > scheduled_datetime:
-                        missed_doses += 1
-                        status = "已错过"
-                        actual_time = None
-                    else:
-                        status = "待服用"
-                        actual_time = None
-                
-                medication_details.append({
-                    "medication_name": reminder[2],
-                    "dosage": reminder[3],
-                    "scheduled_time": time_str,
-                    "status": status,
-                    "actual_time": actual_time
-                })
-        
-        conn.close()
-        
+        medication_details: List[Dict[str, Any]] = []
+
+        with get_pg_conn() as conn:
+            with conn.cursor() as cur:
+                # 获取当日的用药提醒
+                cur.execute(
+                    """
+                    SELECT id, medication_name, dosage, reminder_times
+                    FROM medication_reminders
+                    WHERE user_id = %s AND is_active = TRUE
+                      AND start_date <= %s
+                      AND (end_date IS NULL OR end_date >= %s)
+                    """,
+                    (user_id, target_date, target_date),
+                )
+                reminders = cur.fetchall()
+
+                for r in reminders:
+                    reminder_times = r["reminder_times"] or []
+
+                    for time_str in reminder_times:
+                        total_doses += 1
+
+                        # 检查是否已服药
+                        hh, mm = time_str.split(":")
+                        scheduled_dt = datetime.combine(target_date, time(int(hh), int(mm)))
+                        cur.execute(
+                            """
+                            SELECT reminder_id, scheduled_time, actual_time, status, notes, created_at
+                            FROM reminder_logs
+                            WHERE reminder_id = %s AND scheduled_time = %s
+                              AND DATE(created_at) = %s AND status = 'taken'
+                            ORDER BY created_at DESC
+                            LIMIT 1
+                            """,
+                            (r["id"], scheduled_dt, target_date),
+                        )
+                        log = cur.fetchone()
+
+                        if log:
+                            taken_doses += 1
+                            status = "已服用"
+                            actual_time = log["actual_time"].strftime("%H:%M") if log["actual_time"] else "未记录"
+                        else:
+                            # 检查是否已过时间
+                            current_time = datetime.now()
+                            scheduled_datetime = datetime.combine(target_date, time(int(hh), int(mm)))
+
+                            if current_time > scheduled_datetime:
+                                missed_doses += 1
+                                status = "已错过"
+                                actual_time = None
+                            else:
+                                status = "待服用"
+                                actual_time = None
+
+                        medication_details.append({
+                            "medication_name": r["medication_name"],
+                            "dosage": r["dosage"],
+                            "scheduled_time": time_str,
+                            "status": status,
+                            "actual_time": actual_time,
+                        })
+
         # 计算服药率
         compliance_rate = (taken_doses / total_doses * 100) if total_doses > 0 else 0
         

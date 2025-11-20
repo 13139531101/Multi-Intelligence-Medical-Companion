@@ -1,22 +1,22 @@
 [
   {
     "name": "健康档案管理员",
-    "url": "http://localhost:10010",
+    "url": "http://health_records:10010",
     "description": "管理个人健康档案和病史记录"
   },
   {
     "name": "健康顾问",
-    "url": "http://localhost:10011",
+    "url": "http://health_advisor:10011",
     "description": "提供个性化健康建议和医疗咨询"
   },
   {
     "name": "用药提醒助手",
-    "url": "http://localhost:10012",
+    "url": "http://medication_reminder:10012",
     "description": "管理用药计划和智能提醒"
   },
   {
     "name": "就诊摘要生成器",
-    "url": "http://localhost:10013",
+    "url": "http://visit_summary:10013",
     "description": "生成就诊记录摘要和医疗文档解析"
   }
 ]
