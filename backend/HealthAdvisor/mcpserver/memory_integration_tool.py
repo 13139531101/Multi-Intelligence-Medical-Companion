@@ -90,56 +90,54 @@ async def handle_list_resources() -> list[Resource]:
 
 @server.read_resource()
 async def handle_read_resource(uri: AnyUrl) -> str:
-    """读取记忆资源"""
     if not memory_system:
         return json.dumps({"error": "记忆系统未初始化"})
-    
     try:
-        if str(uri) == "memory://health-advisor/consultations":
-            # 获取健康咨询记忆
+        from urllib.parse import urlparse, parse_qs
+        parsed = urlparse(str(uri))
+        qs = parse_qs(parsed.query)
+        uid = (
+            (qs.get("user_id", [None])[0])
+            or os.environ.get("A2A_CURRENT_USER_ID")
+            or os.environ.get("DEFAULT_USER_ID")
+            or "default_user"
+        )
+        path = parsed.scheme + "://" + parsed.netloc + parsed.path
+        if path == "memory://health-advisor/consultations":
             memories = memory_system.search_by_tags(
                 tags=["健康咨询", "症状分析"],
                 agent_id=HEALTH_ADVISOR_AGENT_ID,
-                user_id="default_user",
+                user_id=uid,
                 memory_types=['long_term', 'working'],
                 limit=20
             )
             return json.dumps(memories, ensure_ascii=False, indent=2)
-        
-        elif str(uri) == "memory://health-advisor/symptoms":
-            # 获取症状分析记忆
+        if path == "memory://health-advisor/symptoms":
             memories = memory_system.search_by_tags(
                 tags=["症状分析", "诊断建议"],
                 agent_id=HEALTH_ADVISOR_AGENT_ID,
-                user_id="default_user",
+                user_id=uid,
                 memory_types=['long_term'],
                 limit=20
             )
             return json.dumps(memories, ensure_ascii=False, indent=2)
-        
-        elif str(uri) == "memory://health-advisor/preferences":
-            # 获取用户健康偏好
+        if path == "memory://health-advisor/preferences":
             memories = memory_system.search_by_tags(
                 tags=["用户偏好", "健康关注"],
                 agent_id=HEALTH_ADVISOR_AGENT_ID,
-                user_id="default_user",
+                user_id=uid,
                 memory_types=['long_term'],
                 limit=10
             )
             return json.dumps(memories, ensure_ascii=False, indent=2)
-        
-        elif str(uri) == "memory://health-advisor/insights":
-            # 分析健康洞察
+        if path == "memory://health-advisor/insights":
             patterns = memory_system.analyze_memory_patterns(
                 agent_id=HEALTH_ADVISOR_AGENT_ID,
-                user_id="default_user",
+                user_id=uid,
                 days=90
             )
             return json.dumps(patterns, ensure_ascii=False, indent=2)
-        
-        else:
-            return json.dumps({"error": f"未知资源: {uri}"})
-    
+        return json.dumps({"error": f"未知资源: {uri}"})
     except Exception as e:
         logger.error(f"读取资源失败: {e}")
         return json.dumps({"error": str(e)})

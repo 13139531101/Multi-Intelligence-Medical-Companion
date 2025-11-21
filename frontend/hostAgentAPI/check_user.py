@@ -4,7 +4,7 @@
 检查用户数据
 """
 
-import mysql.connector
+import psycopg
 import os
 from dotenv import load_dotenv
 
@@ -13,12 +13,12 @@ load_dotenv()
 def check_user_data():
     """检查用户111的数据"""
     try:
-        conn = mysql.connector.connect(
-            host=os.getenv('DB_HOST', 'localhost'),
-            port=int(os.getenv('DB_PORT', 3306)),
-            user=os.getenv('DB_USER', 'root'),
-            password=os.getenv('DB_PASSWORD', ''),
-            database=os.getenv('DB_NAME', 'personal_health_assistant')
+        conn = psycopg.connect(
+            host=os.getenv('DB_HOST', 'postgres'),
+            port=int(os.getenv('DB_PORT', 5432)),
+            user=os.getenv('DB_USER', 'pha'),
+            password=os.getenv('DB_PASSWORD', 'pha_pass'),
+            dbname=os.getenv('DB_NAME', os.getenv('POSTGRES_DB', 'personal_health_assistant'))
         )
         
         cursor = conn.cursor()

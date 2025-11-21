@@ -4,6 +4,8 @@ from starlette.responses import JSONResponse
 from sse_starlette.sse import EventSourceResponse
 import asyncio
 from starlette.requests import Request
+import os
+import jwt
 import sys
 from A2AServer.common.A2Atypes import (
     A2ARequest,
@@ -84,6 +86,19 @@ class A2AServer:
                 "error": "Server is initializing MCP tools. Please retry shortly."
             }, status_code=503)
         try:
+            try:
+                auth = request.headers.get("authorization") or request.headers.get("Authorization")
+                if isinstance(auth, str) and auth.lower().startswith("bearer "):
+                    token = auth.split(" ", 1)[1].strip()
+                    secret = os.getenv("JWT_SECRET_KEY", "your-secret-key-change-this-in-production")
+                    alg = os.getenv("JWT_ALGORITHM", "HS256")
+                    payload = jwt.decode(token, secret, algorithms=[alg])
+                    uid = payload.get("user_id") or payload.get("sub") or payload.get("id")
+                    if uid is not None:
+                        os.environ["A2A_CURRENT_USER_ID"] = str(uid)
+                        os.environ["DEFAULT_USER_ID"] = str(uid)
+            except Exception:
+                pass
             body = await request.json()
             json_rpc_request = A2ARequest.validate_python(body)
 

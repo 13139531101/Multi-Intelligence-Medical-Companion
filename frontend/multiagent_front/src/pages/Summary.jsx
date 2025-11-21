@@ -85,7 +85,8 @@ const Summary = () => {
     prescription: '',
     followUp: '',
     notes: '',
-    files: []
+    files: [],
+    tests: []
   });
 
   const [aiFormData, setAiFormData] = useState({
@@ -151,7 +152,8 @@ const Summary = () => {
         prescription: generatedSummary.prescription || '',
         followUp: generatedSummary.followUp || '',
         notes: generatedSummary.notes || '',
-        files: aiFormData.files
+        files: aiFormData.files,
+        tests: Array.isArray(generatedSummary.tests) ? generatedSummary.tests : []
       });
       
       setOpenAIDialog(false);
@@ -191,7 +193,8 @@ const Summary = () => {
         prescription: summary.prescription,
         followUp: summary.followUp,
         notes: summary.notes,
-        files: summary.files || []
+        files: summary.files || [],
+        tests: summary.tests || []
       });
     } else {
       setEditingSummary(null);
@@ -209,7 +212,8 @@ const Summary = () => {
         prescription: '',
         followUp: '',
         notes: '',
-        files: []
+        files: [],
+        tests: []
       });
     }
     setOpenDialog(true);
@@ -243,6 +247,27 @@ const Summary = () => {
         files: [...prev.files, ...files]
       }));
     }
+  };
+
+  const addTestRow = () => {
+    setFormData(prev => ({
+      ...prev,
+      tests: [...(prev.tests || []), { name: '', value: '', unit: '', status: '', date: dayjs(prev.visitDate).format('YYYY-MM-DD') }]
+    }));
+  };
+
+  const removeTestRow = (index) => {
+    setFormData(prev => ({
+      ...prev,
+      tests: (prev.tests || []).filter((_, i) => i !== index)
+    }));
+  };
+
+  const updateTestField = (index, field, value) => {
+    setFormData(prev => ({
+      ...prev,
+      tests: (prev.tests || []).map((t, i) => i === index ? { ...t, [field]: value } : t)
+    }));
   };
 
   const recentSummaries = summaries.filter(s => 
@@ -395,6 +420,15 @@ const Summary = () => {
                             />
                           </Box>
                         )}
+                        {summary.tests && summary.tests.length > 0 && (
+                          <Box sx={{ mt: 1 }}>
+                            <Chip
+                              label={`${summary.tests.length} 条检验项`}
+                              size="small"
+                              variant="outlined"
+                            />
+                          </Box>
+                        )}
                       </CardContent>
                       <CardActions>
                         <IconButton size="small" onClick={() => setSelectedSummary(summary)}>
@@ -531,12 +565,33 @@ const Summary = () => {
                         
                         <Accordion>
                           <AccordionSummary expandIcon={<ExpandMore />}>
-                            <Typography variant="subtitle1">检查结果</Typography>
+                          <Typography variant="subtitle1">检查结果</Typography>
                           </AccordionSummary>
                           <AccordionDetails>
                             <Typography variant="body2">
                               {selectedSummary.examination || '无记录'}
                             </Typography>
+                          </AccordionDetails>
+                        </Accordion>
+                        <Accordion>
+                          <AccordionSummary expandIcon={<ExpandMore />}>
+                            <Typography variant="subtitle1">检验单（结构化）</Typography>
+                          </AccordionSummary>
+                          <AccordionDetails>
+                            {(selectedSummary.tests && selectedSummary.tests.length > 0) ? (
+                              <List>
+                                {selectedSummary.tests.map((t, idx) => (
+                                  <ListItem key={idx} divider>
+                                    <ListItemText
+                                      primary={`${t.name || '未命名检验'}${t.value ? `：${t.value}${t.unit || ''}` : ''}`}
+                                      secondary={`${t.status || ''} ${dayjs(t.date || selectedSummary.visitDate).format('YYYY年MM月DD日')}`}
+                                    />
+                                  </ListItem>
+                                ))}
+                              </List>
+                            ) : (
+                              <Typography variant="body2">无结构化检验记录</Typography>
+                            )}
                           </AccordionDetails>
                         </Accordion>
                         
@@ -774,6 +829,40 @@ const Summary = () => {
                   value={formData.examination}
                   onChange={(e) => setFormData(prev => ({ ...prev, examination: e.target.value }))}
                 />
+              </Grid>
+              <Grid item xs={12}>
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+                  <Typography variant="subtitle2">检验单（结构化）</Typography>
+                  <Button size="small" variant="outlined" onClick={addTestRow}>添加检验项</Button>
+                </Box>
+                <List>
+                  {(formData.tests || []).map((t, idx) => (
+                    <ListItem key={idx} sx={{ py: 0 }}>
+                      <Grid container spacing={1} alignItems="center">
+                        <Grid item xs={12} md={3}>
+                          <TextField size="small" label="项目" fullWidth value={t.name || ''} onChange={(e) => updateTestField(idx, 'name', e.target.value)} />
+                        </Grid>
+                        <Grid item xs={12} md={3}>
+                          <TextField size="small" label="数值" fullWidth value={t.value || ''} onChange={(e) => updateTestField(idx, 'value', e.target.value)} />
+                        </Grid>
+                        <Grid item xs={12} md={2}>
+                          <TextField size="small" label="单位" fullWidth value={t.unit || ''} onChange={(e) => updateTestField(idx, 'unit', e.target.value)} />
+                        </Grid>
+                        <Grid item xs={12} md={2}>
+                          <TextField size="small" label="状态" fullWidth value={t.status || ''} onChange={(e) => updateTestField(idx, 'status', e.target.value)} />
+                        </Grid>
+                        <Grid item xs={12} md={2}>
+                          <TextField size="small" label="日期" fullWidth value={t.date || dayjs(formData.visitDate).format('YYYY-MM-DD')} onChange={(e) => updateTestField(idx, 'date', e.target.value)} />
+                        </Grid>
+                      </Grid>
+                      <ListItemSecondaryAction>
+                        <IconButton edge="end" onClick={() => removeTestRow(idx)}>
+                          <Delete />
+                        </IconButton>
+                      </ListItemSecondaryAction>
+                    </ListItem>
+                  ))}
+                </List>
               </Grid>
               
               <Grid item xs={12}>

@@ -25,14 +25,30 @@
       "args": [
         "mcpserver/storage_tool.py"
       ],
-      "cwd": "/app/HealthRecordsManager"
+      "cwd": "/app/HealthRecordsManager",
+      "env": {
+        "DB_HOST": "postgres",
+        "DB_PORT": "5432",
+        "DB_USER": "pha",
+        "DB_PASSWORD": "pha_pass",
+        "POSTGRES_DB": "personal_health_assistant",
+        "DATABASE_URL": "postgresql://pha:pha_pass@postgres:5432/personal_health_assistant"
+      }
     },
     "ReminderTool": {
       "command": "python",
       "args": [
         "mcpserver/reminder_tool.py"
       ],
-      "cwd": "/app/HealthRecordsManager"
+      "cwd": "/app/HealthRecordsManager",
+      "env": {
+        "DB_HOST": "postgres",
+        "DB_PORT": "5432",
+        "DB_USER": "pha",
+        "DB_PASSWORD": "pha_pass",
+        "POSTGRES_DB": "personal_health_assistant",
+        "DATABASE_URL": "postgresql://pha:pha_pass@postgres:5432/personal_health_assistant"
+      }
     },
     "MemoryIntegrationTool": {
       "command": "python",

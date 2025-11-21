@@ -1,4 +1,4 @@
-# 健康档案管理API依赖包
+# 健康档案管理API依赖包（仅保留需要通过 pip 安装的第三方库）
 
 # Web框架
 fastapi==0.104.1
@@ -10,35 +10,5 @@ pydantic==2.5.0
 # 文件上传处理
 python-multipart==0.0.6
 
-# 数据库
-sqlite3  # Python内置，无需安装
-
 # 日期时间处理
 python-dateutil==2.8.2
-
-# 文件处理
-pathlib  # Python内置，无需安装
-
-# 日志
-logging  # Python内置，无需安装
-
-# UUID生成
-uuid  # Python内置，无需安装
-
-# JSON处理
-json  # Python内置，无需安装
-
-# 哈希算法
-hashlib  # Python内置，无需安装
-
-# 操作系统接口
-os  # Python内置，无需安装
-
-# 类型提示
-typing  # Python内置，无需安装
-
-# 枚举
-enum  # Python内置，无需安装
-
-# 上下文管理器
-contextlib  # Python内置，无需安装

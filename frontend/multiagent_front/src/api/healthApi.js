@@ -383,6 +383,16 @@ export const getAttachmentUrl = (fileId) => {
   return `${base}/api/health-records/files/${encodeURIComponent(fileId)}`;
 };
 
+// 新增：获取指定记录的结构化与OCR信息
+export const getExtractedRecordInfo = async (recordId) => {
+  try {
+    const response = await healthApi.get(`/api/health-records/${recordId}/extracted`);
+    return response.data;
+  } catch (error) {
+    throw error.response?.data || { message: '获取结构化信息失败' };
+  }
+};
+
 // 批量上传文件
 export const uploadMultipleFiles = async (files, onProgress = null) => {
   try {

@@ -52,7 +52,7 @@ import dayjs from 'dayjs';
 import Header from '../components/HealthHeader';
 import FileUpload from '../components/FileUpload';
 import AgentAssistant from '../components/AgentAssistant';
-import { getHealthRecords, createHealthRecord, updateHealthRecord, deleteHealthRecord, getAttachmentUrl } from '../api/healthApi';
+import { getHealthRecords, createHealthRecord, updateHealthRecord, deleteHealthRecord, getAttachmentUrl, getExtractedRecordInfo } from '../api/healthApi';
 
 const HealthRecords = () => {
   const [records, setRecords] = useState([]);
@@ -63,6 +63,8 @@ const HealthRecords = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [filterType, setFilterType] = useState('all');
   const [expanded, setExpanded] = useState({});
+  const [extractedDialogOpen, setExtractedDialogOpen] = useState(false);
+  const [extractedData, setExtractedData] = useState(null);
 
   const [formData, setFormData] = useState({
     title: '',
@@ -250,6 +252,22 @@ const HealthRecords = () => {
     setExpanded((prev) => ({ ...prev, [id]: !prev[id] }));
   };
 
+  const openExtractedInfo = async (record) => {
+    try {
+      const data = await getExtractedRecordInfo(record.id);
+      setExtractedData(data);
+      setExtractedDialogOpen(true);
+    } catch (e) {
+      console.error('获取结构化信息失败:', e);
+      alert((e && e.detail) || '获取结构化信息失败');
+    }
+  };
+
+  const closeExtractedDialog = () => {
+    setExtractedDialogOpen(false);
+    setExtractedData(null);
+  };
+
   // 新增：渲染附件缩略图/查看按钮
   const renderAttachments = (record) => {
     const files = record.files || [];
@@ -430,6 +448,9 @@ const HealthRecords = () => {
                           <IconButton size="small" onClick={() => handleOpenDialog(record)}>
                             <Edit />
                           </IconButton>
+                          <IconButton size="small" onClick={() => openExtractedInfo(record)} title="查看结构化/OCR信息">
+                            <Search />
+                          </IconButton>
                           <IconButton size="small" onClick={() => handleDelete(record.id)}>
                             <Delete />
                           </IconButton>
@@ -572,6 +593,29 @@ const HealthRecords = () => {
             <Button onClick={handleSubmit} variant="contained">
               {editingRecord ? '更新' : '添加'}
             </Button>
+          </DialogActions>
+        </Dialog>
+
+        {/* 结构化/OCR信息对话框 */}
+        <Dialog open={extractedDialogOpen} onClose={closeExtractedDialog} maxWidth="md" fullWidth>
+          <DialogTitle>结构化与OCR信息</DialogTitle>
+          <DialogContent>
+            {extractedData ? (
+              <Box sx={{ whiteSpace: 'pre-wrap', fontFamily: 'monospace', fontSize: 14 }}>
+                {(() => {
+                  try {
+                    return JSON.stringify(extractedData, null, 2);
+                  } catch {
+                    return String(extractedData);
+                  }
+                })()}
+              </Box>
+            ) : (
+              <Typography variant="body2" color="text.secondary">暂无数据</Typography>
+            )}
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={closeExtractedDialog}>关闭</Button>
           </DialogActions>
         </Dialog>
         

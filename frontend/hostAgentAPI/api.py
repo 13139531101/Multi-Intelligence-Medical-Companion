@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 import json
 from datetime import date, datetime
 
-load_dotenv(override=True)
+load_dotenv(override=False)
 
 backend_env_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "backend", ".env"))
 try:
@@ -302,7 +302,7 @@ try:
         for f in raw_files:
             if isinstance(f, str) and f not in dedup_files:
                 dedup_files.append(f)
-        # 优化摘要：优先使用 summary，并限制长度，减少OCR噪声对列表展示的影响
+        # 优化摘要：优先使用 summary，限制长度以控制噪声，但对检验报告放宽
         def _shorten(text: str | None, max_len: int = 200) -> str:
             if not text:
                 return ""
@@ -320,18 +320,94 @@ try:
                 return zh / len(s2)
             except Exception:
                 return 0.0
-        summary_src = get("summary") or get("content") or ""
-        summary = _shorten(summary_src)
-        # 新增：当OCR置信度低或中文占比过低时提供友好回退摘要
+        # 提取 JSON 字符串中的文本内容
+        def _extract_text_from_jsonish(s: str | None) -> str:
+            try:
+                txt = (s or "")
+                if not isinstance(txt, str):
+                    txt = str(txt)
+                st = txt.strip()
+                if st.startswith("{") or st.startswith("["):
+                    import json as _json
+                    try:
+                        obj = _json.loads(st)
+                    except Exception:
+                        return st
+                    if isinstance(obj, dict):
+                        for k in ("content", "Content"):
+                            v = obj.get(k)
+                            if isinstance(v, str) and v.strip():
+                                return v.strip()
+                        data = obj.get("data") or obj.get("Data")
+                        if isinstance(data, dict):
+                            v = data.get("content") or data.get("Content")
+                            if isinstance(v, str) and v.strip():
+                                return v.strip()
+                            lines = data.get("lines") or data.get("prism_wordsInfo")
+                            if isinstance(lines, list) and lines:
+                                parts = []
+                                for it in lines:
+                                    if isinstance(it, dict):
+                                        parts.append(str(it.get("text") or it.get("word") or "").strip())
+                                    elif isinstance(it, str):
+                                        parts.append(it.strip())
+                                text = "\n".join([p for p in parts if p])
+                                if text.strip():
+                                    return text.strip()
+                        elif isinstance(data, str) and data.strip():
+                            return data.strip()
+                    elif isinstance(obj, list) and obj:
+                        parts = []
+                        for it in obj:
+                            if isinstance(it, dict):
+                                parts.append(str(it.get("text") or it.get("word") or "").strip())
+                            elif isinstance(it, str):
+                                parts.append(it.strip())
+                        text = "\n".join([p for p in parts if p])
+                        if text.strip():
+                            return text.strip()
+                return st
+            except Exception:
+                return (s or "").strip()
+
+        # 先取类型以便动态调整摘要长度
+        back_type = get("record_type")
+        summary_src_raw = get("summary") or get("content") or ""
+        summary_src = _extract_text_from_jsonish(summary_src_raw)
+        # 新增：中文占比估算，用于噪声检测
+        def _ch_ratio(s: str | None) -> float:
+            try:
+                if not s:
+                    return 0.0
+                s2 = ''.join(c for c in str(s) if not c.isspace())
+                if not s2:
+                    return 0.0
+                zh = sum(1 for c in s2 if '\u4e00' <= c <= '\u9fff')
+                return zh / len(s2)
+            except Exception:
+                return 0.0
         ocr_info = metadata.get("ocr_info") or {}
         conf = ocr_info.get("confidence")
         cn_ratio = _ch_ratio(summary_src)
+        # 默认长度 400；检验报告/处方放宽到 1200
+        tval = back_type.value if hasattr(back_type, "value") else back_type
+        if tval in ("medical_report", "lab_result", "examination", "prescription"):
+            max_len = 3000
+        else:
+            max_len = 400
+        # 若置信度低或中文占比低，收紧到 200，并给出友好提示
         try:
             if (isinstance(conf, (int, float)) and conf < 0.5) or (cn_ratio < 0.2 and len(summary_src) >= 40):
+                max_len = 200
+        except Exception:
+            pass
+        summary = _shorten(summary_src, max_len=max_len)
+        # 当识别质量较差时提供友好回退文案
+        try:
+            if max_len == 200:
                 summary = "识别结果不佳，请点击预览原文"
         except Exception:
             pass
-        back_type = get("record_type")
         record_date = get("record_date")
         # pydantic datetime/date 直接序列化
         return {
@@ -340,6 +416,7 @@ try:
             "type": _map_type_backend_to_front(back_type.value if hasattr(back_type, "value") else back_type),
             "date": record_date,
             "description": summary,
+            "content": summary_src,
             "doctor": metadata.get("doctor", ""),
             "hospital": metadata.get("hospital", ""),
             "files": dedup_files,
@@ -412,7 +489,7 @@ try:
         converted = transform_record_payload(payload or {})
         record = health_api.HealthRecordCreate(**converted)
         user_id = str(user.get("id") or user.get("user_id") or user.get("uid") or "")
-        r = await health_api.create_health_record(record, user_id=user_id)
+        r = await health_api.create_health_record(record, user_id=user_id, request=request)
         return to_front_record(r)
 
     @health_router.put("/api/health-records/{record_id}")
@@ -421,13 +498,13 @@ try:
         converted = transform_update_payload(payload or {})
         record = health_api.HealthRecordUpdate(**converted)
         user_id = str(user.get("id") or user.get("user_id") or user.get("uid") or "")
-        r = await health_api.update_health_record(record_id, record, user_id=user_id)
+        r = await health_api.update_health_record(record_id, record, user_id=user_id, request=request)
         return to_front_record(r)
 
     @health_router.delete("/api/health-records/{record_id}")
-    async def delete_record_proxy(record_id: str, user: dict = Depends(get_current_user)):
+    async def delete_record_proxy(record_id: str, request: Request, user: dict = Depends(get_current_user)):
         user_id = str(user.get("id") or user.get("user_id") or user.get("uid") or "")
-        return await health_api.delete_health_record(record_id, user_id=user_id)
+        return await health_api.delete_health_record(record_id, user_id=user_id, request=request)
 
     @health_router.post("/api/health-records/upload")
     async def upload_file_proxy(file: UploadFile = File(...), user: dict = Depends(get_current_user)):
@@ -458,7 +535,7 @@ except Exception as e:
 try:
     # 优先将 backend 下的具体 Agent 目录按文件路径动态加载，避免 "mcpserver" 包名冲突
     import importlib.util
-    backend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "backend"))
+    backend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "backend"))
     hrm_dir = os.path.join(backend_dir, "HealthRecordsManager")
     mr_dir = os.path.join(backend_dir, "MedicationReminder")
 
@@ -697,9 +774,9 @@ async def debug_reminder_params():
     except Exception as e:
         return {"error": str(e)}
 
-    @meds_router.get("/medications")
-    @meds_router.get("/api/medications")
-    async def list_medications(is_active: bool = True, user: dict = Depends(get_current_user)):
+@meds_router.get("/medications")
+@meds_router.get("/api/medications")
+async def list_medications(is_active: bool = True, user: dict = Depends(get_current_user)):
         try:
             user_id = str(user.get("id") or user.get("user_id") or user.get("uid"))
             raw = storage_get_medications(user_id, is_active)
@@ -730,9 +807,9 @@ async def debug_reminder_params():
             logging.error(f"获取用药失败: {e}")
             return {"success": False, "message": f"获取用药失败: {str(e)}"}
 
-    @meds_router.post("/medications")
-    @meds_router.post("/api/medications")
-    async def create_medication(request: Request, user: dict = Depends(get_current_user)):
+@meds_router.post("/medications")
+@meds_router.post("/api/medications")
+async def create_medication(request: Request, user: dict = Depends(get_current_user)):
         try:
             payload = await request.json()
             user_id = str(user.get("id") or user.get("user_id") or user.get("uid"))
@@ -782,10 +859,9 @@ async def debug_reminder_params():
             logging.error(f"创建用药失败: {e}")
             return {"success": False, "message": f"创建用药失败: {str(e)}"}
 
-    # 新增：更新用药信息
-    @meds_router.put("/medications/{medication_id}")
-    @meds_router.put("/api/medications/{medication_id}")
-    async def update_medication(medication_id: int, request: Request, user: dict = Depends(get_current_user)):
+@meds_router.put("/medications/{medication_id}")
+@meds_router.put("/api/medications/{medication_id}")
+async def update_medication(medication_id: int, request: Request, user: dict = Depends(get_current_user)):
         try:
             payload = await request.json()
             user_id = str(user.get("id") or user.get("user_id") or user.get("uid"))
@@ -850,9 +926,9 @@ async def debug_reminder_params():
             logging.error(f"更新用药失败: {e}")
             return {"success": False, "message": f"更新用药失败: {str(e)}"}
 
-    @meds_router.get("/medication-reminders")
-    @meds_router.get("/api/medication-reminders")
-    async def list_medication_reminders(date: str = "", active_only: bool = True, user: dict = Depends(get_current_user)):
+@meds_router.get("/medication-reminders")
+@meds_router.get("/api/medication-reminders")
+async def list_medication_reminders(date: str = "", active_only: bool = True, user: dict = Depends(get_current_user)):
         try:
             user_id = str(user.get("id") or user.get("user_id") or user.get("uid"))
             # 提醒工具的获取接口为 get_medication_reminders(user_id, active_only=True)
@@ -910,9 +986,9 @@ async def debug_reminder_params():
             logging.error(f"获取用药提醒失败: {e}")
             return {"success": False, "message": f"获取用药提醒失败: {str(e)}"}
 
-    @meds_router.post("/medication-reminders")
-    @meds_router.post("/api/medication-reminders")
-    async def create_medication_reminder(request: Request, user: dict = Depends(get_current_user)):
+@meds_router.post("/medication-reminders")
+@meds_router.post("/api/medication-reminders")
+async def create_medication_reminder(request: Request, user: dict = Depends(get_current_user)):
         try:
             payload = await request.json()
             user_id = str(user.get("id") or user.get("user_id") or user.get("uid"))
@@ -949,9 +1025,9 @@ async def debug_reminder_params():
             logging.error(f"创建用药提醒失败: {e}")
             return {"success": False, "message": f"创建用药提醒失败: {str(e)}"}
 
-    @meds_router.post("/medication-reminders/{reminder_id}/taken")
-    @meds_router.post("/api/medication-reminders/{reminder_id}/taken")
-    async def mark_medication_taken(reminder_id: int, taken_time: str = "", user: dict = Depends(get_current_user)):
+@meds_router.post("/medication-reminders/{reminder_id}/taken")
+@meds_router.post("/api/medication-reminders/{reminder_id}/taken")
+async def mark_medication_taken(reminder_id: int, taken_time: str = "", user: dict = Depends(get_current_user)):
         try:
             # 记录服药接口签名为 log_medication_taken(reminder_id, actual_time=None, notes=None)
             try:
@@ -1046,6 +1122,103 @@ async def list_medication_reminders(user: dict = Depends(get_current_user)):
     uid = str(user.get("id") or user.get("user_id") or user.get("uid"))
     res = [r for r in db.get("reminders", []) if str(r.get("user_id")) == uid]
     return {"reminders": res}
+
+@app.get("/api/debug/db-tables")
+async def _debug_db_tables():
+    try:
+        dbm = get_db_manager()
+        _ensure_visit_summaries_table(dbm)
+    except Exception:
+        return {"error": "no_db_manager"}
+    rows = dbm.execute_query("select table_name from information_schema.tables where table_schema='public' order by 1")
+    names = []
+    for r in rows:
+        names.append(r.get("table_name") if isinstance(r, dict) else (r[0] if r else None))
+    return {"tables": names}
+
+@app.get("/api/debug/db-columns/{table}")
+async def _debug_db_columns(table: str):
+    try:
+        dbm = get_db_manager()
+        _ensure_visit_summaries_table(dbm)
+    except Exception:
+        return {"error": "no_db_manager"}
+    rows = dbm.execute_query(
+        "select column_name,data_type from information_schema.columns where table_schema='public' and table_name=%s order by ordinal_position",
+        (table,)
+    )
+    return {"columns": rows}
+
+@app.post("/api/debug/init-med-tables")
+async def _debug_init_med_tables():
+    try:
+        dbm = get_db_manager()
+        _ensure_visit_summaries_table(dbm)
+    except Exception:
+        return {"error": "no_db_manager"}
+    stmts = [
+        """
+        CREATE TABLE IF NOT EXISTS user_medications (
+            id SERIAL PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            drug_name TEXT NOT NULL,
+            dosage TEXT,
+            frequency TEXT,
+            start_date DATE,
+            end_date DATE,
+            notes TEXT,
+            is_active SMALLINT DEFAULT 1,
+            is_deleted SMALLINT DEFAULT 0,
+            created_at TIMESTAMPTZ DEFAULT now(),
+            updated_at TIMESTAMPTZ DEFAULT now()
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS reminders (
+            id SERIAL PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            reminder_type TEXT NOT NULL,
+            title TEXT NOT NULL,
+            description TEXT,
+            reminder_time TIMESTAMPTZ NOT NULL,
+            created_at TIMESTAMPTZ DEFAULT now(),
+            updated_at TIMESTAMPTZ DEFAULT now()
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS visit_summaries (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            title TEXT NOT NULL,
+            visit_date DATE,
+            doctor TEXT,
+            hospital TEXT,
+            department TEXT,
+            chief_complaint TEXT,
+            symptoms TEXT,
+            examination TEXT,
+            diagnosis TEXT,
+            treatment TEXT,
+            prescription TEXT,
+            follow_up TEXT,
+            notes TEXT,
+            files JSONB,
+            tests JSONB,
+            is_deleted SMALLINT DEFAULT 0,
+            created_at TIMESTAMPTZ DEFAULT now(),
+            updated_at TIMESTAMPTZ DEFAULT now()
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_visit_summaries_user_date ON visit_summaries(user_id, visit_date)",
+        "ALTER TABLE visit_summaries ADD COLUMN IF NOT EXISTS tests JSONB",
+        "ALTER TABLE health_records ADD COLUMN IF NOT EXISTS file_hash TEXT",
+        "ALTER TABLE medication_reminders ADD COLUMN IF NOT EXISTS reminder_id INTEGER",
+        "ALTER TABLE medication_reminders ADD COLUMN IF NOT EXISTS medication_id INTEGER",
+        "ALTER TABLE reminder_logs ADD COLUMN IF NOT EXISTS completion_time TIMESTAMPTZ",
+    ]
+    for s in stmts:
+        dbm.execute_update(s)
+    return {"ok": True}
 
 # === 新增：健康咨询简易端点（供前端 /consultations 使用） ===
 CONSULT_DB_PATH = os.path.join(os.path.dirname(__file__), "consultations.json")
@@ -1152,6 +1325,43 @@ async def send_consultation_message(cid: str, request: Request):
     }
 
 SUMMARIES_DB_PATH = os.path.join(os.path.dirname(__file__), "visit_summaries.json")
+def _get_user_id(user: dict) -> str:
+    return str(user.get("user_id") or user.get("id") or user.get("uid") or "")
+
+def _ensure_visit_summaries_table(dbm):
+    stmts = [
+        """
+        CREATE TABLE IF NOT EXISTS visit_summaries (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            title TEXT NOT NULL,
+            visit_date DATE,
+            doctor TEXT,
+            hospital TEXT,
+            department TEXT,
+            chief_complaint TEXT,
+            symptoms TEXT,
+            examination TEXT,
+            diagnosis TEXT,
+            treatment TEXT,
+            prescription TEXT,
+            follow_up TEXT,
+            notes TEXT,
+            files JSONB,
+            tests JSONB,
+            is_deleted SMALLINT DEFAULT 0,
+            created_at TIMESTAMPTZ DEFAULT now(),
+            updated_at TIMESTAMPTZ DEFAULT now()
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_visit_summaries_user_date ON visit_summaries(user_id, visit_date)",
+        "ALTER TABLE visit_summaries ADD COLUMN IF NOT EXISTS tests JSONB",
+    ]
+    for s in stmts:
+        try:
+            dbm.execute_update(s)
+        except Exception:
+            pass
 
 def _normalize_date(val) -> str:
     """标准化日期格式，返回 YYYY-MM-DD 字符串"""
@@ -1202,23 +1412,181 @@ def _save_user_summaries(user_id: str, items: list) -> None:
         logging.error(f"保存用户就诊摘要失败: {e}")
 
 @app.get("/summaries")
-async def list_summaries(user: dict = Depends(get_current_user)):
-    items = _load_user_summaries(str(user.get("id")))
+async def list_summaries(
+    user: dict = Depends(get_current_user),
+    startDate: str | None = None,
+    endDate: str | None = None,
+    view: str | None = None,
+):
+    uid = _get_user_id(user)
+    sd = _normalize_date(startDate) if startDate else ""
+    ed = _normalize_date(endDate) if endDate else ""
+    items: list = []
     try:
-        items.sort(key=lambda x: x.get('visitDate', ''), reverse=True)
+        dbm = get_db_manager()
+        _ensure_visit_summaries_table(dbm)
+        params = [uid]
+        where = "user_id = %s AND is_deleted = 0"
+        if sd:
+            where += " AND visit_date >= %s"
+            params.append(sd)
+        if ed:
+            where += " AND visit_date <= %s"
+            params.append(ed)
+        rows = dbm.execute_query(
+            f"SELECT id, user_id, title, visit_date, doctor, hospital, department, chief_complaint, symptoms, examination, diagnosis, treatment, prescription, follow_up, notes, files, tests, created_at, updated_at FROM visit_summaries WHERE {where} ORDER BY visit_date DESC NULLS LAST",
+            tuple(params)
+        )
+        for r in rows:
+            fv = r.get("files") if isinstance(r, dict) else None
+            if isinstance(fv, str):
+                try:
+                    fv = json.loads(fv)
+                except Exception:
+                    fv = []
+            tv = r.get("tests") if isinstance(r, dict) else None
+            if isinstance(tv, str):
+                try:
+                    tv = json.loads(tv)
+                except Exception:
+                    tv = []
+            visitDateStr = (str(r.get("visit_date"))[:10] if r.get("visit_date") else "")
+            doctorStr = r.get("doctor") or ""
+            hospitalStr = r.get("hospital") or ""
+            titleStr = r.get("title") or ""
+            if not titleStr:
+                base = doctorStr or hospitalStr or "就诊摘要"
+                titleStr = f"{base} - {visitDateStr}" if visitDateStr else base
+            elif "未填医生" in titleStr and doctorStr:
+                titleStr = f"{doctorStr} - {visitDateStr}" if visitDateStr else doctorStr
+            join_tests = "\n".join([
+                " ".join([
+                    p for p in [
+                        str(x.get("name") or x.get("test_name") or "").strip(),
+                        (str(x.get("value") or "").strip() + str(x.get("unit") or "")),
+                        str(x.get("status") or "").strip()
+                    ] if p
+                ])
+                for x in (tv or [])
+            ]) if tv else ""
+            exam_text = r.get("examination") or join_tests
+            items.append({
+                "id": str(r.get("id")),
+                "title": titleStr,
+                "visitDate": visitDateStr,
+                "doctor": doctorStr,
+                "hospital": hospitalStr,
+                "department": r.get("department") or "",
+                "chiefComplaint": r.get("chief_complaint") or "",
+                "symptoms": r.get("symptoms") or "",
+                "examination": exam_text,
+                "tests": tv or [],
+                "diagnosis": r.get("diagnosis") or "",
+                "treatment": r.get("treatment") or "",
+                "prescription": r.get("prescription") or "",
+                "followUp": r.get("follow_up") or "",
+                "notes": r.get("notes") or "",
+                "files": fv or [],
+                "createdAt": str(r.get("created_at") or ""),
+                "updatedAt": str(r.get("updated_at") or ""),
+                "userId": uid,
+            })
+    except Exception:
+        items = []
+    json_items = _load_user_summaries(uid)
+    existing = set([str(it.get("id")) for it in items])
+    def _sig(obj: dict) -> str:
+        return "|".join([
+            str(obj.get("visitDate") or ""),
+            str(obj.get("doctor") or ""),
+            str(obj.get("hospital") or ""),
+            str(obj.get("department") or ""),
+            str(obj.get("diagnosis") or ""),
+            str(obj.get("chiefComplaint") or "")
+        ])
+    existing_sig = set([_sig(it) for it in items])
+    for it in json_items:
+        sid = str(it.get("id"))
+        sig = _sig(it)
+        if sid not in existing and sig not in existing_sig:
+            items.append(it)
+    try:
+        items.sort(key=lambda x: x.get("visitDate", ""), reverse=True)
     except Exception:
         pass
+    v = str(view or "").strip().lower()
+    if v == "doctor":
+        agg = {}
+        for it in items:
+            k = it.get("doctor") or ""
+            if k not in agg:
+                agg[k] = {"doctor": k, "count": 0, "lastVisit": it.get("visitDate"), "items": []}
+            agg[k]["count"] += 1
+            if (it.get("visitDate") or "") > (agg[k]["lastVisit"] or ""):
+                agg[k]["lastVisit"] = it.get("visitDate")
+            agg[k]["items"].append(it)
+        res = list(agg.values())
+        try:
+            res.sort(key=lambda x: x.get("lastVisit") or "", reverse=True)
+        except Exception:
+            pass
+        return res
+    if v == "hospital":
+        agg = {}
+        for it in items:
+            k = it.get("hospital") or ""
+            if k not in agg:
+                agg[k] = {"hospital": k, "count": 0, "lastVisit": it.get("visitDate"), "items": []}
+            agg[k]["count"] += 1
+            if (it.get("visitDate") or "") > (agg[k]["lastVisit"] or ""):
+                agg[k]["lastVisit"] = it.get("visitDate")
+            agg[k]["items"].append(it)
+        res = list(agg.values())
+        try:
+            res.sort(key=lambda x: x.get("lastVisit") or "", reverse=True)
+        except Exception:
+            pass
+        return res
     return items
 
 @app.post("/summaries")
 async def create_summary(request: Request, user: dict = Depends(get_current_user)):
     payload = await request.json()
-    items = _load_user_summaries(str(user.get("id")))
+    uid = _get_user_id(user)
     new_id = uuid.uuid4().hex
+    vd = _normalize_date(payload.get("visitDate"))
+    files = payload.get("files") or []
+    tests = payload.get("tests") or []
+    try:
+        dbm = get_db_manager()
+        dbm.execute_update(
+            """
+            INSERT INTO visit_summaries (
+                id, user_id, title, visit_date, doctor, hospital, department,
+                chief_complaint, symptoms, examination, diagnosis, treatment,
+                prescription, follow_up, notes, files, tests, is_deleted, created_at, updated_at
+            ) VALUES (
+                %s, %s, %s, %s, %s, %s, %s,
+                %s, %s, %s, %s, %s,
+                %s, %s, %s, %s::jsonb, %s::jsonb, 0, now(), now()
+            )
+            """,
+            (
+                new_id, uid, payload.get("title") or "就诊摘要", vd,
+                payload.get("doctor") or "", payload.get("hospital") or "", payload.get("department") or "",
+                payload.get("chiefComplaint") or "", payload.get("symptoms") or "", payload.get("examination") or "",
+                payload.get("diagnosis") or "", payload.get("treatment") or "",
+                payload.get("prescription") or "", payload.get("followUp") or "", payload.get("notes") or "",
+                json.dumps(files), json.dumps(tests)
+            )
+        )
+    except Exception:
+        pass
+    items = _load_user_summaries(uid)
     summary = {
         "id": new_id,
         "title": payload.get("title") or "就诊摘要",
-        "visitDate": _normalize_date(payload.get("visitDate")),
+        "visitDate": vd,
         "doctor": payload.get("doctor") or "",
         "hospital": payload.get("hospital") or "",
         "department": payload.get("department") or "",
@@ -1230,19 +1598,69 @@ async def create_summary(request: Request, user: dict = Depends(get_current_user
         "prescription": payload.get("prescription") or "",
         "followUp": payload.get("followUp") or "",
         "notes": payload.get("notes") or "",
-        "files": payload.get("files") or [],
+        "files": files,
+        "tests": tests,
         "createdAt": datetime.utcnow().isoformat(),
         "updatedAt": datetime.utcnow().isoformat(),
-        "userId": str(user.get("id")),
+        "userId": uid,
     }
     items.append(summary)
-    _save_user_summaries(str(user.get("id")), items)
+    _save_user_summaries(uid, items)
     return summary
 
 @app.put("/summaries/{sid}")
 async def update_summary(sid: str, request: Request, user: dict = Depends(get_current_user)):
     payload = await request.json()
-    items = _load_user_summaries(str(user.get("id")))
+    uid = _get_user_id(user)
+    vd = _normalize_date(payload.get("visitDate")) if payload.get("visitDate") else None
+    files = payload.get("files") if "files" in payload else None
+    tests = payload.get("tests") if "tests" in payload else None
+    try:
+        dbm = get_db_manager()
+        sets = [
+            "title = %s",
+            "doctor = %s",
+            "hospital = %s",
+            "department = %s",
+            "chief_complaint = %s",
+            "symptoms = %s",
+            "examination = %s",
+            "diagnosis = %s",
+            "treatment = %s",
+            "prescription = %s",
+            "follow_up = %s",
+            "notes = %s",
+            "updated_at = now()",
+        ]
+        params = [
+            payload.get("title"),
+            payload.get("doctor"),
+            payload.get("hospital"),
+            payload.get("department"),
+            payload.get("chiefComplaint"),
+            payload.get("symptoms"),
+            payload.get("examination"),
+            payload.get("diagnosis"),
+            payload.get("treatment"),
+            payload.get("prescription"),
+            payload.get("followUp"),
+            payload.get("notes"),
+        ]
+        if vd is not None:
+            sets.insert(0, "visit_date = %s")
+            params.insert(0, vd)
+        if files is not None:
+            sets.append("files = %s::jsonb")
+            params.append(json.dumps(files))
+        if tests is not None:
+            sets.append("tests = %s::jsonb")
+            params.append(json.dumps(tests))
+        sql = f"UPDATE visit_summaries SET {', '.join(sets)} WHERE id = %s AND user_id = %s"
+        params.extend([sid, uid])
+        dbm.execute_update(sql, tuple(params))
+    except Exception:
+        pass
+    items = _load_user_summaries(uid)
     updated = None
     for i, s in enumerate(items):
         if str(s.get("id")) == str(sid):
@@ -1261,22 +1679,32 @@ async def update_summary(sid: str, request: Request, user: dict = Depends(get_cu
                 "followUp": payload.get("followUp", s.get("followUp")),
                 "notes": payload.get("notes", s.get("notes")),
                 "files": payload.get("files", s.get("files")),
+                "tests": payload.get("tests", s.get("tests")),
                 "updatedAt": datetime.utcnow().isoformat(),
             })
-            s["userId"] = str(user.get("id"))
+            s["userId"] = uid
             updated = s
             items[i] = s
             break
     if updated is None:
         return {"success": False, "message": "摘要不存在"}
-    _save_user_summaries(str(user.get("id")), items)
+    _save_user_summaries(uid, items)
     return updated
 
 @app.delete("/summaries/{sid}")
 async def delete_summary(sid: str, user: dict = Depends(get_current_user)):
-    items = _load_user_summaries(str(user.get("id")))
+    uid = _get_user_id(user)
+    try:
+        dbm = get_db_manager()
+        dbm.execute_update(
+            "UPDATE visit_summaries SET is_deleted = 1, updated_at = now() WHERE id = %s AND user_id = %s",
+            (sid, uid)
+        )
+    except Exception:
+        pass
+    items = _load_user_summaries(uid)
     new_items = [s for s in items if str(s.get("id")) != str(sid)]
-    _save_user_summaries(str(user.get("id")), new_items)
+    _save_user_summaries(uid, new_items)
     return {"success": True, "deleted": str(sid)}
 
 @app.post("/summaries/generate")
@@ -1285,33 +1713,178 @@ async def generate_ai_summary(request: Request, user: dict = Depends(get_current
     visit_date = _normalize_date(payload.get("visitDate"))
     doctor = payload.get("doctor") or ""
     hospital = payload.get("hospital") or ""
-    additional = payload.get("additionalInfo") or ""
     files = payload.get("files") or []
     title = payload.get("title") or f"{doctor or '未填医生'} - {visit_date}"
 
-    generated = {
-        "id": uuid.uuid4().hex,
-        "title": title,
-        "visitDate": visit_date,
-        "doctor": doctor,
-        "hospital": hospital,
-        "department": payload.get("department") or "",
-        "chiefComplaint": (payload.get("chiefComplaint") or (additional[:100] if additional else "")),
-        "symptoms": payload.get("symptoms") or "",
-        "examination": payload.get("examination") or "",
-        "diagnosis": payload.get("diagnosis") or "",
-        "treatment": payload.get("treatment") or "",
-        "prescription": payload.get("prescription") or "",
-        "followUp": payload.get("followUp") or "",
-        "notes": payload.get("notes") or "",
-        "files": files,
-        "createdAt": datetime.utcnow().isoformat(),
-        "updatedAt": datetime.utcnow().isoformat(),
-        "userId": str(user.get("id")),
-    }
-    items = _load_user_summaries(str(user.get("id")))
-    items.append(generated)
-    _save_user_summaries(str(user.get("id")), items)
+    try:
+        import importlib
+        backend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "backend"))
+        if backend_dir not in sys.path:
+            sys.path.append(backend_dir)
+        health_api = importlib.import_module("health_records_api")
+        doc_tool = importlib.import_module("VisitSummaryGenerator.mcpserver.document_tool")
+
+        def _to_doc_type(rt: str | None) -> str:
+            if not rt:
+                return "其他"
+            v = str(rt)
+            if v in ("medical_report", "lab_result", "examination"):
+                return "检验报告"
+            if v in ("prescription",):
+                return "处方单"
+            if v in ("symptom", "diagnosis"):
+                return "门诊记录"
+            if v in ("imaging", "radiology"):
+                return "影像报告"
+            return "其他"
+
+        sd = None
+        ed = None
+        if visit_date:
+            try:
+                sd = date.fromisoformat(visit_date)
+                ed = date.fromisoformat(visit_date)
+            except Exception:
+                sd = None
+                ed = None
+        user_id = str(user.get("id") or user.get("user_id") or user.get("uid") or "")
+        records = await health_api.get_health_records(
+            skip=0,
+            limit=200,
+            record_type=None,
+            importance=None,
+            search=None,
+            start_date=sd,
+            end_date=ed,
+            user_id=user_id,
+        )
+        documents = []
+        for r in records:
+            get = (lambda k: getattr(r, k, None)) if hasattr(r, "dict") else (lambda k: r.get(k))
+            back_type = get("record_type")
+            tval = back_type.value if hasattr(back_type, "value") else back_type
+            doc_type = _to_doc_type(tval)
+            content_src = get("summary") or get("content") or ""
+            if isinstance(content_src, dict):
+                content_text = json.dumps(content_src, ensure_ascii=False)
+            else:
+                content_text = str(content_src or "")
+            documents.append({"type": doc_type, "content": content_text})
+
+        summary_type = str(payload.get("summaryType") or "comprehensive")
+        gen = doc_tool.generate_visit_summary(documents, summary_type)
+        if isinstance(gen, dict) and gen.get("success"):
+            data = gen.get("data") or {}
+            content = data.get("content") or {}
+            patient = content.get("patient_info") or {}
+            visit = content.get("visit_overview") or {}
+            diag = content.get("diagnosis_treatment") or {}
+            meds = content.get("medications") or []
+            tests = content.get("test_results") or []
+            follow = content.get("follow_up") or {}
+
+            def _join_tests(ts: list) -> str:
+                parts = []
+                for it in ts:
+                    if isinstance(it, dict):
+                        name = str(it.get("test_name") or "").strip()
+                        val = str(it.get("value") or "").strip()
+                        unit = str(it.get("unit") or "").strip()
+                        status = str(it.get("status") or "").strip()
+                        s = " ".join([p for p in [name, val + (unit or ""), status] if p])
+                        if s:
+                            parts.append(s)
+                return "\n".join(parts)
+
+            def _join_meds(ms: list) -> str:
+                parts = []
+                for it in ms:
+                    if isinstance(it, dict):
+                        name = str(it.get("name") or "").strip()
+                        dosage = str(it.get("dosage") or "").strip()
+                        usage = str(it.get("usage") or "").strip()
+                        duration = str(it.get("duration") or "").strip()
+                        s = " ".join([p for p in [name, dosage, usage, duration] if p])
+                        if s:
+                            parts.append(s)
+                return "\n".join(parts)
+
+            tests_json = []
+            for x in tests:
+                if isinstance(x, dict):
+                    tests_json.append({
+                        "name": str(x.get("test_name") or x.get("name") or ""),
+                        "value": str(x.get("value") or ""),
+                        "unit": str(x.get("unit") or ""),
+                        "status": str(x.get("status") or ""),
+                        "date": visit_date
+                    })
+            generated = {
+                "id": uuid.uuid4().hex,
+                "title": title,
+                "visitDate": visit_date,
+                "doctor": doctor or str(patient.get("doctor") or ""),
+                "hospital": hospital or str(patient.get("hospital") or ""),
+                "department": payload.get("department") or "",
+                "chiefComplaint": str(visit.get("chief_complaint") or ""),
+                "symptoms": str(visit.get("present_illness") or ""),
+                "examination": _join_tests(tests),
+                "tests": tests_json,
+                "diagnosis": "；".join(diag.get("diagnosis") or []),
+                "treatment": str(diag.get("treatment_plan") or ""),
+                "prescription": _join_meds(meds),
+                "followUp": str(follow.get("plan") or ""),
+                "notes": payload.get("notes") or "",
+                "files": files,
+                "createdAt": datetime.utcnow().isoformat(),
+                "updatedAt": datetime.utcnow().isoformat(),
+                "userId": user_id,
+            }
+        else:
+            generated = {
+                "id": uuid.uuid4().hex,
+                "title": title,
+                "visitDate": visit_date,
+                "doctor": doctor,
+                "hospital": hospital,
+                "department": payload.get("department") or "",
+                "chiefComplaint": payload.get("chiefComplaint") or "",
+                "symptoms": payload.get("symptoms") or "",
+                "examination": payload.get("examination") or "",
+                "tests": payload.get("tests") or [],
+                "diagnosis": payload.get("diagnosis") or "",
+                "treatment": payload.get("treatment") or "",
+                "prescription": payload.get("prescription") or "",
+                "followUp": payload.get("followUp") or "",
+                "notes": payload.get("notes") or "",
+                "files": files,
+                "createdAt": datetime.utcnow().isoformat(),
+                "updatedAt": datetime.utcnow().isoformat(),
+                "userId": str(user.get("id")),
+            }
+    except Exception:
+        generated = {
+            "id": uuid.uuid4().hex,
+            "title": title,
+            "visitDate": visit_date,
+            "doctor": doctor,
+            "hospital": hospital,
+            "department": payload.get("department") or "",
+            "chiefComplaint": payload.get("chiefComplaint") or "",
+            "symptoms": payload.get("symptoms") or "",
+            "examination": payload.get("examination") or "",
+            "tests": payload.get("tests") or [],
+            "diagnosis": payload.get("diagnosis") or "",
+            "treatment": payload.get("treatment") or "",
+            "prescription": payload.get("prescription") or "",
+            "followUp": payload.get("followUp") or "",
+            "notes": payload.get("notes") or "",
+            "files": files,
+            "createdAt": datetime.utcnow().isoformat(),
+            "updatedAt": datetime.utcnow().isoformat(),
+            "userId": str(user.get("id")),
+        }
+
     return generated
 
 @app.api_route("/ping", methods=["GET", "POST"])

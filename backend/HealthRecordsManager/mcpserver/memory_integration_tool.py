@@ -84,48 +84,47 @@ async def handle_list_resources() -> list[Resource]:
 
 @server.read_resource()
 async def handle_read_resource(uri: AnyUrl) -> str:
-    """读取记忆资源"""
     if not memory_system:
         return json.dumps({"error": "记忆系统未初始化"})
-    
     try:
-        if str(uri) == "memory://health-records/recent":
-            # 获取最近的健康记忆（需要用户ID，这里使用默认值）
+        from urllib.parse import urlparse, parse_qs
+        parsed = urlparse(str(uri))
+        qs = parse_qs(parsed.query)
+        uid = (
+            (qs.get("user_id", [None])[0])
+            or os.environ.get("A2A_CURRENT_USER_ID")
+            or os.environ.get("DEFAULT_USER_ID")
+            or "default_user"
+        )
+        if parsed.scheme == "memory" and parsed.netloc == "health-records" and parsed.path == "/recent":
             memories = memory_system.get_recent_memories(
                 agent_id=HEALTH_RECORDS_AGENT_ID,
-                user_id="default_user",  # 实际使用时应该从上下文获取
-                hours=168,  # 7天
+                user_id=uid,
+                hours=168,
                 memory_types=['long_term', 'working'],
                 limit=20
             )
-            return json.dumps(memories, ensure_ascii=False, indent=2)
-        
-        elif str(uri) == "memory://health-records/important":
-            # 获取重要的健康记忆
+            return json.dumps(memories, ensure_ascii=False, indent=2, default=str)
+        if parsed.scheme == "memory" and parsed.netloc == "health-records" and parsed.path == "/important":
             memories = memory_system.get_important_memories(
                 agent_id=HEALTH_RECORDS_AGENT_ID,
-                user_id="default_user",
+                user_id=uid,
                 min_importance=0.7,
                 memory_types=['long_term'],
                 limit=20
             )
-            return json.dumps(memories, ensure_ascii=False, indent=2)
-        
-        elif str(uri) == "memory://health-records/patterns":
-            # 分析健康记忆模式
+            return json.dumps(memories, ensure_ascii=False, indent=2, default=str)
+        if parsed.scheme == "memory" and parsed.netloc == "health-records" and parsed.path == "/patterns":
             patterns = memory_system.analyze_memory_patterns(
                 agent_id=HEALTH_RECORDS_AGENT_ID,
-                user_id="default_user",
+                user_id=uid,
                 days=30
             )
-            return json.dumps(patterns, ensure_ascii=False, indent=2)
-        
-        else:
-            return json.dumps({"error": f"未知资源: {uri}"})
-    
+            return json.dumps(patterns, ensure_ascii=False, indent=2, default=str)
+        return json.dumps({"error": f"未知资源: {uri}"})
     except Exception as e:
         logger.error(f"读取资源失败: {e}")
-        return json.dumps({"error": str(e)})
+        return json.dumps({"error": str(e)}, default=str)
 
 @server.list_tools()
 async def handle_list_tools() -> list[Tool]:
@@ -403,7 +402,7 @@ async def _store_health_memory(arguments: dict) -> list[types.TextContent]:
     
     return [types.TextContent(
         type="text",
-        text=json.dumps(result, ensure_ascii=False, indent=2)
+        text=json.dumps(result, ensure_ascii=False, indent=2, default=str)
     )]
 
 async def _search_health_memories(arguments: dict) -> list[types.TextContent]:
@@ -455,7 +454,7 @@ async def _search_health_memories(arguments: dict) -> list[types.TextContent]:
     
     return [types.TextContent(
         type="text",
-        text=json.dumps(result, ensure_ascii=False, indent=2)
+        text=json.dumps(result, ensure_ascii=False, indent=2, default=str)
     )]
 
 async def _get_health_history(arguments: dict) -> list[types.TextContent]:
@@ -504,7 +503,7 @@ async def _get_health_history(arguments: dict) -> list[types.TextContent]:
     
     return [types.TextContent(
         type="text",
-        text=json.dumps(result, ensure_ascii=False, indent=2)
+        text=json.dumps(result, ensure_ascii=False, indent=2, default=str)
     )]
 
 async def _store_ocr_result(arguments: dict) -> list[types.TextContent]:
@@ -567,7 +566,7 @@ async def _store_ocr_result(arguments: dict) -> list[types.TextContent]:
     
     return [types.TextContent(
         type="text",
-        text=json.dumps(result, ensure_ascii=False, indent=2)
+        text=json.dumps(result, ensure_ascii=False, indent=2, default=str)
     )]
 
 async def _get_health_insights(arguments: dict) -> list[types.TextContent]:

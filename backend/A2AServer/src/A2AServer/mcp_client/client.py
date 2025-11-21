@@ -525,6 +525,16 @@ async def process_tool_call(tc: Dict, servers: Dict[str, MCPClient], quiet_mode:
     except:
         func_args = {}
 
+    # Inject user_id fallback if missing or placeholder
+    try:
+        uid = func_args.get("user_id")
+        if (uid is None) or (isinstance(uid, str) and uid.strip() in ("", "current_user", "<当前用户>", "<用户>", "user")):
+            env_uid = os.environ.get("A2A_CURRENT_USER_ID") or os.environ.get("USER_ID") or os.environ.get("DEFAULT_USER_ID")
+            if env_uid and isinstance(env_uid, str) and env_uid.strip():
+                func_args["user_id"] = env_uid.strip()
+    except Exception:
+        pass
+
     parts = func_name.split("_", 1)
     if len(parts) != 2:
         return {

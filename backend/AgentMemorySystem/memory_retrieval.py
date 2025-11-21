@@ -461,9 +461,17 @@ class MemoryRetrieval:
         """解析记忆的JSON字段"""
         try:
             if memory.get('content_structured'):
-                memory['content_structured'] = json.loads(memory['content_structured'])
+                cs = memory['content_structured']
+                if isinstance(cs, str):
+                    memory['content_structured'] = json.loads(cs)
+                else:
+                    memory['content_structured'] = cs
             if memory.get('metadata'):
-                memory['metadata'] = json.loads(memory['metadata'])
+                md = memory['metadata']
+                if isinstance(md, str):
+                    memory['metadata'] = json.loads(md)
+                else:
+                    memory['metadata'] = md
         except Exception as e:
             logger.error(f"解析JSON字段失败: {e}")
         

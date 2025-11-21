@@ -1,11 +1,10 @@
-from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Form, Query
+from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Form, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
 from datetime import datetime, date
 from enum import Enum
-import sqlite3
 import json
 import os
 import uuid
@@ -15,6 +14,10 @@ import logging
 from contextlib import contextmanager
 import base64
 import mimetypes
+import psycopg
+from psycopg.rows import dict_row
+from psycopg.types.json import Json
+import jwt
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
@@ -34,6 +37,19 @@ except Exception as _import_err:
     validate_medical_document = None
     extract_medical_info = None
     health_records_memory_service = None
+
+# 独立：导入HRM存储工具（不受记忆系统导入失败影响）
+try:
+    import importlib, sys
+    # 解决 storage_tool 内部使用非限定导入 `database_config` 的问题
+    # 预先将 HealthRecordsManager.database_config 注入到 sys.modules，使其解析为正确模块
+    hrm_db_config = importlib.import_module('HealthRecordsManager.database_config')
+    sys.modules['database_config'] = hrm_db_config
+
+    from HealthRecordsManager.mcpserver.storage_tool import save_health_record as HRM_SAVE_RECORD  # type: ignore
+except Exception as _hrm_err:
+    logger.warning(f"HRM存储工具加载失败，将跳过双写: {_hrm_err}")
+    HRM_SAVE_RECORD = None  # type: ignore
 
 # 创建FastAPI应用
 app = FastAPI(
@@ -123,83 +139,66 @@ class HealthInsightsResponse(BaseModel):
     health_score: Optional[Dict[str, Any]] = None
     quick_tips: Optional[List[Dict[str, str]]] = None
 
-# 数据库与上传目录配置（改为以本文件为基准的绝对路径）
 MODULE_DIR = Path(__file__).resolve().parent
-DB_PATH = str(MODULE_DIR / "health_records.db")
 UPLOAD_DIR = MODULE_DIR / "uploads"
 UPLOAD_DIR.mkdir(exist_ok=True)
 
+DB_CONFIG = {
+    "host": os.getenv("DB_HOST", "postgres"),
+    "port": int(os.getenv("DB_PORT", 5432)),
+    "user": os.getenv("DB_USER", "pha"),
+    "password": os.getenv("DB_PASSWORD", "pha_pass"),
+    "dbname": os.getenv("DB_NAME", os.getenv("POSTGRES_DB", "personal_health_assistant")),
+}
+
 @contextmanager
 def get_db_connection():
-    """获取数据库连接的上下文管理器"""
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
+    conn = psycopg.connect(**DB_CONFIG)
     try:
         yield conn
     finally:
-        conn.close()
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 def init_database():
-    """初始化数据库表"""
     with get_db_connection() as conn:
-        cursor = conn.cursor()
-        
-        # 创建健康档案表
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS health_records (
-                id TEXT PRIMARY KEY,
-                user_id TEXT,
-                title TEXT NOT NULL,
-                record_type TEXT NOT NULL,
-                summary TEXT,
-                content TEXT,
-                importance TEXT NOT NULL DEFAULT 'medium',
-                tags TEXT,
-                metadata TEXT,
-                record_date DATE,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                file_attachments TEXT
-            )
-        """)
-        # 迁移：如旧表缺少 user_id 列，则补充添加
-        try:
-            cursor.execute("PRAGMA table_info(health_records)")
-            cols = [row[1] for row in cursor.fetchall()]
-            if "user_id" not in cols:
-                cursor.execute("ALTER TABLE health_records ADD COLUMN user_id TEXT")
-        except Exception:
-            pass
-        
-        # 新增：为旧数据补齐 user_id（使用默认/当前用户）
-        try:
-            default_user = os.environ.get("A2A_CURRENT_USER_ID") or os.environ.get("DEFAULT_USER_ID")
-            if default_user:
-                cursor.execute(
-                    "UPDATE health_records SET user_id = ? WHERE user_id IS NULL OR user_id = ''",
-                    (default_user,)
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS health_records (
+                    id UUID PRIMARY KEY,
+                    user_id TEXT,
+                    title TEXT NOT NULL,
+                    record_type TEXT NOT NULL,
+                    summary TEXT,
+                    content TEXT,
+                    importance TEXT NOT NULL DEFAULT 'medium',
+                    tags JSONB,
+                    metadata JSONB,
+                    record_date DATE,
+                    created_at TIMESTAMPTZ DEFAULT now(),
+                    updated_at TIMESTAMPTZ DEFAULT now()
                 )
-        except Exception:
-            # 不中断启动流程
-            pass
-        
-        # 创建文件附件表
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS file_attachments (
-                id TEXT PRIMARY KEY,
-                record_id TEXT,
-                filename TEXT NOT NULL,
-                original_filename TEXT NOT NULL,
-                file_path TEXT NOT NULL,
-                file_size INTEGER,
-                mime_type TEXT,
-                upload_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (record_id) REFERENCES health_records (id)
+                """
             )
-        """)
-        
-        conn.commit()
-        logger.info("数据库初始化完成")
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS file_attachments (
+                    id UUID PRIMARY KEY,
+                    record_id UUID REFERENCES health_records(id) ON DELETE CASCADE,
+                    filename TEXT NOT NULL,
+                    original_filename TEXT NOT NULL,
+                    file_path TEXT NOT NULL,
+                    file_size INTEGER,
+                    mime_type TEXT,
+                    upload_time TIMESTAMPTZ DEFAULT now()
+                )
+                """
+            )
+            conn.commit()
+            logger.info("数据库初始化完成")
 
 # 工具函数
 def generate_id() -> str:
@@ -228,22 +227,165 @@ def deserialize_metadata(metadata_str: str) -> Dict[str, Any]:
     except json.JSONDecodeError:
         return {}
 
+def _normalize_ocr_text(raw: str | None) -> str:
+    """规范化 OCR 原始输出为纯文本。
+    - 解析可能的 JSON，优先抽取 content/Content；
+    - 兼容 data/Data 下的 lines/prism_wordsInfo 数组；
+    - 兜底返回去除空白的原文。
+    """
+    try:
+        s = (raw or "")
+        if not isinstance(s, str):
+            s = str(s)
+        s_strip = s.strip()
+        if s_strip.startswith("{") or s_strip.startswith("["):
+            try:
+                obj = json.loads(s_strip)
+            except Exception:
+                return s_strip
+            if isinstance(obj, dict):
+                # 顶层 content/Content
+                for key in ("content", "Content"):
+                    v = obj.get(key)
+                    if isinstance(v, str) and v.strip():
+                        return v.strip()
+                # data/Data 里取内容或行
+                data = obj.get("data") or obj.get("Data")
+                if isinstance(data, dict):
+                    v = data.get("content") or data.get("Content")
+                    if isinstance(v, str) and v.strip():
+                        return v.strip()
+                    lines = data.get("lines") or data.get("prism_wordsInfo")
+                    if isinstance(lines, list) and lines:
+                        parts = []
+                        for it in lines:
+                            if isinstance(it, dict):
+                                parts.append(str(it.get("text") or it.get("word") or "").strip())
+                            elif isinstance(it, str):
+                                parts.append(it.strip())
+                        text = "\n".join([p for p in parts if p])
+                        if text.strip():
+                            return text.strip()
+                elif isinstance(data, str) and data.strip():
+                    return data.strip()
+                # 兜底：拼接所有字符串值
+                try:
+                    vals = []
+                    for _, v in obj.items():
+                        if isinstance(v, str):
+                            vals.append(v.strip())
+                    if vals:
+                        text = "\n".join([v for v in vals if v])
+                        if text.strip():
+                            return text.strip()
+                except Exception:
+                    pass
+            if isinstance(obj, list) and obj:
+                parts = []
+                for it in obj:
+                    if isinstance(it, dict):
+                        parts.append(str(it.get("text") or it.get("word") or "").strip())
+                    elif isinstance(it, str):
+                        parts.append(it.strip())
+                text = "\n".join([p for p in parts if p])
+                if text.strip():
+                    return text.strip()
+        return s_strip.replace("\r", " ").strip()
+    except Exception:
+        return (raw or "").strip()
+
 def row_to_health_record(row) -> HealthRecord:
-    """将数据库行转换为HealthRecord对象"""
+    rid = str(row["id"]) if "id" in row else str(row[0])
+    created = row.get("created_at")
+    updated = row.get("updated_at")
+    rec_date = row.get("record_date")
+    tags_val = row.get("tags")
+    meta_val = row.get("metadata")
+    files_val = row.get("file_attachments") if "file_attachments" in row else []
+    if isinstance(tags_val, str):
+        tags_parsed = deserialize_tags(tags_val)
+    elif isinstance(tags_val, list):
+        tags_parsed = tags_val
+    else:
+        tags_parsed = []
+    if isinstance(meta_val, str):
+        meta_parsed = deserialize_metadata(meta_val)
+    elif isinstance(meta_val, dict):
+        meta_parsed = meta_val
+    else:
+        meta_parsed = {}
+    if isinstance(files_val, str):
+        files_parsed = deserialize_tags(files_val)
+    elif isinstance(files_val, list):
+        files_parsed = files_val
+    else:
+        files_parsed = []
+    if isinstance(created, str):
+        created_dt = datetime.fromisoformat(created)
+    else:
+        created_dt = created
+    if isinstance(updated, str):
+        updated_dt = datetime.fromisoformat(updated)
+    else:
+        updated_dt = updated
+    if isinstance(rec_date, str):
+        try:
+            rec_dt = datetime.strptime(rec_date, "%Y-%m-%d").date()
+        except Exception:
+            rec_dt = None
+    else:
+        rec_dt = rec_date
     return HealthRecord(
-        id=row["id"],
-        title=row["title"],
-        record_type=row["record_type"],
-        summary=row["summary"],
-        content=row["content"],
-        importance=row["importance"],
-        tags=deserialize_tags(row["tags"]),
-        metadata=deserialize_metadata(row["metadata"]),
-        record_date=datetime.strptime(row["record_date"], "%Y-%m-%d").date() if row["record_date"] else None,
-        created_at=datetime.fromisoformat(row["created_at"]),
-        updated_at=datetime.fromisoformat(row["updated_at"]),
-        file_attachments=deserialize_tags(row["file_attachments"])
+        id=rid,
+        title=row.get("title"),
+        record_type=row.get("record_type"),
+        summary=row.get("summary"),
+        content=row.get("content"),
+        importance=row.get("importance"),
+        tags=tags_parsed,
+        metadata=meta_parsed,
+        record_date=rec_dt,
+        created_at=created_dt,
+        updated_at=updated_dt,
+        file_attachments=files_parsed,
     )
+
+# 新增：将本系统的记录类型映射为HRM存储工具的类型
+def _map_record_type_for_hrm(rt: str) -> str:
+    try:
+        r = (rt or "").lower()
+        if r in {"lab_result", "inspection_report"}:
+            return "test_report"
+        if r == "prescription":
+            return "prescription"
+        if r in {"medical_report", "medical_record"}:
+            return "medical_record"
+        if r == "surgery":
+            return "surgery"
+        if r == "vaccination":
+            return "vaccination"
+        # 其他类型统一归到病历或其他
+        if r in {"allergy", "vital_signs"}:
+            return "medical_record"
+        return "other"
+    except Exception:
+        return "other"
+
+# 新增：调用HRM存储工具保存记录（失败不影响本地事务）
+def _save_to_hrm(user_id: str | None, record_type: str, title: str, content: str, extracted_data: dict | None = None):
+    if not HRM_SAVE_RECORD:
+        return
+    try:
+        uid = user_id or os.environ.get("A2A_CURRENT_USER_ID") or os.environ.get("DEFAULT_USER_ID") or "default_user"
+        hrm_type = _map_record_type_for_hrm(record_type)
+        payload = json.dumps(extracted_data or {}, ensure_ascii=False)
+        # 兼容 mcp.tool 装饰器：优先使用 .fn，否则直接调用
+        if hasattr(HRM_SAVE_RECORD, "fn"):
+            HRM_SAVE_RECORD.fn(uid, hrm_type, title, content, payload)
+        else:
+            HRM_SAVE_RECORD(uid, hrm_type, title, content, payload)  # type: ignore
+    except Exception as e:
+        logger.warning(f"HRM双写失败（忽略不阻塞）：{e}")
 
 # API路由
 @app.on_event("startup")
@@ -307,52 +449,39 @@ async def get_health_records(
     """获取健康档案列表（按用户隔离）"""
     try:
         with get_db_connection() as conn:
-            cursor = conn.cursor()
-            
-            # 构建查询条件
-            conditions = []
-            params = []
-            
-            if user_id:
-                conditions.append("user_id = ?")
-                params.append(user_id)
-            
-            if record_type:
-                conditions.append("record_type = ?")
-                params.append(record_type.value)
-            
-            if importance:
-                conditions.append("importance = ?")
-                params.append(importance.value)
-            
-            if search:
-                conditions.append("(title LIKE ? OR summary LIKE ? OR content LIKE ?)")
-                search_param = f"%{search}%"
-                params.extend([search_param, search_param, search_param])
-            
-            if start_date:
-                conditions.append("record_date >= ?")
-                params.append(start_date.isoformat())
-            
-            if end_date:
-                conditions.append("record_date <= ?")
-                params.append(end_date.isoformat())
-            
-            where_clause = " AND ".join(conditions) if conditions else "1=1"
-            
-            query = f"""
-                SELECT * FROM health_records 
-                WHERE {where_clause}
-                ORDER BY created_at DESC 
-                LIMIT ? OFFSET ?
-            """
-            
-            params.extend([limit, skip])
-            cursor.execute(query, params)
-            rows = cursor.fetchall()
-            
-            return [row_to_health_record(row) for row in rows]
-            
+            with conn.cursor(row_factory=dict_row) as cursor:
+                conditions = []
+                params = []
+                if user_id:
+                    conditions.append("user_id = %s")
+                    params.append(user_id)
+                if record_type:
+                    conditions.append("record_type = %s")
+                    params.append(record_type.value)
+                if importance:
+                    conditions.append("importance = %s")
+                    params.append(importance.value)
+                if search:
+                    conditions.append("(title ILIKE %s OR summary ILIKE %s OR content ILIKE %s)")
+                    sp = f"%{search}%"
+                    params.extend([sp, sp, sp])
+                if start_date:
+                    conditions.append("record_date >= %s")
+                    params.append(start_date)
+                if end_date:
+                    conditions.append("record_date <= %s")
+                    params.append(end_date)
+                where_clause = " AND ".join(conditions) if conditions else "TRUE"
+                query = f"""
+                    SELECT * FROM health_records
+                    WHERE {where_clause}
+                    ORDER BY created_at DESC
+                    LIMIT %s OFFSET %s
+                """
+                params.extend([limit, skip])
+                cursor.execute(query, params)
+                rows = cursor.fetchall()
+                return [row_to_health_record(row) for row in rows]
     except Exception as e:
         logger.error(f"获取健康档案列表失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -362,18 +491,15 @@ async def get_health_record(record_id: str, user_id: Optional[str] = Query(None,
     """获取单个健康档案详情（按用户隔离）"""
     try:
         with get_db_connection() as conn:
-            cursor = conn.cursor()
-            if user_id:
-                cursor.execute("SELECT * FROM health_records WHERE id = ? AND user_id = ?", (record_id, user_id))
-            else:
-                cursor.execute("SELECT * FROM health_records WHERE id = ?", (record_id,))
-            row = cursor.fetchone()
-            
-            if not row:
-                raise HTTPException(status_code=404, detail="健康档案不存在或无权限访问")
-            
-            return row_to_health_record(row)
-            
+            with conn.cursor(row_factory=dict_row) as cursor:
+                if user_id:
+                    cursor.execute("SELECT * FROM health_records WHERE id = %s AND user_id = %s", (record_id, user_id))
+                else:
+                    cursor.execute("SELECT * FROM health_records WHERE id = %s", (record_id,))
+                row = cursor.fetchone()
+                if not row:
+                    raise HTTPException(status_code=404, detail="健康档案不存在或无权限访问")
+                return row_to_health_record(row)
     except HTTPException:
         raise
     except Exception as e:
@@ -381,7 +507,7 @@ async def get_health_record(record_id: str, user_id: Optional[str] = Query(None,
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/health-records", response_model=HealthRecord)
-async def create_health_record(record: HealthRecordCreate, user_id: Optional[str] = Query(None, description="用户ID")):
+async def create_health_record(record: HealthRecordCreate, user_id: Optional[str] = Query(None, description="用户ID"), request: Request = None):
     """创建健康档案（按用户隔离）"""
     try:
         # 后端保护：如请求体包含文件但未提供内容，返回400，避免产生空内容记录
@@ -402,118 +528,282 @@ async def create_health_record(record: HealthRecordCreate, user_id: Optional[str
         except Exception:
             pass
 
+        # 基于附件ID的去重：如提交的 metadata.files 或顶层 files 包含已生成OCR的附件，则改为更新既有记录而非新增
+        file_ids: list[str] = []
+        try:
+            if isinstance(record.metadata, dict):
+                mfiles = record.metadata.get("files") or record.metadata.get("uploaded_files")
+                if isinstance(mfiles, list):
+                    file_ids.extend([str(x) for x in mfiles if isinstance(x, (str, int))])
+            if isinstance(record.files, list):
+                file_ids.extend([str(x) for x in record.files if isinstance(x, (str, int))])
+        except Exception:
+            pass
+
         record_id = generate_id()
         now = datetime.now()
+        uid = _resolve_user_id(request, user_id)
         
         with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                INSERT INTO health_records (
-                    id, user_id, title, record_type, summary, content, importance,
-                    tags, metadata, record_date, created_at, updated_at, file_attachments
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                record_id,
-                user_id,
-                record.title,
-                record.record_type.value,
-                record.summary,
-                record.content,
-                record.importance.value,
-                serialize_tags(record.tags),
-                serialize_metadata(record.metadata),
-                record.record_date.isoformat() if record.record_date else None,
-                now.isoformat(),
-                now.isoformat(),
-                serialize_tags([])
-            ))
-            conn.commit()
-            
-            cursor.execute("SELECT * FROM health_records WHERE id = ?", (record_id,))
-            row = cursor.fetchone()
-            return row_to_health_record(row)
+            with conn.cursor(row_factory=dict_row) as cursor:
+                target_existing_id = None
+                if file_ids:
+                    placeholders = ",".join(["%s"] * len(file_ids))
+                    try:
+                        cursor.execute(
+                            f"SELECT record_id FROM file_attachments WHERE id IN ({placeholders})",
+                            tuple(file_ids)
+                        )
+                        existing_links = [r[0] for r in cursor.fetchall() if r and r[0]]
+                        if existing_links:
+                            cursor.execute("SELECT id, user_id, metadata, content FROM health_records WHERE id = %s", (existing_links[0],))
+                            linked = cursor.fetchone()
+                            if linked and (not user_id or str(linked[1]) == str(user_id)):
+                                target_existing_id = linked[0]
+                                # 进行更新而非新增，且不覆盖已有OCR content
+                                # 合并metadata（以新提交为主）
+                                try:
+                                    old_meta = linked[2] if isinstance(linked[2], dict) else {}
+                                except Exception:
+                                    old_meta = {}
+                                new_meta = record.metadata or {}
+                                merged_meta = {**(old_meta or {}), **(new_meta or {})}
+                                update_fields = [
+                                    "title = %s",
+                                    "record_type = %s",
+                                    "summary = %s",
+                                    "importance = %s",
+                                    "tags = %s",
+                                    "metadata = %s",
+                                    "record_date = %s",
+                                    "updated_at = %s",
+                                ]
+                                params = [
+                                    record.title,
+                                    record.record_type.value,
+                                    record.summary,
+                                    record.importance.value,
+                                    Json(record.tags or []),
+                                    Json(merged_meta),
+                                    record.record_date,
+                                    now,
+                                ]
+                                cursor.execute(
+                                    f"UPDATE health_records SET {', '.join(update_fields)} WHERE id = %s",
+                                    tuple(params + [target_existing_id])
+                                )
+                                conn.commit()
+                                cursor.execute("SELECT * FROM health_records WHERE id = %s", (target_existing_id,))
+                                row = cursor.fetchone()
+                                return row_to_health_record(row)
+                    except Exception:
+                        pass
+
+                # 正常新增
+                cursor.execute(
+                    """
+                    INSERT INTO health_records (
+                        id, user_id, title, record_type, summary, content, importance,
+                        tags, metadata, record_date, created_at, updated_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        record_id,
+                        uid,
+                        record.title,
+                        record.record_type.value,
+                        record.summary,
+                        record.content,
+                        record.importance.value,
+                        Json(record.tags or []),
+                        Json(record.metadata or {}),
+                        record.record_date,
+                        now,
+                        now,
+                    ),
+                )
+                conn.commit()
+                cursor.execute("SELECT * FROM health_records WHERE id = %s", (record_id,))
+                row = cursor.fetchone()
+                created = row_to_health_record(row)
+
+            # 新增：写入HRM（PostgreSQL）以供Agent检索
+            try:
+                _save_to_hrm(
+                    user_id=uid,
+                    record_type=created.record_type,
+                    title=created.title,
+                    content=created.content or (created.summary or ""),
+                    extracted_data=created.metadata or {}
+                )
+            except Exception as e:
+                logger.warning(f"创建记录后HRM双写失败：{e}")
+
+            try:
+                if health_records_memory_service is not None:
+                    if not health_records_memory_service.is_available():
+                        await health_records_memory_service.initialize()
+                    await health_records_memory_service.store_health_record(
+                        user_id=uid,
+                        record_type=created.record_type,
+                        record_data={
+                            "id": created.id,
+                            "title": created.title,
+                            "content": created.content,
+                            "metadata": created.metadata or {},
+                            "record_date": str(created.record_date) if created.record_date else None
+                        },
+                        summary=created.summary or "",
+                        importance=created.importance,
+                        tags=created.tags or []
+                    )
+            except Exception as e:
+                logger.warning(f"创建记录后写入记忆失败：{e}")
+
+            return created
             
     except Exception as e:
         logger.error(f"创建健康档案失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.put("/api/health-records/{record_id}", response_model=HealthRecord)
-async def update_health_record(record_id: str, record_update: HealthRecordUpdate, user_id: Optional[str] = Query(None, description="用户ID")):
+async def update_health_record(record_id: str, record_update: HealthRecordUpdate, user_id: Optional[str] = Query(None, description="用户ID"), request: Request = None):
     """更新健康档案（按用户隔离）"""
     try:
         with get_db_connection() as conn:
-            cursor = conn.cursor()
-            
-            # 检查记录是否存在并属于用户
-            if user_id:
-                cursor.execute("SELECT * FROM health_records WHERE id = ? AND user_id = ?", (record_id, user_id))
-            else:
-                cursor.execute("SELECT * FROM health_records WHERE id = ?", (record_id,))
-            existing_record = cursor.fetchone()
-            if not existing_record:
-                raise HTTPException(status_code=404, detail="健康档案不存在或无权限访问")
-            
-            # 构建更新字段
-            update_fields = []
-            params = []
-            
-            if record_update.title is not None:
-                update_fields.append("title = ?")
-                params.append(record_update.title)
-            
-            if record_update.record_type is not None:
-                update_fields.append("record_type = ?")
-                params.append(record_update.record_type.value)
-            
-            if record_update.summary is not None:
-                update_fields.append("summary = ?")
-                params.append(record_update.summary)
-            
-            if record_update.content is not None:
-                update_fields.append("content = ?")
-                params.append(record_update.content)
-            
-            if record_update.importance is not None:
-                update_fields.append("importance = ?")
-                params.append(record_update.importance.value)
-            
-            if record_update.tags is not None:
-                update_fields.append("tags = ?")
-                params.append(serialize_tags(record_update.tags))
-            
-            if record_update.metadata is not None:
-                update_fields.append("metadata = ?")
-                params.append(serialize_metadata(record_update.metadata))
-            
-            if record_update.record_date is not None:
-                update_fields.append("record_date = ?")
-                params.append(record_update.record_date.isoformat())
-            
-            if not update_fields:
-                # 没有字段需要更新，直接返回现有记录
-                return row_to_health_record(existing_record)
-            
-            # 添加更新时间
-            update_fields.append("updated_at = ?")
-            params.append(datetime.now().isoformat())
-            params.append(record_id)
-            
-            # 如果提供 user_id，确保只更新该用户的记录
-            if user_id:
-                query = f"UPDATE health_records SET {', '.join(update_fields)} WHERE id = ? AND user_id = ?"
-                params.append(user_id)
-            else:
-                query = f"UPDATE health_records SET {', '.join(update_fields)} WHERE id = ?"
-            cursor.execute(query, params)
-            conn.commit()
-            
-            # 返回更新后的记录
-            if user_id:
-                cursor.execute("SELECT * FROM health_records WHERE id = ? AND user_id = ?", (record_id, user_id))
-            else:
-                cursor.execute("SELECT * FROM health_records WHERE id = ?", (record_id,))
-            row = cursor.fetchone()
-            return row_to_health_record(row)
+            with conn.cursor(row_factory=dict_row) as cursor:
+                # 检查记录是否存在并属于用户
+                uid = _resolve_user_id(request, user_id)
+                if user_id:
+                    cursor.execute("SELECT * FROM health_records WHERE id = %s AND user_id = %s", (record_id, user_id))
+                else:
+                    cursor.execute("SELECT * FROM health_records WHERE id = %s", (record_id,))
+                existing_record = cursor.fetchone()
+                if not existing_record:
+                    raise HTTPException(status_code=404, detail="健康档案不存在或无权限访问")
+
+                # 构建更新字段
+                update_fields = []
+                params = []
+
+                if record_update.title is not None:
+                    update_fields.append("title = %s")
+                    params.append(record_update.title)
+
+                if record_update.record_type is not None:
+                    update_fields.append("record_type = %s")
+                    params.append(record_update.record_type.value)
+
+                if record_update.summary is not None:
+                    update_fields.append("summary = %s")
+                    params.append(record_update.summary)
+
+                if record_update.content is not None:
+                    update_fields.append("content = %s")
+                    params.append(record_update.content)
+
+                if record_update.importance is not None:
+                    update_fields.append("importance = %s")
+                    params.append(record_update.importance.value)
+
+                if record_update.tags is not None:
+                    update_fields.append("tags = %s")
+                    params.append(Json(record_update.tags))
+
+                if record_update.metadata is not None:
+                    update_fields.append("metadata = %s")
+                    params.append(Json(record_update.metadata))
+
+                if record_update.record_date is not None:
+                    update_fields.append("record_date = %s")
+                    params.append(record_update.record_date)
+
+                if not update_fields:
+                    return row_to_health_record(existing_record)
+
+                update_fields.append("updated_at = %s")
+                params.append(datetime.now())
+                params.append(record_id)
+
+                if user_id:
+                    query = f"UPDATE health_records SET {', '.join(update_fields)} WHERE id = %s AND user_id = %s"
+                    params.append(user_id)
+                else:
+                    query = f"UPDATE health_records SET {', '.join(update_fields)} WHERE id = %s"
+                cursor.execute(query, params)
+                conn.commit()
+
+                if user_id:
+                    cursor.execute("SELECT * FROM health_records WHERE id = %s AND user_id = %s", (record_id, user_id))
+                else:
+                    cursor.execute("SELECT * FROM health_records WHERE id = %s", (record_id,))
+                row = cursor.fetchone()
+                updated = row_to_health_record(row)
+                try:
+                    _save_to_hrm(
+                        user_id=uid,
+                        record_type=updated.record_type,
+                        title=updated.title,
+                        content=updated.content or (updated.summary or ""),
+                        extracted_data=updated.metadata or {}
+                    )
+                except Exception as e:
+                    logger.warning(f"更新记录后HRM双写失败：{e}")
+                try:
+                    if health_records_memory_service is not None:
+                        if not health_records_memory_service.is_available():
+                            await health_records_memory_service.initialize()
+                        mem_id = None
+                        try:
+                            meta = updated.metadata or {}
+                            mem_id = meta.get("memory_id")
+                        except Exception:
+                            mem_id = None
+                        if mem_id and getattr(health_records_memory_service, 'memory_system', None):
+                            try:
+                                health_records_memory_service.memory_system.update_memory(
+                                    memory_id=mem_id,
+                                    content={
+                                        'text': f"更新健康档案: {updated.title}",
+                                        'structured_data': {
+                                            'record_id': updated.id,
+                                            'record_type': updated.record_type,
+                                            'content': updated.content,
+                                            'metadata': updated.metadata or {}
+                                        }
+                                    }
+                                )
+                            except Exception:
+                                await health_records_memory_service.store_health_record(
+                                    user_id=uid,
+                                    record_type=updated.record_type,
+                                    record_data={
+                                        "id": updated.id,
+                                        "title": updated.title,
+                                        "content": updated.content,
+                                        "metadata": updated.metadata or {}
+                                    },
+                                    summary=updated.summary or "",
+                                    importance=updated.importance,
+                                    tags=updated.tags or []
+                                )
+                        else:
+                            await health_records_memory_service.store_health_record(
+                                user_id=uid,
+                                record_type=updated.record_type,
+                                record_data={
+                                    "id": updated.id,
+                                    "title": updated.title,
+                                    "content": updated.content,
+                                    "metadata": updated.metadata or {}
+                                },
+                                summary=updated.summary or "",
+                                importance=updated.importance,
+                                tags=updated.tags or []
+                            )
+                except Exception as e:
+                    logger.warning(f"更新记录后写入记忆失败：{e}")
+                return updated
             
     except HTTPException:
         raise
@@ -522,37 +812,57 @@ async def update_health_record(record_id: str, record_update: HealthRecordUpdate
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.delete("/api/health-records/{record_id}")
-async def delete_health_record(record_id: str, user_id: Optional[str] = Query(None, description="用户ID")):
+async def delete_health_record(record_id: str, user_id: Optional[str] = Query(None, description="用户ID"), request: Request = None):
     """删除健康档案（按用户隔离）"""
     try:
         with get_db_connection() as conn:
-            cursor = conn.cursor()
-            
-            # 检查记录是否存在并属于用户
-            if user_id:
-                cursor.execute("SELECT * FROM health_records WHERE id = ? AND user_id = ?", (record_id, user_id))
-            else:
-                cursor.execute("SELECT * FROM health_records WHERE id = ?", (record_id,))
-            if not cursor.fetchone():
-                raise HTTPException(status_code=404, detail="健康档案不存在或无权限访问")
-            
-            # 删除相关文件附件
-            cursor.execute("SELECT file_path FROM file_attachments WHERE record_id = ?", (record_id,))
-            file_paths = cursor.fetchall()
-            for file_path_row in file_paths:
-                file_path = Path(file_path_row[0])
-                if file_path.exists():
-                    file_path.unlink()
-            
-            # 删除数据库记录
-            cursor.execute("DELETE FROM file_attachments WHERE record_id = ?", (record_id,))
-            if user_id:
-                cursor.execute("DELETE FROM health_records WHERE id = ? AND user_id = ?", (record_id, user_id))
-            else:
-                cursor.execute("DELETE FROM health_records WHERE id = ?", (record_id,))
-            conn.commit()
-            
-            return {"message": "健康档案删除成功"}
+            with conn.cursor(row_factory=dict_row) as cursor:
+                # 检查记录是否存在并属于用户
+                if user_id:
+                    cursor.execute("SELECT * FROM health_records WHERE id = %s AND user_id = %s", (record_id, user_id))
+                else:
+                    cursor.execute("SELECT * FROM health_records WHERE id = %s", (record_id,))
+                if not cursor.fetchone():
+                    raise HTTPException(status_code=404, detail="健康档案不存在或无权限访问")
+
+                cursor.execute("SELECT file_path FROM file_attachments WHERE record_id = %s", (record_id,))
+                file_paths = cursor.fetchall()
+                for file_path_row in file_paths:
+                    try:
+                        fp = file_path_row["file_path"] if isinstance(file_path_row, dict) else file_path_row[0]
+                        if fp:
+                            file_path = Path(fp)
+                            if file_path.exists():
+                                file_path.unlink()
+                    except Exception:
+                        pass
+
+                try:
+                    cursor.execute("SELECT metadata FROM health_records WHERE id = %s", (record_id,))
+                    r = cursor.fetchone()
+                    mem_id = None
+                    try:
+                        meta = deserialize_metadata(r[0]) if r and isinstance(r[0], str) else (r[0] if r else {})
+                        if isinstance(meta, dict):
+                            mem_id = meta.get("memory_id")
+                    except Exception:
+                        mem_id = None
+                    if mem_id and health_records_memory_service and health_records_memory_service.is_available():
+                        try:
+                            health_records_memory_service.memory_system.delete_memory(mem_id)
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+
+                cursor.execute("DELETE FROM file_attachments WHERE record_id = %s", (record_id,))
+                if user_id:
+                    cursor.execute("DELETE FROM health_records WHERE id = %s AND user_id = %s", (record_id, user_id))
+                else:
+                    cursor.execute("DELETE FROM health_records WHERE id = %s", (record_id,))
+                conn.commit()
+
+                return {"message": "健康档案删除成功"}
             
     except HTTPException:
         raise
@@ -565,51 +875,42 @@ async def get_health_statistics():
     """获取健康数据统计"""
     try:
         with get_db_connection() as conn:
-            cursor = conn.cursor()
-            
-            # 总记录数
-            cursor.execute("SELECT COUNT(*) FROM health_records")
-            total_records = cursor.fetchone()[0]
-            
-            # 按类型统计
-            cursor.execute("""
-                SELECT record_type, COUNT(*) 
-                FROM health_records 
-                GROUP BY record_type
-            """)
-            records_by_type = dict(cursor.fetchall())
-            
-            # 按重要性统计
-            cursor.execute("""
-                SELECT importance, COUNT(*) 
-                FROM health_records 
-                GROUP BY importance
-            """)
-            records_by_importance = dict(cursor.fetchall())
-            
-            # 最近7天的记录数
-            cursor.execute("""
-                SELECT COUNT(*) 
-                FROM health_records 
-                WHERE created_at >= datetime('now', '-7 days')
-            """)
-            recent_records_count = cursor.fetchone()[0]
-            
-            # 最后更新时间
-            cursor.execute("""
-                SELECT MAX(updated_at) 
-                FROM health_records
-            """)
-            last_updated_str = cursor.fetchone()[0]
-            last_updated = datetime.fromisoformat(last_updated_str) if last_updated_str else None
-            
-            return HealthStatistics(
-                total_records=total_records,
-                records_by_type=records_by_type,
-                records_by_importance=records_by_importance,
-                recent_records_count=recent_records_count,
-                last_updated=last_updated
-            )
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT COUNT(*) FROM health_records")
+                total_records = cursor.fetchone()[0]
+
+                cursor.execute(
+                    """
+                    SELECT record_type, COUNT(*) FROM health_records GROUP BY record_type
+                    """
+                )
+                records_by_type = {r[0]: r[1] for r in cursor.fetchall()}
+
+                cursor.execute(
+                    """
+                    SELECT importance, COUNT(*) FROM health_records GROUP BY importance
+                    """
+                )
+                records_by_importance = {r[0]: r[1] for r in cursor.fetchall()}
+
+                cursor.execute(
+                    """
+                    SELECT COUNT(*) FROM health_records WHERE created_at >= now() - interval '7 days'
+                    """
+                )
+                recent_records_count = cursor.fetchone()[0]
+
+                cursor.execute("SELECT MAX(updated_at) FROM health_records")
+                last_updated_val = cursor.fetchone()[0]
+                last_updated = last_updated_val
+
+                return HealthStatistics(
+                    total_records=total_records,
+                    records_by_type=records_by_type,
+                    records_by_importance=records_by_importance,
+                    recent_records_count=recent_records_count,
+                    last_updated=last_updated
+                )
             
     except Exception as e:
         logger.error(f"获取健康统计数据失败: {e}")
@@ -743,34 +1044,31 @@ async def upload_file(file: UploadFile = File(...), user_id: str = Form("default
         
         # 使用单个事务：先写附件，再进行图片OCR并入库；图片OCR失败则回滚并报错
         with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                """
-                INSERT INTO file_attachments (
-                    id, filename, original_filename, file_path,
-                    file_size, mime_type, upload_time, record_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    file_id,
-                    filename,
-                    file.filename,
-                    str(file_path),
-                    len(file_content),
-                    normalized_ct,
-                    datetime.now().isoformat(),
-                    None,
-                ),
-            )
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO file_attachments (
+                        id, filename, original_filename, file_path,
+                        file_size, mime_type, upload_time, record_id
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        file_id,
+                        filename,
+                        file.filename,
+                        str(file_path),
+                        len(file_content),
+                        normalized_ct,
+                        datetime.now(),
+                        None,
+                    ),
+                )
 
-            # 尝试进行OCR与记忆入库（仅针对图片类型；图片必须经过OCR并成功入库）
-            ocr_info = None
-            memory_id = None
-            record_id = None
+                ocr_info = None
+                memory_id = None
+                record_id = None
 
-            if normalized_ct.startswith("image/"):
-                # 新增：优先使用 PaddleOCR（若可用）；否则回退到内置OCR工具
-                try:
+                if normalized_ct.startswith("image/"):
                     image_base64 = base64.b64encode(file_content).decode("utf-8")
                     ocr_text = ""
                     document_type = "unknown"
@@ -798,13 +1096,13 @@ async def upload_file(file: UploadFile = File(...), user_id: str = Form("default
                                 pass
                     except Exception:
                         _used_paddle = False
-                    # 回退：若未用Paddle或识别为空，尝试内置OCR
                     if not ocr_text:
-                        if not extract_text_from_image:
-                            conn.rollback()
-                            raise HTTPException(status_code=503, detail="OCR模块未加载，无法对图片进行识别与入库")
-                        ocr_text = extract_text_from_image.fn(image_base64) if hasattr(extract_text_from_image, "fn") else extract_text_from_image(image_base64)
-                    # 文档类型与置信度：若验证器可用则融合其置信度
+                            if not extract_text_from_image:
+                                conn.rollback()
+                                raise HTTPException(status_code=503, detail="OCR模块未加载，无法对图片进行识别与入库")
+                            ocr_text = extract_text_from_image.fn(image_base64) if hasattr(extract_text_from_image, "fn") else extract_text_from_image(image_base64)
+                    ocr_text = _normalize_ocr_text(ocr_text)
+
                     if validate_medical_document:
                         try:
                             validation_json = validate_medical_document.fn(ocr_text) if hasattr(validate_medical_document, "fn") else validate_medical_document(ocr_text)
@@ -815,8 +1113,9 @@ async def upload_file(file: UploadFile = File(...), user_id: str = Form("default
                                 confidence = max(float(confidence), float(vconf))
                         except Exception as e:
                             logger.warning(f"文档验证失败，使用默认类型: {e}")
-                    # 验证医疗文档属性
-                    validation = validate_medical_document.fn(ocr_text) if hasattr(validate_medical_document, "fn") else validate_medical_document(ocr_text)
+                        validation = validation_json
+                    else:
+                        validation = {}
 
                     # 结构化信息提取（集成 HealthRecordsManager 的数据提取工具）
                     extracted_info = None
@@ -870,7 +1169,7 @@ async def upload_file(file: UploadFile = File(...), user_id: str = Form("default
 
                     # —— 将OCR识别结果入库到健康档案，并关联附件 ——
                     # 若OCR文本为空则视为失败
-                    ocr_text_str = ocr_text if isinstance(ocr_text, str) else str(ocr_text)
+                    ocr_text_str = _normalize_ocr_text(ocr_text if isinstance(ocr_text, str) else str(ocr_text))
                     if not ocr_text_str or not ocr_text_str.strip():
                         conn.rollback()
                         raise HTTPException(status_code=422, detail="OCR识别结果为空，未入库")
@@ -921,34 +1220,34 @@ async def upload_file(file: UploadFile = File(...), user_id: str = Form("default
                             "text_length": len(ocr_text_str)
                         },
                         "memory_id": memory_id,
-                        "extracted_info": extracted_info if isinstance(extracted_info, dict) else {}
+                        "extracted_info": extracted_info if isinstance(extracted_info, dict) else {},
+                        "uploaded_files": [file_id]
                     }
 
                     cursor.execute(
                         """
                         INSERT INTO health_records (
                             id, user_id, title, record_type, summary, content, importance,
-                            tags, metadata, record_date, created_at, updated_at, file_attachments
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            tags, metadata, record_date, created_at, updated_at
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         """,
                         (
                             record_id,
                             user_id,
                             title,
                             record_type,
-                            ocr_text_str[:300] if ocr_text_str else None,
+                            (ocr_text_str[:300] if ocr_text_str else None),
                             ocr_text_str,
                             ImportanceLevel.MEDIUM.value,
-                            serialize_tags(tags),
-                            serialize_metadata(metadata),
+                            Json(tags),
+                            Json(metadata),
                             None,
-                            now.isoformat(),
-                            now.isoformat(),
-                            serialize_tags([file_id]),
+                            now,
+                            now,
                         ),
                     )
                     cursor.execute(
-                        "UPDATE file_attachments SET record_id = ? WHERE id = ?",
+                        "UPDATE file_attachments SET record_id = %s WHERE id = %s",
                         (record_id, file_id),
                     )
 
@@ -960,15 +1259,19 @@ async def upload_file(file: UploadFile = File(...), user_id: str = Form("default
 
                     # 成功则提交事务
                     conn.commit()
-                except HTTPException:
-                    # 已经rollback并抛出
-                    raise
-                except Exception as e:
-                    conn.rollback()
-                    logger.error(f"OCR处理或入库失败: {e}")
-                    raise HTTPException(status_code=422, detail=f"OCR处理或入库失败: {str(e)}")
-            else:
-                # 非图片：仅保存附件记录
+
+                    # 新增：写入HRM（PostgreSQL）以供Agent检索
+                    try:
+                        _save_to_hrm(
+                            user_id=user_id,
+                            record_type=record_type,
+                            title=title,
+                            content=ocr_text_str,
+                            extracted_data=metadata.get("extracted_info") or {}
+                        )
+                    except Exception as e:
+                        logger.warning(f"OCR入库后HRM双写失败：{e}")
+            if not normalized_ct.startswith("image/"):
                 conn.commit()
 
         return {
@@ -1020,14 +1323,66 @@ async def upload_multiple_files(files: List[UploadFile] = File(...), user_id: st
         logger.error(f"批量文件上传失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+# 新增：将指定用户的本地SQLite健康记录同步到HRM（PostgreSQL）
+@app.post("/api/health-records/sync-to-hrm")
+async def sync_sqlite_to_hrm(user_id: str = Query(..., description="需要同步的用户ID")):
+    try:
+        synced = 0
+        skipped = 0
+        if not HRM_SAVE_RECORD:
+            raise HTTPException(status_code=503, detail="HRM存储工具不可用，无法同步")
+
+        with get_db_connection() as conn:
+            with conn.cursor(row_factory=dict_row) as cursor:
+                cursor.execute("SELECT id, title, record_type, summary, content, metadata FROM health_records WHERE user_id = %s ORDER BY created_at DESC", (user_id,))
+                rows = cursor.fetchall()
+
+            for row in rows:
+                try:
+                    rid = row["id"]
+                    title = row["title"] or "记录"
+                    rtype = row["record_type"] or "other"
+                    content = row["content"] or (row["summary"] or "")
+                    meta = deserialize_metadata(row["metadata"]) if isinstance(row["metadata"], str) else (row["metadata"] or {})
+                    extracted = meta.get("extracted_info") or meta
+
+                    # 空内容的记录不同步到HRM
+                    if not content or not str(content).strip():
+                        skipped += 1
+                        continue
+
+                    _save_to_hrm(
+                        user_id=user_id,
+                        record_type=rtype,
+                        title=title,
+                        content=str(content),
+                        extracted_data=extracted
+                    )
+                    synced += 1
+                except Exception as e:
+                    logger.warning(f"同步单条记录失败（已跳过）: {e}")
+                    skipped += 1
+
+        return {
+            "message": "同步完成",
+            "user_id": user_id,
+            "synced": synced,
+            "skipped": skipped
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"健康记录同步到HRM失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 # 新增：获取指定记录的结构化与OCR信息（上移到启动语句之前）
 @app.get("/api/health-records/{record_id}/extracted")
 async def get_record_extracted_info(record_id: str):
     try:
         with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT metadata FROM health_records WHERE id = ?", (record_id,))
-            row = cursor.fetchone()
+            with conn.cursor(row_factory=dict_row) as cursor:
+                cursor.execute("SELECT metadata FROM health_records WHERE id = %s", (record_id,))
+                row = cursor.fetchone()
             if not row:
                 raise HTTPException(status_code=404, detail="健康档案不存在")
             metadata = deserialize_metadata(row[0] if isinstance(row, tuple) else row["metadata"])
@@ -1046,12 +1401,12 @@ async def get_record_extracted_info(record_id: str):
 async def get_file_attachment(file_id: str):
     try:
         with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT original_filename, file_path, mime_type FROM file_attachments WHERE id = ?",
-                (file_id,),
-            )
-            row = cursor.fetchone()
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT original_filename, file_path, mime_type FROM file_attachments WHERE id = %s",
+                    (file_id,),
+                )
+                row = cursor.fetchone()
             if not row:
                 raise HTTPException(status_code=404, detail="附件不存在")
             # sqlite3.Row 支持下标与键访问
@@ -1073,3 +1428,23 @@ async def get_file_attachment(file_id: str):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
+JWT_SECRET_KEY = os.getenv('JWT_SECRET_KEY', 'your-secret-key-change-this-in-production')
+JWT_ALGORITHM = os.getenv('JWT_ALGORITHM', 'HS256')
+
+def _resolve_user_id(request: Request, user_id: str | None) -> str:
+    try:
+        if user_id and str(user_id).strip():
+            return str(user_id).strip()
+    except Exception:
+        pass
+    try:
+        auth = request.headers.get('authorization') or request.headers.get('Authorization')
+        if isinstance(auth, str) and auth.lower().startswith('bearer '):
+            token = auth.split(' ', 1)[1].strip()
+            payload = jwt.decode(token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
+            uid = payload.get('user_id') or payload.get('sub')
+            if isinstance(uid, str) and uid.strip():
+                return uid.strip()
+    except Exception:
+        pass
+    return os.environ.get("A2A_CURRENT_USER_ID") or os.environ.get("DEFAULT_USER_ID") or "default_user"

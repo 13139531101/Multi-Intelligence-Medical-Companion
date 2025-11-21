@@ -7,6 +7,7 @@
 import os
 import json
 import hashlib
+from uuid import uuid4
 from datetime import datetime
 from cryptography.fernet import Fernet
 from mcp.server.fastmcp import FastMCP
@@ -74,16 +75,17 @@ def save_health_record(user_id: str, record_type: str, title: str, content: str,
     :return: 保存结果
     """
     try:
-        # 加密内容和提取数据
-        encrypted_content = storage.encrypt_data(content)
-        encrypted_extracted = storage.encrypt_data(extracted_data) if extracted_data else None
-
-        # 计算文件哈希
+        # 计算文件哈希（存入 metadata）
         file_hash = storage.calculate_file_hash(content)
 
-        # 检查是否已存在相同内容
-        existing_query = "SELECT id FROM health_records WHERE file_hash = %s AND user_id = %s"
-        existing_records = storage.db_manager.execute_query(existing_query, (file_hash, user_id))
+        # 检查是否已存在相同内容（按 user_id + title + record_type + content）
+        existing_query = """
+            SELECT id FROM health_records
+            WHERE user_id = %s AND title = %s AND record_type = %s AND content = %s
+        """
+        existing_records = storage.db_manager.execute_query(
+            existing_query, (user_id, title, record_type, content)
+        )
 
         if existing_records:
             return json.dumps({
@@ -92,22 +94,28 @@ def save_health_record(user_id: str, record_type: str, title: str, content: str,
                 'record_id': existing_records[0]['id']
             }, ensure_ascii=False)
 
-        # 插入新记录
+        # 插入新记录（适配现有 schema）
+        # importance 默认为 medium；tags/metadata 写为 JSON
         insert_query = """
             INSERT INTO health_records
-            (user_id, record_type, title, content_encrypted, extracted_data_encrypted, file_hash)
-            VALUES (%s, %s, %s, %s, %s, %s)
+            (id, user_id, record_type, title, summary, content, importance, tags, metadata, record_date, created_at, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, CURRENT_DATE, NOW(), NOW())
+            RETURNING id
         """
+
+        tags = json.dumps(["健康档案", record_type, "storage_tool"] , ensure_ascii=False)
+        metadata = json.dumps({"extracted_data": extracted_data, "file_hash": file_hash, "source": "StorageTool"}, ensure_ascii=False)
+        summary = extracted_data or ""
 
         record_id = storage.db_manager.execute_insert(
             insert_query,
-            (user_id, record_type, title, encrypted_content, encrypted_extracted, file_hash)
+            (str(uuid4()), user_id, record_type, title, summary, content, "medium", tags, metadata)
         )
 
         return json.dumps({
             'success': True,
             'message': '健康档案保存成功',
-            'record_id': record_id
+            'record_id': str(record_id)
         }, ensure_ascii=False)
 
     except Exception as e:
@@ -132,7 +140,7 @@ def get_health_records(user_id: str, record_type: str = "", limit: int = 10) -> 
             query = """
                 SELECT id, record_type, title, created_at, updated_at
                 FROM health_records
-                WHERE user_id = %s AND record_type = %s AND is_deleted = 0
+                WHERE user_id = %s AND record_type = %s
                 ORDER BY created_at DESC
                 LIMIT %s
             """
@@ -141,7 +149,7 @@ def get_health_records(user_id: str, record_type: str = "", limit: int = 10) -> 
             query = """
                 SELECT id, record_type, title, created_at, updated_at
                 FROM health_records
-                WHERE user_id = %s AND is_deleted = 0
+                WHERE user_id = %s
                 ORDER BY created_at DESC
                 LIMIT %s
             """
@@ -163,7 +171,7 @@ def get_health_records(user_id: str, record_type: str = "", limit: int = 10) -> 
         }, ensure_ascii=False)
 
 @mcp.tool()
-def get_health_record_detail(user_id: str, record_id: int) -> str:
+def get_health_record_detail(user_id: str, record_id: str) -> str:
     """
     获取健康档案详细信息
     :param user_id: 用户ID
@@ -172,9 +180,9 @@ def get_health_record_detail(user_id: str, record_id: int) -> str:
     """
     try:
         query = """
-            SELECT record_type, title, content_encrypted, extracted_data_encrypted, created_at
+            SELECT record_type, title, summary, content, metadata, created_at
             FROM health_records
-            WHERE id = %s AND user_id = %s AND is_deleted = 0
+            WHERE id = %s AND user_id = %s
         """
 
         records = storage.db_manager.execute_query(query, (record_id, user_id))
@@ -186,10 +194,14 @@ def get_health_record_detail(user_id: str, record_id: int) -> str:
             }, ensure_ascii=False)
 
         record = records[0]
-
-        # 解密内容
-        content = storage.decrypt_data(record['content_encrypted'])
-        extracted_data = storage.decrypt_data(record['extracted_data_encrypted']) if record['extracted_data_encrypted'] else ""
+        # 提取 metadata.extracted_data
+        try:
+            meta = record.get('metadata') or {}
+            if isinstance(meta, str):
+                meta = json.loads(meta)
+            extracted_data = meta.get('extracted_data') or record.get('summary') or ""
+        except Exception:
+            extracted_data = record.get('summary') or ""
 
         return json.dumps({
             'success': True,
@@ -197,7 +209,7 @@ def get_health_record_detail(user_id: str, record_id: int) -> str:
                 'id': record_id,
                 'record_type': record['record_type'],
                 'title': record['title'],
-                'content': content,
+                'content': record['content'],
                 'extracted_data': extracted_data,
                 'created_at': str(record['created_at'])
             }
@@ -291,7 +303,7 @@ def get_medications(user_id: str, is_active: bool = True) -> str:
         }, ensure_ascii=False)
 
 @mcp.tool()
-def delete_health_record(user_id: str, record_id: int) -> str:
+def delete_health_record(user_id: str, record_id: str) -> str:
     """
     删除健康档案记录（软删除）
     :param user_id: 用户ID
@@ -300,7 +312,7 @@ def delete_health_record(user_id: str, record_id: int) -> str:
     """
     try:
         # 检查记录是否存在且属于该用户
-        check_query = "SELECT id FROM health_records WHERE id = %s AND user_id = %s AND is_deleted = 0"
+        check_query = "SELECT id FROM health_records WHERE id = %s AND user_id = %s"
         existing_records = storage.db_manager.execute_query(check_query, (record_id, user_id))
 
         if not existing_records:
@@ -309,9 +321,9 @@ def delete_health_record(user_id: str, record_id: int) -> str:
                 'message': '记录不存在或无权限删除'
             }, ensure_ascii=False)
 
-        # 软删除记录
-        update_query = "UPDATE health_records SET is_deleted = 1, updated_at = NOW() WHERE id = %s AND user_id = %s"
-        affected_rows = storage.db_manager.execute_update(update_query, (record_id, user_id))
+        # 物理删除记录（当前表无 is_deleted 字段）
+        delete_query = "DELETE FROM health_records WHERE id = %s AND user_id = %s"
+        affected_rows = storage.db_manager.execute_update(delete_query, (record_id, user_id))
 
         if affected_rows > 0:
             return json.dumps({

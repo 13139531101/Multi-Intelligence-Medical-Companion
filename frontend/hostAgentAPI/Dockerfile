@@ -8,6 +8,9 @@ WORKDIR /app
 # System deps (if any lightweight ones are needed)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
+    tesseract-ocr \
+    tesseract-ocr-eng \
+    tesseract-ocr-chi-sim \
     && rm -rf /var/lib/apt/lists/*
 
 # Python deps
@@ -16,6 +19,10 @@ COPY frontend/hostAgentAPI/requirements.txt ./requirements.txt
 ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
 ENV PIP_INDEX_URL=${PIP_INDEX_URL}
 RUN pip install -i ${PIP_INDEX_URL} -r requirements.txt
+
+# 同步安装后端健康档案管理模块的 OCR 相关依赖
+COPY backend/HealthRecordsManager/requirements.txt ./hrm_requirements.txt
+RUN pip install -i ${PIP_INDEX_URL} -r hrm_requirements.txt
 
 # App source (Host API)
 COPY frontend/hostAgentAPI ./

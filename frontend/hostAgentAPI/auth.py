@@ -36,6 +36,8 @@ DB_CONFIG = {
     'user': os.getenv('DB_USER', 'pha'),
     'password': os.getenv('DB_PASSWORD', ''),
     'dbname': os.getenv('DB_NAME', 'personal_health_assistant'),
+    # 添加连接超时，避免在数据库不可达时阻塞启动
+    'connect_timeout': int(os.getenv('DB_CONNECT_TIMEOUT', 2)),
 }
 
 # 安全相关
@@ -98,7 +100,12 @@ class AuthService:
 
     def init_schema(self):
         """初始化 users 与 user_sessions 表（Postgres）"""
-        conn = psycopg.connect(**self.db_config)
+        try:
+            conn = psycopg.connect(**self.db_config)
+        except Exception as e:
+            # 快速失败并在启动时跳过架构初始化，以避免阻塞应用
+            logger.warning(f"认证模块跳过数据库架构初始化（连接失败）: {e}")
+            return
         try:
             with conn:
                 with conn.cursor() as cur:

@@ -92,8 +92,29 @@ export const addRemoteAgent = async (agentAddress) => {
  * @returns {Promise<AgentCard | null>}
  */
 export const getAgentCard = async (agentAddress) => {
+  const toPublicOrigin = (addr) => {
+    try {
+      const u = new URL(/^(http|https):\/\//i.test(addr) ? addr : `http://${addr}`)
+      const host = u.hostname
+      const port = u.port || (u.protocol === 'https:' ? '443' : '80')
+      const svcMap = {
+        health_records: '10010',
+        health_advisor: '10011',
+        medication_reminder: '10012',
+        visit_summary: '10013',
+      }
+      if (host in svcMap) {
+        const p = port || svcMap[host]
+        return `http://localhost:${p}`
+      }
+      return u.origin
+    } catch (_) {
+      return /^(http|https):\/\//i.test(addr) ? addr : `http://${addr}`
+    }
+  }
   const baseUrl = /^(http|https):\/\//i.test(agentAddress) ? agentAddress : `http://${agentAddress}`;
-  const url = `${baseUrl.replace(/\/$/, '')}${AGENT_CARD_PATH}`;
+  const publicBase = toPublicOrigin(baseUrl)
+  const url = `${publicBase.replace(/\/$/, '')}${AGENT_CARD_PATH}`;
   console.log(`Fetching agent card from: ${url}`);
 
   try {
@@ -112,9 +133,8 @@ export const getAgentCard = async (agentAddress) => {
       defaultInputModes: agentCardData.defaultInputModes || [],
       defaultOutputModes: agentCardData.defaultOutputModes || [],
       capabilities: agentCardData.capabilities || { streaming: false, pushNotifications: false },
-      // 新增字段，便于直接调用 JSON-RPC
-      agentBaseUrl: baseUrl,
-      agentEndpointUrl: agentCardData.url,
+      agentBaseUrl: publicBase,
+      agentEndpointUrl: toPublicOrigin(agentCardData.url || publicBase),
     };
   } catch (error) {
     console.error(`Cannot connect to agent at ${agentAddress}:`, error);

@@ -5,7 +5,7 @@
 用于创建personal_health_assistant数据库的所有表结构
 """
 
-import mysql.connector
+import psycopg
 import os
 from dotenv import load_dotenv
 
@@ -17,71 +17,168 @@ def init_database():
     初始化数据库，创建所有必需的表
     """
     try:
-        # 数据库连接配置
         config = {
-            'host': os.getenv('DB_HOST', 'localhost'),
-            'port': int(os.getenv('DB_PORT', 3306)),
-            'user': os.getenv('DB_USER', 'root'),
-            'password': os.getenv('DB_PASSWORD', 'root'),
-            'charset': 'utf8mb4',
-            'collation': 'utf8mb4_unicode_ci'
+            'host': os.getenv('DB_HOST', 'postgres'),
+            'port': int(os.getenv('DB_PORT', 5432)),
+            'user': os.getenv('DB_USER', 'pha'),
+            'password': os.getenv('DB_PASSWORD', 'pha_pass'),
+            'dbname': os.getenv('DB_NAME', os.getenv('POSTGRES_DB', 'personal_health_assistant')),
         }
-        
-        print("正在连接到MySQL服务器...")
-        connection = mysql.connector.connect(**config)
+        print("正在连接到PostgreSQL服务器...")
+        connection = psycopg.connect(**config)
         cursor = connection.cursor()
         
-        # 创建数据库（如果不存在）
-        db_name = os.getenv('DB_NAME', 'personal_health_assistant')
-        print(f"正在创建数据库: {db_name}")
-        cursor.execute(f"CREATE DATABASE IF NOT EXISTS {db_name} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci")
-        cursor.execute(f"USE {db_name}")
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                id SERIAL PRIMARY KEY,
+                user_id VARCHAR(64) NOT NULL UNIQUE,
+                username VARCHAR(50) NOT NULL UNIQUE,
+                password_hash VARCHAR(255) NOT NULL,
+                salt VARCHAR(32) NOT NULL,
+                email VARCHAR(100) UNIQUE,
+                phone VARCHAR(20) UNIQUE,
+                avatar_url VARCHAR(255),
+                last_login_at TIMESTAMP NULL,
+                login_count INTEGER DEFAULT 0,
+                status SMALLINT DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_medications (
+                id SERIAL PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                drug_name TEXT NOT NULL,
+                dosage TEXT,
+                frequency TEXT,
+                start_date DATE,
+                end_date DATE,
+                notes TEXT,
+                is_active SMALLINT DEFAULT 1,
+                is_deleted SMALLINT DEFAULT 0,
+                created_at TIMESTAMPTZ DEFAULT now(),
+                updated_at TIMESTAMPTZ DEFAULT now()
+            );
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_sessions (
+                id SERIAL PRIMARY KEY,
+                user_id VARCHAR(64) NOT NULL,
+                token_hash VARCHAR(255) NOT NULL,
+                expires_at TIMESTAMP NOT NULL,
+                ip_address VARCHAR(45),
+                user_agent TEXT,
+                is_active SMALLINT DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS health_records (
+                id UUID PRIMARY KEY,
+                user_id TEXT,
+                title TEXT NOT NULL,
+                record_type TEXT NOT NULL,
+                summary TEXT,
+                content TEXT,
+                importance TEXT NOT NULL DEFAULT 'medium',
+                tags JSONB,
+                metadata JSONB,
+                record_date DATE,
+                created_at TIMESTAMPTZ DEFAULT now(),
+                updated_at TIMESTAMPTZ DEFAULT now()
+            );
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS file_attachments (
+                id UUID PRIMARY KEY,
+                record_id UUID REFERENCES health_records(id) ON DELETE CASCADE,
+                filename TEXT NOT NULL,
+                original_filename TEXT NOT NULL,
+                file_path TEXT NOT NULL,
+                file_size INTEGER,
+                mime_type TEXT,
+                upload_time TIMESTAMPTZ DEFAULT now()
+            );
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS reminders (
+                id SERIAL PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                reminder_type TEXT NOT NULL,
+                title TEXT NOT NULL,
+                description TEXT,
+                reminder_time TIMESTAMPTZ NOT NULL,
+                created_at TIMESTAMPTZ DEFAULT now(),
+                updated_at TIMESTAMPTZ DEFAULT now()
+            );
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS medication_reminders (
+                id SERIAL PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                medication_name TEXT NOT NULL,
+                dosage TEXT,
+                frequency TEXT,
+                start_date DATE,
+                end_date DATE,
+                reminder_times JSONB NOT NULL,
+                notes TEXT,
+                is_active SMALLINT DEFAULT 1,
+                created_at TIMESTAMPTZ DEFAULT now(),
+                updated_at TIMESTAMPTZ DEFAULT now()
+            );
+            """
+        )
+        cursor.execute("ALTER TABLE medication_reminders ADD COLUMN IF NOT EXISTS reminder_id INTEGER")
+        cursor.execute("ALTER TABLE medication_reminders ADD COLUMN IF NOT EXISTS medication_id INTEGER")
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS reminder_logs (
+                id SERIAL PRIMARY KEY,
+                reminder_id INTEGER NOT NULL,
+                scheduled_time TIMESTAMPTZ NOT NULL,
+                actual_time TIMESTAMPTZ,
+                completion_time TIMESTAMPTZ,
+                status TEXT NOT NULL,
+                notes TEXT,
+                created_at TIMESTAMPTZ DEFAULT now()
+            );
+            """
+        )
         
-        # 读取并执行SQL文件
-        sql_file_path = os.path.join(os.path.dirname(__file__), '..', '..', 'database', 'personal_health_assistant.sql')
-        
-        if not os.path.exists(sql_file_path):
-            print(f"错误: SQL文件不存在: {sql_file_path}")
-            return False
-            
-        print(f"正在读取SQL文件: {sql_file_path}")
-        with open(sql_file_path, 'r', encoding='utf-8') as file:
-            sql_content = file.read()
-        
-        # 分割SQL语句并执行
-        sql_statements = [stmt.strip() for stmt in sql_content.split(';') if stmt.strip()]
-        
-        print("正在执行SQL语句...")
-        for i, statement in enumerate(sql_statements):
-            if statement and not statement.startswith('--'):
-                try:
-                    cursor.execute(statement)
-                    print(f"执行语句 {i+1}/{len(sql_statements)}: 成功")
-                except mysql.connector.Error as e:
-                    if "already exists" in str(e) or "duplicate" in str(e).lower():
-                        print(f"执行语句 {i+1}/{len(sql_statements)}: 跳过（已存在）")
-                    else:
-                        print(f"执行语句 {i+1}/{len(sql_statements)}: 错误 - {e}")
-        
-        # 提交事务
         connection.commit()
         print("数据库初始化完成！")
         
-        # 验证关键表是否存在
         print("\n验证表结构...")
-        key_tables = ['users', 'user_sessions', 'user_profiles', 'health_records', 'user_medications', 'reminders']
-        
+        key_tables = ['users', 'user_sessions', 'health_records']
         for table in key_tables:
-            cursor.execute(f"SHOW TABLES LIKE '{table}'")
-            result = cursor.fetchone()
-            if result:
+            cursor.execute(
+                "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name=%s)",
+                (table,)
+            )
+            exists = cursor.fetchone()[0]
+            if exists:
                 print(f"✓ 表 {table} 创建成功")
             else:
                 print(f"✗ 表 {table} 创建失败")
-        
         return True
         
-    except mysql.connector.Error as e:
+    except Exception as e:
         print(f"数据库错误: {e}")
         return False
     except Exception as e:
