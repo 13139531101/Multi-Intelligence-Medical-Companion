@@ -99,9 +99,11 @@ async def handle_read_resource(uri: AnyUrl) -> str:
         uid = (
             (qs.get("user_id", [None])[0])
             or os.environ.get("A2A_CURRENT_USER_ID")
-            or os.environ.get("DEFAULT_USER_ID")
-            or "default_user"
+            or os.environ.get("USER_ID")
+            or os.environ.get("FRONTEND_USER_ID")
         )
+        if not uid or str(uid).strip().lower() == "default_user":
+            return json.dumps({"error": "缺少有效的用户ID"})
         path = parsed.scheme + "://" + parsed.netloc + parsed.path
         if path == "memory://health-advisor/consultations":
             memories = memory_system.search_by_tags(

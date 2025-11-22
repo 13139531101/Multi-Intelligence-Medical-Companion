@@ -28,7 +28,6 @@ services:
       - DATABASE_URL=${DATABASE_URL}
       - MEMORY_DATABASE_URL=${MEMORY_DATABASE_URL}
       - A2A_CURRENT_USER_ID=${A2A_CURRENT_USER_ID}
-      - DEFAULT_USER_ID=${DEFAULT_USER_ID}
     ports:
       - "10011:10011"
     healthcheck:
@@ -49,7 +48,6 @@ services:
       # 显式为提醒工具设置 PostgreSQL 连接（容器内主机名为 postgres）
       - PG_DSN=postgresql://pha:pha_pass@postgres:5432/personal_health_assistant
       - A2A_CURRENT_USER_ID=${A2A_CURRENT_USER_ID}
-      - DEFAULT_USER_ID=${DEFAULT_USER_ID}
       - MEMORY_DATABASE_URL=${MEMORY_DATABASE_URL}
     ports:
       - "10012:10012"
@@ -69,7 +67,6 @@ services:
       - PYTHONPATH=/app
       - MEMORY_DATABASE_URL=${MEMORY_DATABASE_URL}
       - A2A_CURRENT_USER_ID=${A2A_CURRENT_USER_ID}
-      - DEFAULT_USER_ID=${DEFAULT_USER_ID}
     ports:
       - "10013:10013"
     healthcheck:
@@ -93,7 +90,6 @@ services:
       - DB_PASSWORD=${DB_PASSWORD}
       - MEMORY_DATABASE_URL=${MEMORY_DATABASE_URL}
       - A2A_CURRENT_USER_ID=${A2A_CURRENT_USER_ID}
-      - DEFAULT_USER_ID=${DEFAULT_USER_ID}
       - JWT_SECRET_KEY=${JWT_SECRET_KEY}
       - JWT_ALGORITHM=${JWT_ALGORITHM}
       # OCR 配置：通过项目根环境变量注入
@@ -129,7 +125,6 @@ services:
       - DB_PASSWORD=${DB_PASSWORD}
       - MEMORY_DATABASE_URL=${MEMORY_DATABASE_URL}
       - A2A_CURRENT_USER_ID=${A2A_CURRENT_USER_ID}
-      - DEFAULT_USER_ID=${DEFAULT_USER_ID}
       - JWT_SECRET_KEY=${JWT_SECRET_KEY}
       - JWT_ALGORITHM=${JWT_ALGORITHM}
       # 为 Host API 注入 OCR 相关环境变量，确保内嵌健康档案 OCR 正常工作

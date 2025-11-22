@@ -177,6 +177,13 @@ class ConversationServer:
     if current_user:
       c.metadata = c.metadata or {}
       c.metadata['user_id'] = current_user['user_id']
+      try:
+        os.environ['A2A_CURRENT_USER_ID'] = str(current_user['user_id'])
+        os.environ['USER_ID'] = str(current_user['user_id'])
+        if 'DEFAULT_USER_ID' in os.environ:
+          os.environ.pop('DEFAULT_USER_ID', None)
+      except Exception:
+        pass
     return CreateConversationResponse(result=c)
 
   async def _send_message(self, request: Request, current_user: Optional[Dict[str, Any]] = Depends(get_current_user_optional)):
@@ -207,6 +214,13 @@ class ConversationServer:
         message.metadata = message.metadata or {}
         if 'user_id' not in message.metadata:
           message.metadata['user_id'] = current_user['user_id']
+        try:
+          os.environ['A2A_CURRENT_USER_ID'] = str(current_user['user_id'])
+          os.environ['USER_ID'] = str(current_user['user_id'])
+          if 'DEFAULT_USER_ID' in os.environ:
+            os.environ.pop('DEFAULT_USER_ID', None)
+        except Exception:
+          pass
       except Exception:
         pass
     else:

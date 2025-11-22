@@ -166,6 +166,7 @@ class AuthService:
         """创建JWT token"""
         payload = {
             'user_id': user_data['user_id'],
+            'sub': user_data['user_id'],
             'username': user_data['username'],
             'exp': datetime.utcnow() + timedelta(hours=JWT_EXPIRATION_HOURS),
             'iat': datetime.utcnow()

@@ -72,12 +72,16 @@ def _resolve_user_id(v: Optional[str]) -> str:
     s = str(v or '').strip()
     if s and s.lower() != 'default_user':
         return s
-    return (
+    env_uid = (
         os.environ.get('A2A_CURRENT_USER_ID')
-        or os.environ.get('DEFAULT_USER_ID')
+        or os.environ.get('USER_ID')
         or os.environ.get('FRONTEND_USER_ID')
-        or 'default_user'
+        or ''
     )
+    env_uid = str(env_uid).strip()
+    if env_uid and env_uid.lower() != 'default_user':
+        return env_uid
+    raise ValueError('缺少有效的用户ID')
 
 @server.list_resources()
 async def handle_list_resources() -> list[Resource]:
@@ -114,9 +118,11 @@ async def handle_read_resource(uri: AnyUrl) -> str:
         uid = (
             (qs.get("user_id", [None])[0])
             or os.environ.get("A2A_CURRENT_USER_ID")
-            or os.environ.get("DEFAULT_USER_ID")
-            or "default_user"
+            or os.environ.get("USER_ID")
+            or os.environ.get("FRONTEND_USER_ID")
         )
+        if not uid or str(uid).strip().lower() == 'default_user':
+            return json.dumps({"error": "缺少有效的用户ID"})
         if parsed.scheme == "memory" and parsed.netloc == "health-records" and parsed.path == "/recent":
             memories = memory_system.get_recent_memories(
                 agent_id=HEALTH_RECORDS_AGENT_ID,

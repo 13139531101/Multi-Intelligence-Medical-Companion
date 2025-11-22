@@ -464,7 +464,7 @@ try:
                 ed = date.fromisoformat(end_date)
             except Exception:
                 ed = None
-        user_id = str(user.get("id") or user.get("user_id") or user.get("uid") or "")
+        user_id = _get_user_id(user)
         result = await health_api.get_health_records(
             skip=skip,
             limit=limit,
@@ -480,7 +480,7 @@ try:
 
     @health_router.get("/api/health-records/{record_id}")
     async def get_record_proxy(record_id: str, user: dict = Depends(get_current_user)):
-        user_id = str(user.get("id") or user.get("user_id") or user.get("uid") or "")
+        user_id = _get_user_id(user)
         r = await health_api.get_health_record(record_id, user_id=user_id)
         return to_front_record(r)
 
@@ -489,7 +489,7 @@ try:
         payload = await request.json()
         converted = transform_record_payload(payload or {})
         record = health_api.HealthRecordCreate(**converted)
-        user_id = str(user.get("id") or user.get("user_id") or user.get("uid") or "")
+        user_id = _get_user_id(user)
         r = await health_api.create_health_record(record, user_id=user_id, request=request)
         return to_front_record(r)
 
@@ -498,24 +498,24 @@ try:
         payload = await request.json()
         converted = transform_update_payload(payload or {})
         record = health_api.HealthRecordUpdate(**converted)
-        user_id = str(user.get("id") or user.get("user_id") or user.get("uid") or "")
+        user_id = _get_user_id(user)
         r = await health_api.update_health_record(record_id, record, user_id=user_id, request=request)
         return to_front_record(r)
 
     @health_router.delete("/api/health-records/{record_id}")
     async def delete_record_proxy(record_id: str, request: Request, user: dict = Depends(get_current_user)):
-        user_id = str(user.get("id") or user.get("user_id") or user.get("uid") or "")
+        user_id = _get_user_id(user)
         return await health_api.delete_health_record(record_id, user_id=user_id, request=request)
 
     @health_router.post("/api/health-records/upload")
     async def upload_file_proxy(file: UploadFile = File(...), user: dict = Depends(get_current_user)):
-        user_id = str(user.get("id") or user.get("user_id") or user.get("uid") or "")
+        user_id = _get_user_id(user)
         return await health_api.upload_file(file, user_id=user_id)
 
     # 新增：批量上传代理，转发到后端批量上传端点
     @health_router.post("/api/health-records/upload/multiple")
     async def upload_files_proxy(files: List[UploadFile] = File(...), user: dict = Depends(get_current_user)):
-        user_id = str(user.get("id") or user.get("user_id") or user.get("uid") or "")
+        user_id = _get_user_id(user)
         return await health_api.upload_multiple_files(files, user_id=user_id)
 
     # 新增：文件直链转发（按file_id读取并以内联方式返回）
@@ -1754,7 +1754,7 @@ async def generate_ai_summary(request: Request, user: dict = Depends(get_current
             except Exception:
                 sd = None
                 ed = None
-        user_id = str(user.get("id") or user.get("user_id") or user.get("uid") or "")
+        user_id = _get_user_id(user)
         records = await health_api.get_health_records(
             skip=0,
             limit=200,

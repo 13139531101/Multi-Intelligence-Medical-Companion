@@ -415,7 +415,9 @@ def _save_to_hrm(user_id: str | None, record_type: str, title: str, content: str
         # 空内容不进行HRM入库，避免生成空记录
         if content is None or (isinstance(content, str) and content.strip() == ""):
             return
-        uid = user_id or os.environ.get("A2A_CURRENT_USER_ID") or os.environ.get("DEFAULT_USER_ID") or "default_user"
+        uid = user_id or os.environ.get("A2A_CURRENT_USER_ID") or os.environ.get("USER_ID")
+        if not uid or str(uid).strip().lower() == "default_user":
+            return
         rt_val = getattr(record_type, "value", record_type)
         hrm_type = _map_record_type_for_hrm(str(rt_val))
         payload = json.dumps(extracted_data or {}, ensure_ascii=False)
@@ -1027,7 +1029,7 @@ async def get_health_insights(
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/health-records/upload")
-async def upload_file(file: UploadFile = File(...), user_id: str = Form("default_user")):
+async def upload_file(file: UploadFile = File(...), user_id: str = Form(None), request: Request = None):
     """上传文件"""
     try:
         # 检查与规范化文件类型（支持 octet-stream 与扩展名推断）
@@ -1079,6 +1081,12 @@ async def upload_file(file: UploadFile = File(...), user_id: str = Form("default
         if len(file_content) > max_size:
             raise HTTPException(status_code=400, detail="文件大小超过限制（10MB）")
         
+        # 解析用户ID（优先表单，其次头部/Token）
+        try:
+            user_id = _resolve_user_id(request, user_id)
+        except Exception:
+            pass
+
         # 生成文件名
         file_id = generate_id()
         file_extension = Path(file.filename).suffix
@@ -1341,7 +1349,7 @@ async def upload_file(file: UploadFile = File(...), user_id: str = Form("default
 
 # 新增：批量上传多个文件（逐个调用单文件上传逻辑，保证返回结构一致）
 @app.post("/api/health-records/upload/multiple")
-async def upload_multiple_files(files: List[UploadFile] = File(...), user_id: str = Form("default_user")):
+async def upload_multiple_files(files: List[UploadFile] = File(...), user_id: str = Form(None), request: Request = None):
     try:
         if not files:
             raise HTTPException(status_code=400, detail="未提供文件")
@@ -1350,7 +1358,7 @@ async def upload_multiple_files(files: List[UploadFile] = File(...), user_id: st
         for f in files:
             try:
                 # 复用单文件上传的完整逻辑（含OCR与入库）
-                res = await upload_file(file=f, user_id=user_id)
+                res = await upload_file(file=f, user_id=user_id, request=request)
                 results.append(res)
             except HTTPException as he:
                 results.append({
@@ -1485,6 +1493,12 @@ def _resolve_user_id(request: Request, user_id: str | None) -> str:
     except Exception:
         pass
     try:
+        xuid = request.headers.get('X-User-Id') or request.headers.get('x-user-id')
+        if isinstance(xuid, str) and xuid.strip():
+            return xuid.strip()
+    except Exception:
+        pass
+    try:
         auth = request.headers.get('authorization') or request.headers.get('Authorization')
         if isinstance(auth, str) and auth.lower().startswith('bearer '):
             token = auth.split(' ', 1)[1].strip()
@@ -1494,4 +1508,10 @@ def _resolve_user_id(request: Request, user_id: str | None) -> str:
                 return uid.strip()
     except Exception:
         pass
-    return os.environ.get("A2A_CURRENT_USER_ID") or os.environ.get("DEFAULT_USER_ID") or "default_user"
+    try:
+        env_uid = os.environ.get("A2A_CURRENT_USER_ID") or os.environ.get("USER_ID")
+        if isinstance(env_uid, str) and env_uid.strip() and env_uid.strip().lower() != "default_user":
+            return env_uid.strip()
+    except Exception:
+        pass
+    return ""

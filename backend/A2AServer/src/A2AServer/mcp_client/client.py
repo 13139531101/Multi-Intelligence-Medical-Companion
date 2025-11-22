@@ -529,11 +529,11 @@ async def process_tool_call(tc: Dict, servers: Dict[str, MCPClient], quiet_mode:
     try:
         uid = func_args.get("user_id")
         if (uid is None) or (isinstance(uid, str) and uid.strip() in ("", "current_user", "<当前用户>", "<用户>", "user")):
-            env_uid = os.environ.get("A2A_CURRENT_USER_ID") or os.environ.get("USER_ID") or os.environ.get("DEFAULT_USER_ID")
+            env_uid = os.environ.get("A2A_CURRENT_USER_ID") or os.environ.get("USER_ID")
             if env_uid and isinstance(env_uid, str) and env_uid.strip():
                 func_args["user_id"] = env_uid.strip()
         elif isinstance(uid, str) and uid.strip().lower() == "default_user":
-            env_uid = os.environ.get("A2A_CURRENT_USER_ID") or os.environ.get("USER_ID") or os.environ.get("DEFAULT_USER_ID")
+            env_uid = os.environ.get("A2A_CURRENT_USER_ID") or os.environ.get("USER_ID")
             if env_uid and isinstance(env_uid, str):
                 euid = env_uid.strip()
                 if euid and euid.lower() != "default_user":

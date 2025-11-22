@@ -121,8 +121,12 @@ class MemoryStorage:
             # 准备记忆数据（全面JSON安全与类型规范化）
             # 关键标识统一字符串化并裁剪到列长度，避免出现 Form 等不可转换及过长问题
             def _normalize_id(val: Any, max_len: int, default: str) -> str:
-                s = str(val) if val is not None else default
-                s = s.strip() or default
+                s = str(val).strip() if val is not None else ""
+                # 对 user_id 严格校验：不允许为空或使用默认用户
+                if default == 'default_user':
+                    if (not s) or (s.lower() == 'default_user'):
+                        raise ValueError('缺少有效的用户ID')
+                s = s or default
                 if len(s) > max_len:
                     try:
                         import logging

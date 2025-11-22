@@ -96,7 +96,6 @@ class A2AServer:
                     uid = payload.get("user_id") or payload.get("sub") or payload.get("id")
                     if uid is not None:
                         os.environ["A2A_CURRENT_USER_ID"] = str(uid)
-                        os.environ["DEFAULT_USER_ID"] = str(uid)
             except Exception:
                 pass
             body = await request.json()
@@ -113,7 +112,6 @@ class A2AServer:
                     uid_meta = params.metadata.get("user_id")
                 if uid_meta is not None:
                     os.environ["A2A_CURRENT_USER_ID"] = str(uid_meta)
-                    os.environ["DEFAULT_USER_ID"] = str(uid_meta)
             except Exception:
                 pass
 
