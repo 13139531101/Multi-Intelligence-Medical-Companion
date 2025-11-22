@@ -186,7 +186,7 @@ def get_medication_reminders(user_id: str, date: str = "", active_only: bool = T
                 FROM medication_reminders mr
                 LEFT JOIN user_medications um ON mr.medication_id = um.id
                 WHERE mr.user_id = %s
-                  AND mr.is_active = 1
+                  AND CAST(mr.is_active AS TEXT) IN ('1','t','true')
                   AND (mr.start_date <= %s)
                   AND (mr.end_date IS NULL OR mr.end_date >= %s)
                 ORDER BY mr.created_at DESC

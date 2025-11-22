@@ -58,6 +58,27 @@ memory_system: Optional[AgentMemorySystem] = None
 # 健康档案智能体ID
 HEALTH_RECORDS_AGENT_ID = "health_records_manager"
 
+def _to_datetime(v):
+    if isinstance(v, datetime):
+        return v
+    if isinstance(v, str) and v:
+        try:
+            return datetime.fromisoformat(v)
+        except Exception:
+            return None
+    return None
+
+def _resolve_user_id(v: Optional[str]) -> str:
+    s = str(v or '').strip()
+    if s and s.lower() != 'default_user':
+        return s
+    return (
+        os.environ.get('A2A_CURRENT_USER_ID')
+        or os.environ.get('DEFAULT_USER_ID')
+        or os.environ.get('FRONTEND_USER_ID')
+        or 'default_user'
+    )
+
 @server.list_resources()
 async def handle_list_resources() -> list[Resource]:
     """列出可用的记忆资源"""
@@ -360,7 +381,7 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
 
 async def _store_health_memory(arguments: dict) -> list[types.TextContent]:
     """存储健康档案记忆"""
-    user_id = arguments["user_id"]
+    user_id = _resolve_user_id(arguments.get("user_id"))
     record_type = arguments["record_type"]
     record_data = arguments["record_data"]
     summary = arguments.get("summary", "")
@@ -407,7 +428,7 @@ async def _store_health_memory(arguments: dict) -> list[types.TextContent]:
 
 async def _search_health_memories(arguments: dict) -> list[types.TextContent]:
     """搜索健康档案记忆"""
-    user_id = arguments["user_id"]
+    user_id = _resolve_user_id(arguments.get("user_id"))
     query = arguments["query"]
     record_types = arguments.get("record_types", [])
     time_range_days = arguments.get("time_range_days")
@@ -437,10 +458,11 @@ async def _search_health_memories(arguments: dict) -> list[types.TextContent]:
             if not any(rt in memory_tags for rt in record_types):
                 continue
         
-        # 时间范围过滤
         if time_range_days:
-            created_at = datetime.fromisoformat(memory.get('created_at', ''))
-            if (datetime.now() - created_at).days > time_range_days:
+            _dt = _to_datetime(memory.get('created_at'))
+            if not _dt:
+                continue
+            if (datetime.now() - _dt).days > time_range_days:
                 continue
         
         filtered_memories.append(memory)
@@ -459,7 +481,7 @@ async def _search_health_memories(arguments: dict) -> list[types.TextContent]:
 
 async def _get_health_history(arguments: dict) -> list[types.TextContent]:
     """获取用户健康历史记录"""
-    user_id = arguments["user_id"]
+    user_id = _resolve_user_id(arguments.get("user_id"))
     record_type = arguments.get("record_type")
     days = arguments.get("days", 365)
     include_trends = arguments.get("include_trends", False)
@@ -484,8 +506,11 @@ async def _get_health_history(arguments: dict) -> list[types.TextContent]:
             if record_type in m.get('tags', [])
         ]
     
-    # 按时间排序
-    memories.sort(key=lambda x: x.get('created_at', ''), reverse=True)
+    def _sort_key(x):
+        v = x.get('created_at')
+        dt = _to_datetime(v)
+        return dt or datetime.min
+    memories.sort(key=_sort_key, reverse=True)
     
     result = {
         "success": True,
@@ -508,7 +533,7 @@ async def _get_health_history(arguments: dict) -> list[types.TextContent]:
 
 async def _store_ocr_result(arguments: dict) -> list[types.TextContent]:
     """存储OCR识别结果记忆"""
-    user_id = arguments["user_id"]
+    user_id = _resolve_user_id(arguments.get("user_id"))
     document_type = arguments["document_type"]
     ocr_text = arguments["ocr_text"]
     extracted_info = arguments.get("extracted_info", {})
@@ -571,7 +596,7 @@ async def _store_ocr_result(arguments: dict) -> list[types.TextContent]:
 
 async def _get_health_insights(arguments: dict) -> list[types.TextContent]:
     """基于历史记忆获取健康洞察"""
-    user_id = arguments["user_id"]
+    user_id = _resolve_user_id(arguments.get("user_id"))
     focus_area = arguments.get("focus_area")
     analysis_period_days = arguments.get("analysis_period_days", 90)
     
@@ -724,23 +749,20 @@ def _analyze_health_trends(memories: List[Dict]) -> Dict[str, Any]:
         # 记录频率分析
         tags = memory.get('tags', [])
         for tag in tags:
-            if tag != '健康档案':  # 排除通用标签
+            if tag != '健康档案':
                 trends["record_frequency"][tag] = trends["record_frequency"].get(tag, 0) + 1
-        
-        # 时间分布分析
-        created_at = memory.get('created_at', '')
-        if created_at:
-            try:
-                date = datetime.fromisoformat(created_at).date()
-                month_key = date.strftime('%Y-%m')
-                trends["time_distribution"][month_key] = trends["time_distribution"].get(month_key, 0) + 1
-            except:
-                pass
-        
-        # 重要性趋势
+
+        # 时间分布与重要性趋势分析
+        _ca = memory.get('created_at')
+        _dt = _to_datetime(_ca)
+        if _dt:
+            _date = _dt.date()
+            month_key = _date.strftime('%Y-%m')
+            trends["time_distribution"][month_key] = trends["time_distribution"].get(month_key, 0) + 1
+
         importance = memory.get('importance', 0)
         trends["importance_trend"].append({
-            "date": created_at,
+            "date": (_dt.isoformat() if _dt else (_ca if isinstance(_ca, str) else None)),
             "importance": importance
         })
     
@@ -780,8 +802,13 @@ def _generate_health_insights(memories: List[Dict], patterns: Dict, focus_area: 
     
     # 时间趋势分析
     if len(memories) > 1:
-        recent_week = [m for m in memories if 
-                      (datetime.now() - datetime.fromisoformat(m.get('created_at', datetime.now().isoformat()))).days <= 7]
+        recent_week = []
+        for m in memories:
+            _dt = _to_datetime(m.get('created_at'))
+            if not _dt:
+                continue
+            if (datetime.now() - _dt).days <= 7:
+                recent_week.append(m)
         if recent_week:
             insights.append(f"最近一周新增 {len(recent_week)} 条记录")
     

@@ -124,9 +124,7 @@ class HealthRecordsMemoryService:
                     "urgent": urgent,
                     "stored_at": datetime.now().isoformat()
                 },
-                importance=importance,
-                tags=all_tags,
-                expires_hours=expires_hours
+                importance=importance
             )
             
             logger.info(f"成功存储健康记录记忆: {record_type} (ID: {memory_id})")

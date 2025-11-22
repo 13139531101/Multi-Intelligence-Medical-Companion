@@ -34,6 +34,7 @@ from google.adk.events.event import Event as ADKEvent
 from google.adk.events.event_actions import EventActions as ADKEventActions
 from google.genai import types
 import base64
+import logging
 
 
 class ADKHostManager(ApplicationManager):
@@ -204,22 +205,46 @@ class ADKHostManager(ApplicationManager):
                     actions=ADKEventActions(state_delta=state_update),
                 ),
             )
-        async for event in self._host_runner.run_async(
-            user_id=self.user_id,
-            session_id=conversation_id,
-            new_message=self.adk_content_from_message(message),
-        ):
-            self.add_event(
-                Event(
-                    id=event.id,
-                    actor=event.author,
-                    content=self.adk_content_to_message(
-                        event.content, conversation_id
-                    ),
-                    timestamp=event.timestamp,
+        try:
+            async for event in self._host_runner.run_async(
+                user_id=self.user_id,
+                session_id=conversation_id,
+                new_message=self.adk_content_from_message(message),
+            ):
+                self.add_event(
+                    Event(
+                        id=event.id,
+                        actor=event.author,
+                        content=self.adk_content_to_message(
+                            event.content, conversation_id
+                        ),
+                        timestamp=event.timestamp,
+                    )
                 )
-            )
-            final_event = event
+                final_event = event
+        except Exception as e:
+            logging.error(f"Host runner error: {e}")
+            try:
+                err = Message(
+                    role='agent',
+                    parts=[TextPart(text=f"服务暂时不可用：{str(e)}")],
+                    metadata={
+                        'conversation_id': conversation_id,
+                        'last_message_id': get_message_id(message),
+                        'message_id': str(uuid.uuid4()),
+                    },
+                )
+                self._messages.append(err)
+                if conversation:
+                    conversation.messages.append(err)
+            except Exception:
+                pass
+            try:
+                if message_id in self._pending_message_ids:
+                    self._pending_message_ids.remove(message_id)
+            except Exception:
+                pass
+            return
         response: Message | None = None
         if final_event:
             final_event.content.role = 'model'

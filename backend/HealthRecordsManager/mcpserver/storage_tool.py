@@ -78,20 +78,21 @@ def save_health_record(user_id: str, record_type: str, title: str, content: str,
         # 计算文件哈希（存入 metadata）
         file_hash = storage.calculate_file_hash(content)
 
-        # 检查是否已存在相同内容（按 user_id + title + record_type + content）
+        # 改进去重：仅按 user_id + 内容/文件哈希 去重，避免因标题/类型差异产生重复
+        # 优先匹配完全相同的内容，其次匹配 metadata 中的 file_hash
         existing_query = """
             SELECT id FROM health_records
-            WHERE user_id = %s AND title = %s AND record_type = %s AND content = %s
+            WHERE user_id = %s AND (content = %s OR metadata ->> 'file_hash' = %s)
         """
         existing_records = storage.db_manager.execute_query(
-            existing_query, (user_id, title, record_type, content)
+            existing_query, (user_id, content, file_hash)
         )
 
         if existing_records:
             return json.dumps({
                 'success': False,
                 'message': '相同内容的记录已存在',
-                'record_id': existing_records[0]['id']
+                'record_id': str(existing_records[0]['id'])
             }, ensure_ascii=False)
 
         # 插入新记录（适配现有 schema）
@@ -104,7 +105,7 @@ def save_health_record(user_id: str, record_type: str, title: str, content: str,
         """
 
         tags = json.dumps(["健康档案", record_type, "storage_tool"] , ensure_ascii=False)
-        metadata = json.dumps({"extracted_data": extracted_data, "file_hash": file_hash, "source": "StorageTool"}, ensure_ascii=False)
+        metadata = json.dumps({"extracted_data": extracted_data, "file_hash": file_hash, "source": "StorageTool"}, ensure_ascii=False, default=str)
         summary = extracted_data or ""
 
         record_id = storage.db_manager.execute_insert(
@@ -116,7 +117,7 @@ def save_health_record(user_id: str, record_type: str, title: str, content: str,
             'success': True,
             'message': '健康档案保存成功',
             'record_id': str(record_id)
-        }, ensure_ascii=False)
+        }, ensure_ascii=False, default=str)
 
     except Exception as e:
         logger.error(f"保存健康档案失败: {e}")
@@ -274,7 +275,7 @@ def get_medications(user_id: str, is_active: bool = True) -> str:
             query = """
                 SELECT id, drug_name, dosage, frequency, start_date, end_date, notes, created_at
                 FROM user_medications
-                WHERE user_id = %s AND is_active = 1 AND is_deleted = 0
+                WHERE user_id = %s AND CAST(is_active AS TEXT) IN ('1','t','true')
                 ORDER BY created_at DESC
             """
             params = (user_id,)
@@ -282,7 +283,7 @@ def get_medications(user_id: str, is_active: bool = True) -> str:
             query = """
                 SELECT id, drug_name, dosage, frequency, start_date, end_date, notes, created_at
                 FROM user_medications
-                WHERE user_id = %s AND is_deleted = 0
+                WHERE user_id = %s
                 ORDER BY created_at DESC
             """
             params = (user_id,)

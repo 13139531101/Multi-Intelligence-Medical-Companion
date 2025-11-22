@@ -120,6 +120,7 @@ services:
       - HOST_API_PORT=13002
       - HOST_API_BIND=0.0.0.0
       - PYTHONPATH=/app/backend:/app
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
       # 为 Host API 注入数据库 DSN，供提醒工具等使用
       - DATABASE_URL=${DATABASE_URL}
       - DB_HOST=${DB_HOST}

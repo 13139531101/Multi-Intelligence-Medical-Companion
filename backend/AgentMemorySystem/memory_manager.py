@@ -540,8 +540,10 @@ class MemoryManager:
             if not memory1.get('embedding_vector') or not memory2.get('embedding_vector'):
                 return 0.0
             
-            embedding1 = json.loads(memory1['embedding_vector'])
-            embedding2 = json.loads(memory2['embedding_vector'])
+            ev1 = memory1['embedding_vector']
+            ev2 = memory2['embedding_vector']
+            embedding1 = json.loads(ev1) if isinstance(ev1, str) else ev1
+            embedding2 = json.loads(ev2) if isinstance(ev2, str) else ev2
             
             return self.embedding_service.calculate_similarity(embedding1, embedding2)
             

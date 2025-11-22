@@ -104,7 +104,8 @@ class MemoryRetrieval:
             for candidate in candidates:
                 if candidate['embedding_vector']:
                     try:
-                        candidate_embedding = json.loads(candidate['embedding_vector'])
+                        ev = candidate['embedding_vector']
+                        candidate_embedding = json.loads(ev) if isinstance(ev, str) else ev
                         similarity = self.embedding_service.calculate_similarity(
                             query_embedding, candidate_embedding
                         )

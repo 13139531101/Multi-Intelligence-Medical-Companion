@@ -101,6 +101,21 @@ class A2AServer:
                 pass
             body = await request.json()
             json_rpc_request = A2ARequest.validate_python(body)
+            try:
+                uid_meta = None
+                params = getattr(json_rpc_request, "params", None)
+                if params and hasattr(params, "message") and getattr(params, "message", None):
+                    msg = getattr(params, "message")
+                    md = getattr(msg, "metadata", None)
+                    if isinstance(md, dict):
+                        uid_meta = md.get("user_id")
+                if not uid_meta and params and hasattr(params, "metadata") and isinstance(params.metadata, dict):
+                    uid_meta = params.metadata.get("user_id")
+                if uid_meta is not None:
+                    os.environ["A2A_CURRENT_USER_ID"] = str(uid_meta)
+                    os.environ["DEFAULT_USER_ID"] = str(uid_meta)
+            except Exception:
+                pass
 
             if isinstance(json_rpc_request, GetTaskRequest):
                 result = await self.task_manager.on_get_task(json_rpc_request)

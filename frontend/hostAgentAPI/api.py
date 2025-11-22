@@ -30,6 +30,7 @@ logging.basicConfig(
         logging.StreamHandler()
     ]
 )
+logger = logging.getLogger(__name__)
 app = FastAPI()
 
 # 更严格且兼容本地开发的 CORS 设置：明确允许本地前端来源
@@ -1117,11 +1118,16 @@ def _mark_local_taken(reminder_id: int, taken_time: str = "") -> bool:
 
 @app.get("/api/medication-reminders")
 async def list_medication_reminders(user: dict = Depends(get_current_user)):
-    # 仅返回本地提醒列表（远端列表接口不稳定时的调试回退）
-    db = _load_local_reminders()
     uid = str(user.get("id") or user.get("user_id") or user.get("uid"))
-    res = [r for r in db.get("reminders", []) if str(r.get("user_id")) == uid]
-    return {"reminders": res}
+    try:
+        raw = storage_get_reminders(uid, True)
+        data = json.loads(raw) if isinstance(raw, str) else raw
+        rows = data.get("reminders") if isinstance(data, dict) else data
+        return {"reminders": rows or []}
+    except Exception:
+        db = _load_local_reminders()
+        res = [r for r in db.get("reminders", []) if str(r.get("user_id")) == uid]
+        return {"reminders": res}
 
 @app.get("/api/debug/db-tables")
 async def _debug_db_tables():
@@ -1214,6 +1220,7 @@ async def _debug_init_med_tables():
         "ALTER TABLE health_records ADD COLUMN IF NOT EXISTS file_hash TEXT",
         "ALTER TABLE medication_reminders ADD COLUMN IF NOT EXISTS reminder_id INTEGER",
         "ALTER TABLE medication_reminders ADD COLUMN IF NOT EXISTS medication_id INTEGER",
+        "ALTER TABLE reminder_logs ADD COLUMN IF NOT EXISTS user_id TEXT",
         "ALTER TABLE reminder_logs ADD COLUMN IF NOT EXISTS completion_time TIMESTAMPTZ",
     ]
     for s in stmts:
@@ -1953,9 +1960,38 @@ async def smart_chat(request: Request):
         
         # 发送消息到智能体
         message = agent_server.manager.sanitize_message(message)
-        import threading
-        t = threading.Thread(target=lambda: asyncio.run(agent_server.manager.process_message(message)))
-        t.start()
+        task = asyncio.create_task(agent_server.manager.process_message(message))
+        def _done_cb(t):
+            try:
+                exc = t.exception()
+            except Exception:
+                exc = None
+            if exc:
+                logger.error(f"智能路由任务异常: {exc}")
+                try:
+                    conv_id = conversation.conversation_id
+                    conv = agent_server.manager.get_conversation(conv_id)
+                    if conv:
+                        from A2AServer.common.A2Atypes import Message as AMsg, TextPart as AText
+                        err_msg = AMsg(
+                            role='agent',
+                            parts=[AText(text=f"路由任务失败：{str(exc)}")],
+                            metadata={
+                                'conversation_id': conv_id,
+                                'last_message_id': message.metadata.get('message_id'),
+                                'message_id': str(uuid.uuid4()),
+                            },
+                        )
+                        conv.messages.append(err_msg)
+                except Exception:
+                    pass
+                try:
+                    mid = message.metadata.get('message_id')
+                    if mid in agent_server.manager._pending_message_ids:
+                        agent_server.manager._pending_message_ids.remove(mid)
+                except Exception:
+                    pass
+        task.add_done_callback(_done_cb)
         
         return {
             "success": True,
@@ -1966,7 +2002,7 @@ async def smart_chat(request: Request):
         }
         
     except Exception as e:
-        logging.error(f"智能路由处理错误: {str(e)}")
+        logger.error(f"智能路由处理错误: {str(e)}")
         return {"error": f"处理请求时发生错误: {str(e)}"}
 
 # 包含路由

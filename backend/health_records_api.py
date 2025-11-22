@@ -335,13 +335,49 @@ def row_to_health_record(row) -> HealthRecord:
             rec_dt = None
     else:
         rec_dt = rec_date
+    def _to_record_type_enum(val) -> RecordType:
+        if isinstance(val, RecordType):
+            return val
+        s = str(val or "").strip().lower()
+        if not s:
+            return RecordType.OTHER
+        try:
+            return RecordType(s)
+        except Exception:
+            alias = {
+                "medical_record": RecordType.MEDICAL_REPORT,
+                "inspection_report": RecordType.LAB_RESULT,
+                "test_report": RecordType.LAB_RESULT,
+            }.get(s)
+            return alias or RecordType.OTHER
+
+    def _to_importance_enum(val) -> ImportanceLevel:
+        if isinstance(val, ImportanceLevel):
+            return val
+        s = str(val or "").strip().lower()
+        try:
+            return ImportanceLevel(s)
+        except Exception:
+            mapping = {
+                "低": "low",
+                "中": "medium",
+                "高": "high",
+                "紧急": "critical",
+                "1": "low",
+                "2": "medium",
+                "3": "high",
+                "4": "critical",
+            }
+            m = mapping.get(s, "medium")
+            return ImportanceLevel(m)
+
     return HealthRecord(
         id=rid,
         title=row.get("title"),
-        record_type=row.get("record_type"),
+        record_type=_to_record_type_enum(row.get("record_type")),
         summary=row.get("summary"),
         content=row.get("content"),
-        importance=row.get("importance"),
+        importance=_to_importance_enum(row.get("importance")),
         tags=tags_parsed,
         metadata=meta_parsed,
         record_date=rec_dt,
@@ -376,8 +412,12 @@ def _save_to_hrm(user_id: str | None, record_type: str, title: str, content: str
     if not HRM_SAVE_RECORD:
         return
     try:
+        # 空内容不进行HRM入库，避免生成空记录
+        if content is None or (isinstance(content, str) and content.strip() == ""):
+            return
         uid = user_id or os.environ.get("A2A_CURRENT_USER_ID") or os.environ.get("DEFAULT_USER_ID") or "default_user"
-        hrm_type = _map_record_type_for_hrm(record_type)
+        rt_val = getattr(record_type, "value", record_type)
+        hrm_type = _map_record_type_for_hrm(str(rt_val))
         payload = json.dumps(extracted_data or {}, ensure_ascii=False)
         # 兼容 mcp.tool 装饰器：优先使用 .fn，否则直接调用
         if hasattr(HRM_SAVE_RECORD, "fn"):
@@ -444,7 +484,8 @@ async def get_health_records(
     search: Optional[str] = Query(None, description="搜索关键词"),
     start_date: Optional[date] = Query(None, description="开始日期"),
     end_date: Optional[date] = Query(None, description="结束日期"),
-    user_id: Optional[str] = Query(None, description="用户ID过滤")
+    user_id: Optional[str] = Query(None, description="用户ID过滤"),
+    request: Request = None
 ):
     """获取健康档案列表（按用户隔离）"""
     try:
@@ -452,9 +493,10 @@ async def get_health_records(
             with conn.cursor(row_factory=dict_row) as cursor:
                 conditions = []
                 params = []
-                if user_id:
+                uid = _resolve_user_id(request, user_id)
+                if uid:
                     conditions.append("user_id = %s")
-                    params.append(user_id)
+                    params.append(uid)
                 if record_type:
                     conditions.append("record_type = %s")
                     params.append(record_type.value)
@@ -487,13 +529,14 @@ async def get_health_records(
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/health-records/{record_id}", response_model=HealthRecord)
-async def get_health_record(record_id: str, user_id: Optional[str] = Query(None, description="用户ID过滤")):
+async def get_health_record(record_id: str, user_id: Optional[str] = Query(None, description="用户ID过滤"), request: Request = None):
     """获取单个健康档案详情（按用户隔离）"""
     try:
         with get_db_connection() as conn:
             with conn.cursor(row_factory=dict_row) as cursor:
-                if user_id:
-                    cursor.execute("SELECT * FROM health_records WHERE id = %s AND user_id = %s", (record_id, user_id))
+                uid = _resolve_user_id(request, user_id)
+                if uid:
+                    cursor.execute("SELECT * FROM health_records WHERE id = %s AND user_id = %s", (record_id, uid))
                 else:
                     cursor.execute("SELECT * FROM health_records WHERE id = %s", (record_id,))
                 row = cursor.fetchone()
@@ -643,6 +686,9 @@ async def create_health_record(record: HealthRecordCreate, user_id: Optional[str
                 if health_records_memory_service is not None:
                     if not health_records_memory_service.is_available():
                         await health_records_memory_service.initialize()
+                    imp_map = {"low": 0.2, "medium": 0.5, "high": 0.8, "critical": 1.0}
+                    imp_key = created.importance.value if hasattr(created.importance, "value") else str(created.importance)
+                    imp_val = imp_map.get(str(imp_key).lower(), 0.5)
                     await health_records_memory_service.store_health_record(
                         user_id=uid,
                         record_type=created.record_type,
@@ -654,7 +700,7 @@ async def create_health_record(record: HealthRecordCreate, user_id: Optional[str
                             "record_date": str(created.record_date) if created.record_date else None
                         },
                         summary=created.summary or "",
-                        importance=created.importance,
+                        importance=imp_val,
                         tags=created.tags or []
                     )
             except Exception as e:
@@ -818,8 +864,9 @@ async def delete_health_record(record_id: str, user_id: Optional[str] = Query(No
         with get_db_connection() as conn:
             with conn.cursor(row_factory=dict_row) as cursor:
                 # 检查记录是否存在并属于用户
-                if user_id:
-                    cursor.execute("SELECT * FROM health_records WHERE id = %s AND user_id = %s", (record_id, user_id))
+                uid = _resolve_user_id(request, user_id)
+                if uid:
+                    cursor.execute("SELECT * FROM health_records WHERE id = %s AND user_id = %s", (record_id, uid))
                 else:
                     cursor.execute("SELECT * FROM health_records WHERE id = %s", (record_id,))
                 if not cursor.fetchone():
@@ -856,8 +903,8 @@ async def delete_health_record(record_id: str, user_id: Optional[str] = Query(No
                     pass
 
                 cursor.execute("DELETE FROM file_attachments WHERE record_id = %s", (record_id,))
-                if user_id:
-                    cursor.execute("DELETE FROM health_records WHERE id = %s AND user_id = %s", (record_id, user_id))
+                if uid:
+                    cursor.execute("DELETE FROM health_records WHERE id = %s AND user_id = %s", (record_id, uid))
                 else:
                     cursor.execute("DELETE FROM health_records WHERE id = %s", (record_id,))
                 conn.commit()

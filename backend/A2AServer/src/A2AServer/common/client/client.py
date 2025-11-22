@@ -49,7 +49,15 @@ class A2AClient:
         self, payload: dict[str, Any]
     ) -> AsyncIterable[SendTaskStreamingResponse]:
         request = SendTaskStreamingRequest(params=payload)
-        with httpx.Client(timeout=None) as client:
+        headers = {}
+        try:
+            import os
+            auth = os.environ.get('HOSTAPI_AUTH_TOKEN')
+            if isinstance(auth, str) and auth.strip():
+                headers['Authorization'] = auth.strip()
+        except Exception:
+            pass
+        with httpx.Client(timeout=None, headers=headers or None) as client:
             with connect_sse(
                 client, "POST", self.url, json=request.model_dump()
             ) as event_source:
@@ -62,7 +70,15 @@ class A2AClient:
                     raise A2AClientHTTPError(400, str(e)) from e
 
     async def _send_request(self, request: JSONRPCRequest) -> dict[str, Any]:
-        async with httpx.AsyncClient() as client:
+        headers = {}
+        try:
+            import os
+            auth = os.environ.get('HOSTAPI_AUTH_TOKEN')
+            if isinstance(auth, str) and auth.strip():
+                headers['Authorization'] = auth.strip()
+        except Exception:
+            pass
+        async with httpx.AsyncClient(headers=headers or None) as client:
             try:
                 # Image generation could take time, adding timeout
                 response = await client.post(

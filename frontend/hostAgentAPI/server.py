@@ -3,6 +3,7 @@ import base64
 import threading
 import os
 import logging
+logger = logging.getLogger(__name__)
 import uuid
 import json
 import mimetypes
@@ -182,6 +183,12 @@ class ConversationServer:
     message_data = await request.json()
     logging.info(f"Received /message/send params: {message_data}")
     message = Message(**message_data['params'])
+    try:
+      auth = request.headers.get('authorization') or request.headers.get('Authorization')
+      if isinstance(auth, str) and auth.strip():
+        os.environ['HOSTAPI_AUTH_TOKEN'] = auth.strip()
+    except Exception:
+      pass
     
     # 如果用户已登录，验证会话权限
     if current_user:
@@ -202,10 +209,54 @@ class ConversationServer:
           message.metadata['user_id'] = current_user['user_id']
       except Exception:
         pass
+    else:
+      # 未携带认证时，尝试从会话中回填用户ID，保证后续链路使用正确用户
+      try:
+        conversation_id = message.metadata.get('conversation_id') if message.metadata else None
+        if conversation_id:
+          conversation = self.manager.get_conversation(conversation_id)
+          if conversation and conversation.metadata:
+            conv_user_id = conversation.metadata.get('user_id')
+            if conv_user_id:
+              message.metadata = message.metadata or {}
+              message.metadata['user_id'] = conv_user_id
+      except Exception:
+        pass
     
     message = self.manager.sanitize_message(message)
-    t = threading.Thread(target=lambda: asyncio.run(self.manager.process_message(message)))
-    t.start()
+    task = asyncio.create_task(self.manager.process_message(message))
+    def _done_cb(t):
+      try:
+        exc = t.exception()
+      except Exception:
+        exc = None
+      if exc:
+        import uuid
+        logger.error(f"process_message error: {exc}")
+        try:
+          conv_id = message.metadata.get('conversation_id') if message.metadata else None
+          conv = self.manager.get_conversation(conv_id)
+          if conv:
+            from A2AServer.common.A2Atypes import Message as AMsg, TextPart as AText
+            err_msg = AMsg(
+              role='agent',
+              parts=[AText(text=f"服务暂时不可用：{str(exc)}")],
+              metadata={
+                'conversation_id': conv_id,
+                'last_message_id': message.metadata.get('message_id') if message.metadata else None,
+                'message_id': str(uuid.uuid4()),
+              },
+            )
+            conv.messages.append(err_msg)
+        except Exception:
+          pass
+        try:
+          mid = message.metadata.get('message_id') if message.metadata else None
+          if mid in self.manager._pending_message_ids:
+            self.manager._pending_message_ids.remove(mid)
+        except Exception:
+          pass
+    task.add_done_callback(_done_cb)
     return SendMessageResponse(result=MessageInfo(
         message_id=message.metadata['message_id'],
         conversation_id=message.metadata['conversation_id'] if 'conversation_id' in message.metadata else '',
