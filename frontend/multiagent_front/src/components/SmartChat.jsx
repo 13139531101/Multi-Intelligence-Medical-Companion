@@ -49,6 +49,9 @@ const SmartChat = () => {
     timeout: 30000,
     headers: {
       'Content-Type': 'application/json',
+      ...(typeof window !== 'undefined' && window.localStorage && window.localStorage.getItem('access_token')
+        ? { Authorization: `Bearer ${window.localStorage.getItem('access_token')}` }
+        : {}),
     },
   });
 

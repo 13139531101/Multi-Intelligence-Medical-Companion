@@ -26,7 +26,7 @@ import {
   Medication as MedicationIcon,
   Assignment as AssignmentIcon,
 } from "@mui/icons-material";
-import { smartChat } from "../api/healthApi";
+import { smartChat } from "../api/api";
 import { useAuth } from "../contexts/AuthContext";
 import { useNavigate } from "react-router-dom";
 

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { smartChat } from '../api/healthApi';
+import { smartChat } from '../api/api';
 
 const TestChat = () => {
   const [message, setMessage] = useState('');

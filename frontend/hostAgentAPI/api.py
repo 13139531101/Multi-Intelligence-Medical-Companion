@@ -4,10 +4,11 @@ import asyncio
 import os
 import sys
 from fastapi import FastAPI, APIRouter, Response, Request, UploadFile, File, Depends
-from typing import List
+from typing import List, Optional, Dict, Any
 from fastapi.middleware.cors import CORSMiddleware
 from server import ConversationServer
 from auth import router as auth_router, get_current_user
+from auth_middleware import get_current_user_optional
 from dotenv import load_dotenv
 import json
 from datetime import date, datetime
@@ -1247,16 +1248,18 @@ def _save_consultations(data: dict) -> None:
         logging.error(f"保存咨询数据失败: {e}")
 
 @app.get("/consultations")
-async def list_consultations():
+async def list_consultations(user: dict = Depends(get_current_user)):
+    uid = _get_user_id(user)
     data = _load_consultations()
-    items = data.get("consultations", [])
-    # 按创建时间倒序
+    all_items = data.get("consultations", [])
+    items = [it for it in all_items if str(it.get("userId") or "") == uid]
     items.sort(key=lambda x: x.get("createdAt", ""), reverse=True)
     return items
 
 @app.post("/consultations")
-async def create_consultation(request: Request):
+async def create_consultation(request: Request, user: dict = Depends(get_current_user)):
     payload = await request.json()
+    uid = _get_user_id(user)
     title = payload.get("title", "新咨询")
     ctype = payload.get("type", "general")
     now = datetime.utcnow().isoformat()
@@ -1264,6 +1267,7 @@ async def create_consultation(request: Request):
         "id": uuid.uuid4().hex,
         "title": title,
         "type": ctype,
+        "userId": uid,
         "createdAt": now,
         "messages": []
     }
@@ -1273,16 +1277,18 @@ async def create_consultation(request: Request):
     return item
 
 @app.get("/consultations/{cid}/messages")
-async def get_consultation_messages(cid: str):
+async def get_consultation_messages(cid: str, user: dict = Depends(get_current_user)):
+    uid = _get_user_id(user)
     data = _load_consultations()
     for c in data.get("consultations", []):
-        if c.get("id") == cid:
+        if c.get("id") == cid and str(c.get("userId") or "") == uid:
             return c.get("messages", [])
     return []
 
 @app.post("/consultations/{cid}/messages")
-async def send_consultation_message(cid: str, request: Request):
+async def send_consultation_message(cid: str, request: Request, user: dict = Depends(get_current_user)):
     body = await request.json()
+    uid = _get_user_id(user)
     content = body.get("content", "")
     files = body.get("files", [])
     now = datetime.utcnow().isoformat()
@@ -1290,7 +1296,7 @@ async def send_consultation_message(cid: str, request: Request):
     # 查找咨询
     target = None
     for c in data.get("consultations", []):
-        if c.get("id") == cid:
+        if c.get("id") == cid and str(c.get("userId") or "") == uid:
             target = c
             break
     if target is None:
@@ -1299,6 +1305,7 @@ async def send_consultation_message(cid: str, request: Request):
             "id": cid,
             "title": "快速咨询",
             "type": "general",
+            "userId": uid,
             "createdAt": now,
             "messages": []
         }
@@ -1900,7 +1907,7 @@ async def ping():
 
 # 智能路由接口 - 统一API入口
 @app.post("/smart_chat")
-async def smart_chat(request: Request):
+async def smart_chat(request: Request, current_user: Optional[Dict[str, Any]] = Depends(get_current_user_optional)):
     """
     智能路由接口：根据用户输入自动选择合适的智能体
     """
@@ -1957,6 +1964,26 @@ async def smart_chat(request: Request):
                 'selected_agent': selected_agent
             }
         )
+
+        # 注入当前用户ID（优先使用登录用户，其次环境变量兜底）
+        try:
+            user_id = None
+            if current_user and isinstance(current_user, dict):
+                user_id = str(current_user.get('user_id') or current_user.get('id') or '').strip()
+            if not user_id:
+                env_uid = os.getenv('A2A_CURRENT_USER_ID') or os.getenv('USER_ID') or os.getenv('FRONTEND_USER_ID')
+                user_id = str(env_uid or '').strip()
+            if user_id:
+                message.metadata['user_id'] = user_id
+                os.environ['A2A_CURRENT_USER_ID'] = user_id
+                os.environ['USER_ID'] = user_id
+                if 'DEFAULT_USER_ID' in os.environ:
+                    try:
+                        os.environ.pop('DEFAULT_USER_ID', None)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
         
         # 发送消息到智能体
         message = agent_server.manager.sanitize_message(message)

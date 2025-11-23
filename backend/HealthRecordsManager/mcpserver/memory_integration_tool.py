@@ -45,6 +45,14 @@ except ImportError as e:
     logging.error(f"无法导入记忆系统: {e}")
     sys.exit(1)
 
+try:
+    from HealthRecordsManager.database_config import get_db_manager as get_hr_db_manager
+except Exception:
+    try:
+        from database_config import get_db_manager as get_hr_db_manager
+    except Exception:
+        get_hr_db_manager = None
+
 # 配置日志
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("health_records_memory")
@@ -69,9 +77,10 @@ def _to_datetime(v):
     return None
 
 def _resolve_user_id(v: Optional[str]) -> str:
-    s = str(v or '').strip()
-    if s and s.lower() != 'default_user':
-        return s
+    s = str(v or '').strip().lower()
+    # 将占位值统一解析为当前环境用户
+    if s and s not in ('default_user', 'current_user', 'current', 'me', 'self', 'user'):
+        return str(v).strip()
     env_uid = (
         os.environ.get('A2A_CURRENT_USER_ID')
         or os.environ.get('USER_ID')
@@ -486,52 +495,66 @@ async def _search_health_memories(arguments: dict) -> list[types.TextContent]:
     )]
 
 async def _get_health_history(arguments: dict) -> list[types.TextContent]:
-    """获取用户健康历史记录"""
     user_id = _resolve_user_id(arguments.get("user_id"))
     record_type = arguments.get("record_type")
     days = arguments.get("days", 365)
     include_trends = arguments.get("include_trends", False)
-    
-    # 获取时间范围内的记忆
+
     start_time = datetime.now() - timedelta(days=days)
     end_time = datetime.now()
-    
-    memories = memory_system.search_by_time_range(
-        start_time=start_time,
-        end_time=end_time,
-        agent_id=HEALTH_RECORDS_AGENT_ID,
-        user_id=user_id,
-        memory_types=['long_term', 'working'],
-        limit=100
-    )
-    
-    # 按记录类型过滤
-    if record_type:
-        memories = [
-            m for m in memories 
-            if record_type in m.get('tags', [])
-        ]
-    
-    def _sort_key(x):
-        v = x.get('created_at')
-        dt = _to_datetime(v)
-        return dt or datetime.min
-    memories.sort(key=_sort_key, reverse=True)
-    
+
+    records: list[dict] = []
+    if get_hr_db_manager is not None:
+        try:
+            dbm = get_hr_db_manager()
+            params: list = [user_id, start_time, end_time]
+            where = "user_id = %s AND created_at >= %s AND created_at <= %s"
+            if record_type:
+                where += " AND record_type = %s"
+                params.append(record_type)
+            query = f"""
+                SELECT id, record_type, title, summary, content, tags, metadata, created_at
+                FROM health_records
+                WHERE {where}
+                ORDER BY created_at DESC
+                LIMIT 100
+            """
+            rows = dbm.execute_query(query, tuple(params))
+            for r in rows:
+                rec = {
+                    "id": str(r.get("id")),
+                    "record_type": r.get("record_type"),
+                    "title": r.get("title"),
+                    "summary": r.get("summary"),
+                    "content": r.get("content"),
+                    "tags": r.get("tags") if isinstance(r.get("tags"), list) else r.get("tags"),
+                    "metadata": r.get("metadata") if isinstance(r.get("metadata"), dict) else r.get("metadata"),
+                    "created_at": r.get("created_at"),
+                }
+                records.append(rec)
+        except Exception as e:
+            logger.error(f"查询健康档案失败: {e}")
+
     result = {
         "success": True,
         "user_id": user_id,
         "time_range_days": days,
         "record_type": record_type,
-        "total_records": len(memories),
-        "records": memories
+        "total_records": len(records),
+        "records": records,
     }
-    
-    # 如果需要趋势分析
-    if include_trends and memories:
-        trends = _analyze_health_trends(memories)
-        result["trends"] = trends
-    
+
+    if include_trends:
+        try:
+            patterns = memory_system.analyze_memory_patterns(
+                agent_id=HEALTH_RECORDS_AGENT_ID,
+                user_id=user_id,
+                days=days,
+            )
+            result["trends"] = patterns
+        except Exception as e:
+            logger.error(f"趋势分析失败: {e}")
+
     return [types.TextContent(
         type="text",
         text=json.dumps(result, ensure_ascii=False, indent=2, default=str)

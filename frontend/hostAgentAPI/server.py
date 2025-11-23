@@ -184,6 +184,17 @@ class ConversationServer:
           os.environ.pop('DEFAULT_USER_ID', None)
       except Exception:
         pass
+    else:
+      # 无登录状态下的兜底：从环境变量注入用户ID，避免智能体向前端索取用户ID
+      try:
+        env_uid = os.environ.get('A2A_CURRENT_USER_ID') or os.environ.get('USER_ID') or os.environ.get('FRONTEND_USER_ID')
+        if env_uid:
+          c.metadata = c.metadata or {}
+          c.metadata['user_id'] = str(env_uid)
+          os.environ['A2A_CURRENT_USER_ID'] = str(env_uid)
+          os.environ['USER_ID'] = str(env_uid)
+      except Exception:
+        pass
     return CreateConversationResponse(result=c)
 
   async def _send_message(self, request: Request, current_user: Optional[Dict[str, Any]] = Depends(get_current_user_optional)):
@@ -223,17 +234,29 @@ class ConversationServer:
           pass
       except Exception:
         pass
+        message.metadata = message.metadata or {}
+        if 'user_id' not in message.metadata:
+          message.metadata['user_id'] = current_user['user_id']
+        try:
+          os.environ['A2A_CURRENT_USER_ID'] = str(current_user['user_id'])
+          os.environ['USER_ID'] = str(current_user['user_id'])
+          if 'DEFAULT_USER_ID' in os.environ:
+            os.environ.pop('DEFAULT_USER_ID', None)
+        except Exception:
+          pass
     else:
-      # 未携带认证时，尝试从会话中回填用户ID，保证后续链路使用正确用户
       try:
-        conversation_id = message.metadata.get('conversation_id') if message.metadata else None
-        if conversation_id:
-          conversation = self.manager.get_conversation(conversation_id)
-          if conversation and conversation.metadata:
-            conv_user_id = conversation.metadata.get('user_id')
-            if conv_user_id:
-              message.metadata = message.metadata or {}
-              message.metadata['user_id'] = conv_user_id
+        env_uid = os.environ.get('A2A_CURRENT_USER_ID') or os.environ.get('USER_ID') or os.environ.get('FRONTEND_USER_ID')
+        if env_uid:
+          message.metadata = message.metadata or {}
+          if 'user_id' not in message.metadata:
+            message.metadata['user_id'] = str(env_uid)
+          os.environ['A2A_CURRENT_USER_ID'] = str(env_uid)
+          os.environ['USER_ID'] = str(env_uid)
+        elif message.metadata and message.metadata.get('conversation_id'):
+          conversation = self.manager.get_conversation(message.metadata.get('conversation_id'))
+          if conversation and conversation.metadata and conversation.metadata.get('user_id'):
+            message.metadata['user_id'] = conversation.metadata.get('user_id')
       except Exception:
         pass
     

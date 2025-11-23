@@ -321,6 +321,7 @@ const HealthRecords = () => {
     recent: filteredRecords.filter(r => dayjs().diff(dayjs(r.date), 'days') <= 30),
     older: filteredRecords.filter(r => dayjs().diff(dayjs(r.date), 'days') > 30)
   };
+  const displayCount = tabValue === 0 ? groupedRecords.recent.length : groupedRecords.older.length;
 
   return (
     <LocalizationProvider dateAdapter={AdapterDayjs}>
@@ -376,7 +377,7 @@ const HealthRecords = () => {
                 </Grid>
                 <Grid item xs={12} md={3}>
                   <Typography variant="body2" color="text.secondary">
-                    共 {filteredRecords.length} 条记录
+                    共 {displayCount} 条记录
                   </Typography>
                 </Grid>
               </Grid>

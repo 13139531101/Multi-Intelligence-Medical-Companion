@@ -151,9 +151,13 @@ export const sendTaskNonStreaming = async (agentEndpointUrl, payload) => {
     id: uuidv4(),
   };
 
+  const token = (typeof window !== 'undefined' && window.localStorage) ? window.localStorage.getItem('token') : null;
   const response = await fetch(agentEndpointUrl, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+    },
     body: JSON.stringify(requestBody),
   });
 
@@ -174,12 +178,14 @@ export const sendTaskStreaming = (agentEndpointUrl, payload, onMessage, onError,
   };
 
   const ctrl = new AbortController();
+  const token = (typeof window !== 'undefined' && window.localStorage) ? window.localStorage.getItem('token') : null;
 
   fetchEventSource(agentEndpointUrl, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'Accept': 'text/event-stream',
+      ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
     },
     body: JSON.stringify(requestBody),
     signal: ctrl.signal,
@@ -227,6 +233,12 @@ async function request(endpoint, options = {}) {
         method: options.method || 'GET',
         headers: {
             'Content-Type': 'application/json',
+            ...(() => {
+                try {
+                    const token = (typeof window !== 'undefined' && window.localStorage) ? window.localStorage.getItem('token') : null;
+                    return token ? { 'Authorization': `Bearer ${token}` } : {};
+                } catch (_) { return {}; }
+            })(),
             ...options.headers,
         },
         ...options,
@@ -312,10 +324,12 @@ export const queryEvents = async (conversationId) => {
 // 智能路由相关 API
 export const smartChat = async (message) => {
   try {
+    const token = (typeof window !== 'undefined' && window.localStorage) ? window.localStorage.getItem('token') : null;
     const response = await fetch(`${SMART_CHAT_URL}/smart_chat`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
       },
       body: JSON.stringify({ message })
     });
