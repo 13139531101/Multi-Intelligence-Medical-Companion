@@ -22,6 +22,27 @@ try:
 except Exception:
     pass
 
+# 尝试全局导入健康档案API模块，以便各端点使用（带文件路径兜底）
+health_api = None
+try:
+    backend_path = os.environ.get("BACKEND_DIR") or os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "backend"))
+    if backend_path not in sys.path:
+        sys.path.insert(0, backend_path)
+    import importlib
+    try:
+        health_api = importlib.import_module("health_records_api")
+    except Exception:
+        # 兜底：按文件路径加载模块，避免包路径问题
+        import importlib.util
+        module_path = os.path.join(backend_path, "health_records_api.py")
+        spec = importlib.util.spec_from_file_location("health_records_api", module_path)
+        if spec and spec.loader:
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            health_api = mod
+except Exception as e:
+    print(f"Warning: Failed to import health_records_api globally: {e}")
+
 logfile = "api.log"
 logging.basicConfig(
     level=logging.INFO,
@@ -65,12 +86,21 @@ async def _host_api_startup_warmup():
             return
         # 尝试导入后端的健康档案API模块以访问其工具与服务
         try:
-            sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "backend")))
+            sys.path.insert(0, os.environ.get("BACKEND_DIR") or os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "backend")))
         except Exception:
             pass
         try:
             import importlib
-            health_api = importlib.import_module("health_records_api")
+            try:
+                health_api = importlib.import_module("health_records_api")
+            except Exception:
+                import importlib.util
+                module_path = os.path.join(os.environ.get("BACKEND_DIR") or os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "backend")), "health_records_api.py")
+                spec = importlib.util.spec_from_file_location("health_records_api", module_path)
+                if spec and spec.loader:
+                    mod = importlib.util.module_from_spec(spec)
+                    spec.loader.exec_module(mod)
+                    health_api = mod
         except Exception as e:
             logging.warning(f"导入后端健康档案模块失败，跳过预热: {e}")
             return
@@ -151,10 +181,19 @@ agent_server = ConversationServer(router)
 # === 集成健康档案 API（方案B：将后端 API 挂载到 hostAgentAPI）===
 # 为了在同一进程内复用后端实现，这里将请求转发到 backend/health_records_api.py 中已实现的处理函数
 try:
-    backend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "backend"))
+    backend_dir = os.environ.get("BACKEND_DIR") or os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "backend"))
     if backend_dir not in sys.path:
         sys.path.append(backend_dir)
-    import health_records_api as health_api  # noqa: E402
+    try:
+        import health_records_api as health_api  # noqa: E402
+    except Exception:
+        import importlib.util
+        module_path = os.path.join(backend_dir, "health_records_api.py")
+        spec = importlib.util.spec_from_file_location("health_records_api", module_path)
+        if spec and spec.loader:
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            health_api = mod
 
     health_router = APIRouter()
 
@@ -389,7 +428,11 @@ try:
             except Exception:
                 return 0.0
         ocr_info = metadata.get("ocr_info") or {}
-        conf = ocr_info.get("confidence")
+        conf_raw = ocr_info.get("confidence")
+        try:
+            conf_val = float(conf_raw) if conf_raw is not None else 0.8
+        except Exception:
+            conf_val = 0.8
         cn_ratio = _ch_ratio(summary_src)
         # 默认长度 400；检验报告/处方放宽到 1200
         tval = back_type.value if hasattr(back_type, "value") else back_type
@@ -397,19 +440,14 @@ try:
             max_len = 3000
         else:
             max_len = 400
-        # 若置信度低或中文占比低，收紧到 200，并给出友好提示
         try:
-            if (isinstance(conf, (int, float)) and conf < 0.5) or (cn_ratio < 0.2 and len(summary_src) >= 40):
+            if (conf_val < 0.3) and (cn_ratio < 0.2) and (len(summary_src) < 100):
                 max_len = 200
         except Exception:
             pass
         summary = _shorten(summary_src, max_len=max_len)
-        # 当识别质量较差时提供友好回退文案
-        try:
-            if max_len == 200:
-                summary = "识别结果不佳，请点击预览原文"
-        except Exception:
-            pass
+        if not summary and isinstance(summary_src_raw, str) and summary_src_raw.strip():
+            summary = summary_src_raw.strip()
         record_date = get("record_date")
         # pydantic datetime/date 直接序列化
         return {
@@ -1027,6 +1065,84 @@ async def create_medication_reminder(request: Request, user: dict = Depends(get_
             logging.error(f"创建用药提醒失败: {e}")
             return {"success": False, "message": f"创建用药提醒失败: {str(e)}"}
 
+@meds_router.get("/api/consultations/history")
+async def get_consultation_history_api(limit: int = 10, user: dict = Depends(get_current_user)):
+    try:
+        user_id = str(user.get("id") or user.get("user_id") or user.get("uid"))
+        
+        # 尝试动态加载 HealthAdvisor 的 database_tool
+        # 注意：这里需要确保路径正确，或者直接连接数据库查询
+        # 为了简单起见，我们这里直接使用 SQL 查询，复用已有的 DB 连接机制（如果有的话）
+        # 或者加载 database_tool.py
+        
+        # 方案：直接查询 PostgreSQL 数据库
+        # 我们假设数据库配置与 HRM 相同或兼容，因为都在同一个 PostgreSQL 实例中
+        
+        try:
+            db_manager = get_db_manager()
+            if not db_manager:
+                raise Exception("DB Manager not available")
+                
+            query = """
+                SELECT consultation_id, question, answer, tags, created_at
+                FROM consultations
+                WHERE user_id = %s
+                ORDER BY created_at DESC
+                LIMIT %s
+            """
+            
+            # 使用 HRM 的 db_manager 执行查询 (它应该能访问同一个库)
+            # 注意：execute_query 返回的是 dict list (因为 row_factory=dict_row)
+            results = db_manager.execute_query(query, (user_id, limit))
+            
+            return {
+                "success": True,
+                "history": results
+            }
+            
+        except Exception as db_err:
+             logging.error(f"直接查询数据库失败: {db_err}, 尝试回退方案...")
+             # 如果直接查询失败，可以尝试其他方式，或者直接返回空
+             return {"success": False, "message": f"查询失败: {str(db_err)}", "history": []}
+
+    except Exception as e:
+        logging.error(f"获取咨询历史失败: {e}")
+        return {"success": False, "message": f"获取咨询历史失败: {str(e)}"}
+
+@meds_router.get("/api/visit-summaries/history")
+async def get_visit_summary_history_api(limit: int = 10, user: dict = Depends(get_current_user)):
+    try:
+        user_id = str(user.get("id") or user.get("user_id") or user.get("uid"))
+        
+        try:
+            db_manager = get_db_manager()
+            if not db_manager:
+                raise Exception("DB Manager not available")
+                
+            query = """
+                SELECT summary_id, visit_date, summary_content, generated_by, diagnosis, created_at
+                FROM visit_summaries
+                WHERE user_id = %s
+                ORDER BY created_at DESC
+                LIMIT %s
+            """
+            
+            results = db_manager.execute_query(query, (user_id, limit))
+            
+            return {
+                "success": True,
+                "history": results
+            }
+            
+        except Exception as db_err:
+             logging.error(f"直接查询数据库失败: {db_err}")
+             return {"success": False, "message": f"查询失败: {str(db_err)}", "history": []}
+
+    except Exception as e:
+        logging.error(f"获取就诊摘要历史失败: {e}")
+        return {"success": False, "message": f"获取就诊摘要历史失败: {str(e)}"}
+
+
 @meds_router.post("/medication-reminders/{reminder_id}/taken")
 @meds_router.post("/api/medication-reminders/{reminder_id}/taken")
 async def mark_medication_taken(reminder_id: int, taken_time: str = "", user: dict = Depends(get_current_user)):
@@ -1044,6 +1160,47 @@ async def mark_medication_taken(reminder_id: int, taken_time: str = "", user: di
         except Exception as e:
             logging.error(f"标记服药失败: {e}")
             return {"success": False, "message": f"标记服药失败: {str(e)}"}
+
+@meds_router.post("/api/medications/ocr")
+async def recognize_medication_image(file: UploadFile = File(...), user: dict = Depends(get_current_user)):
+    try:
+        content = await file.read()
+        if not content:
+            return {"success": False, "message": "文件为空"}
+        
+        # 转换为Base64
+        import base64
+        b64_content = base64.b64encode(content).decode("utf-8")
+        
+        # 调用OCR工具
+        extract_text = getattr(health_api, "extract_text_from_image", None)
+        if not extract_text:
+            return {"success": False, "message": "OCR服务不可用"}
+            
+        # extract_text_from_image 是一个 MCP 工具函数，可能直接调用或者通过 fn 调用
+        text = ""
+        try:
+            if hasattr(extract_text, "fn"):
+                text = extract_text.fn(b64_content)
+            else:
+                text = extract_text(b64_content)
+        except Exception as ocr_err:
+            logging.error(f"OCR识别出错: {ocr_err}")
+            return {"success": False, "message": f"识别失败: {str(ocr_err)}"}
+            
+        # 简单的后处理，尝试提取可能的药物名称（假设第一行是名称）
+        lines = [line.strip() for line in text.split('\n') if line.strip()]
+        drug_name = lines[0] if lines else ""
+        
+        return {
+            "success": True,
+            "text": text,
+            "drug_name": drug_name,
+            "lines": lines
+        }
+    except Exception as e:
+        logging.error(f"药物图片识别失败: {e}")
+        return {"success": False, "message": f"处理失败: {str(e)}"}
 
 app.include_router(meds_router)
 

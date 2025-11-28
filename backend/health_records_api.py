@@ -7,6 +7,7 @@ from datetime import datetime, date
 from enum import Enum
 import json
 import os
+import asyncio
 import uuid
 import hashlib
 from pathlib import Path
@@ -139,6 +140,59 @@ class HealthInsightsResponse(BaseModel):
     health_score: Optional[Dict[str, Any]] = None
     quick_tips: Optional[List[Dict[str, str]]] = None
 
+class VisitSummary(BaseModel):
+    id: int
+    user_id: str
+    summary_id: Optional[str]
+    title: Optional[str]
+    visit_date: Optional[date]
+    doctor: Optional[str]
+    hospital: Optional[str]
+    department: Optional[str]
+    chief_complaint: Optional[str]
+    symptoms: Optional[str]
+    examination: Optional[str]
+    diagnosis: Optional[str]
+    treatment: Optional[str]
+    prescription: Optional[str]
+    follow_up: Optional[str]
+    notes: Optional[str]
+    files: Optional[List[str]] = []
+    tests: Optional[List[Dict[str, Any]]] = []
+    summary_content: Optional[str]
+    generated_by: Optional[str]
+    created_at: datetime
+
+class VisitSummaryCreate(BaseModel):
+    summary_id: Optional[str] = None
+    title: Optional[str] = None
+    visit_date: Optional[date] = None
+    doctor: Optional[str] = None
+    hospital: Optional[str] = None
+    department: Optional[str] = None
+    chief_complaint: Optional[str] = None
+    symptoms: Optional[str] = None
+    examination: Optional[str] = None
+    diagnosis: Optional[str] = None
+    treatment: Optional[str] = None
+    prescription: Optional[str] = None
+    follow_up: Optional[str] = None
+    notes: Optional[str] = None
+    files: Optional[List[str]] = []
+    tests: Optional[List[Dict[str, Any]]] = []
+    summary_content: Optional[str] = None
+    generated_by: Optional[str] = None
+
+class Consultation(BaseModel):
+    id: int
+    user_id: str
+    consultation_id: Optional[str]
+    session_id: Optional[str]
+    question: Optional[str]
+    answer: Optional[str]
+    tags: Optional[List[str]]
+    created_at: datetime
+
 MODULE_DIR = Path(__file__).resolve().parent
 UPLOAD_DIR = MODULE_DIR / "uploads"
 UPLOAD_DIR.mkdir(exist_ok=True)
@@ -194,6 +248,70 @@ def init_database():
                     file_size INTEGER,
                     mime_type TEXT,
                     upload_time TIMESTAMPTZ DEFAULT now()
+                )
+                """
+            )
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS visit_summaries (
+                    id SERIAL PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    summary_id VARCHAR(64) UNIQUE,
+                    title TEXT,
+                    visit_date DATE,
+                    doctor TEXT,
+                    hospital TEXT,
+                    department TEXT,
+                    chief_complaint TEXT,
+                    symptoms TEXT,
+                    examination TEXT,
+                    diagnosis TEXT,
+                    treatment TEXT,
+                    prescription TEXT,
+                    follow_up TEXT,
+                    notes TEXT,
+                    files JSONB,
+                    tests JSONB,
+                    summary_content TEXT,
+                    generated_by VARCHAR(50),
+                    created_at TIMESTAMPTZ DEFAULT now()
+                )
+                """
+            )
+            # Add columns if they don't exist (migration for existing table)
+            alter_stmts = [
+                "ALTER TABLE visit_summaries ADD COLUMN IF NOT EXISTS title TEXT",
+                "ALTER TABLE visit_summaries ADD COLUMN IF NOT EXISTS doctor TEXT",
+                "ALTER TABLE visit_summaries ADD COLUMN IF NOT EXISTS hospital TEXT",
+                "ALTER TABLE visit_summaries ADD COLUMN IF NOT EXISTS department TEXT",
+                "ALTER TABLE visit_summaries ADD COLUMN IF NOT EXISTS chief_complaint TEXT",
+                "ALTER TABLE visit_summaries ADD COLUMN IF NOT EXISTS symptoms TEXT",
+                "ALTER TABLE visit_summaries ADD COLUMN IF NOT EXISTS examination TEXT",
+                "ALTER TABLE visit_summaries ADD COLUMN IF NOT EXISTS treatment TEXT",
+                "ALTER TABLE visit_summaries ADD COLUMN IF NOT EXISTS prescription TEXT",
+                "ALTER TABLE visit_summaries ADD COLUMN IF NOT EXISTS follow_up TEXT",
+                "ALTER TABLE visit_summaries ADD COLUMN IF NOT EXISTS notes TEXT",
+                "ALTER TABLE visit_summaries ADD COLUMN IF NOT EXISTS files JSONB",
+                "ALTER TABLE visit_summaries ADD COLUMN IF NOT EXISTS tests JSONB",
+            ]
+            for stmt in alter_stmts:
+                try:
+                    cursor.execute(stmt)
+                except Exception as e:
+                    logger.warning(f"Column migration skipped: {e}")
+                    conn.rollback() 
+            
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS consultations (
+                    id SERIAL PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    consultation_id VARCHAR(64) UNIQUE,
+                    session_id VARCHAR(64),
+                    question TEXT,
+                    answer TEXT,
+                    tags JSONB,
+                    created_at TIMESTAMPTZ DEFAULT now()
                 )
                 """
             )
@@ -293,6 +411,140 @@ def _normalize_ocr_text(raw: str | None) -> str:
         return s_strip.replace("\r", " ").strip()
     except Exception:
         return (raw or "").strip()
+
+def _generate_ai_summary(ocr_text: str, extracted: dict | None) -> str:
+    try:
+        text_clean = (ocr_text or "").strip().replace("\n", " ")
+        parts = []
+        if isinstance(extracted, dict):
+            doc_type = extracted.get("document_type") or ""
+            date = extracted.get("date") or extracted.get("record_date") or ""
+            diagnosis = extracted.get("diagnosis") or ""
+            result = extracted.get("result") or extracted.get("conclusion") or ""
+            prescription = extracted.get("prescription") or extracted.get("medications") or ""
+            tests = extracted.get("tests") or ""
+            key = extracted.get("key_findings") or extracted.get("summary") or ""
+            if doc_type:
+                parts.append(f"类型：{doc_type}")
+            if date:
+                parts.append(f"日期：{date}")
+            if key:
+                parts.append(f"要点：{str(key)[:120]}")
+            if diagnosis:
+                parts.append(f"诊断：{str(diagnosis)[:120]}")
+            if result:
+                parts.append(f"结果：{str(result)[:120]}")
+            if prescription:
+                parts.append(f"用药：{str(prescription)[:120]}")
+            if tests:
+                parts.append(f"检查：{str(tests)[:120]}")
+
+        # 优先使用OCR正文；若OCR文本足够（>=50字），直接截断为摘要
+        if len(text_clean) >= 50:
+            summary = text_clean[:300]
+        else:
+            # 若仅有少量元信息，尝试组合元信息 + OCR片段
+            info = "；".join([p for p in parts if p])
+            if info and text_clean:
+                remain = 300 - len(info)
+                summary = (info + "；" + text_clean[:max(remain, 0)])
+            else:
+                summary = info or text_clean
+            summary = summary[:300]
+
+        return summary
+    except Exception:
+        t = (ocr_text or "")
+        t = t.strip().replace("\n", " ")
+        return t[:300]
+
+async def _maybe_llm_summary(ocr_text: str, extracted: dict | None) -> str | None:
+    try:
+        use_llm = str(os.getenv("USE_LLM_SUMMARY", "0")).lower() in ("1", "true", "yes")
+        logger.info(f"LLM_SUMMARY_FLAG={use_llm}")
+        if not use_llm:
+            logger.info("LLM 摘要未开启，跳过")
+            return None
+        try:
+            from openai import AsyncOpenAI
+            logger.info("OpenAI 客户端导入成功")
+        except Exception as e:
+            logger.warning(f"OpenAI 客户端导入失败: {e}")
+            return None
+
+        api_key = os.getenv("LLM_API_KEY") or os.getenv("DEEPSEEK_API_KEY") or os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            logger.warning("LLM 密钥缺失，跳过")
+            return None
+        base_url = os.getenv("LLM_BASE_URL") or os.getenv("OPENAI_BASE_URL") or "https://api.deepseek.com"
+        model = os.getenv("LLM_MODEL") or os.getenv("DEEPSEEK_MODEL") or "deepseek-chat"
+        logger.info(f"LLM 配置 base_url={base_url}, model={model}")
+
+        client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+        text_clean = (ocr_text or "").strip()
+        extracted_str = ""
+        if isinstance(extracted, dict) and extracted:
+            try:
+                import json
+                extracted_str = json.dumps(extracted, ensure_ascii=False)
+            except Exception:
+                extracted_str = str(extracted)
+
+        sys_prompt = (
+            "你是医疗文档摘要助手。仅依据输入文本生成中文摘要，禁止编造、推断或引用外部知识。"
+            "必须完全从提供的内容中摘取信息，不得修改数值、单位或术语。缺失的字段不要补充；不存在的部分不要输出。"
+            "输出不超过300字，面向医生。"
+        )
+        has_rx = False
+        try:
+            if isinstance(extracted, dict):
+                for k in ("prescription", "medication", "medications", "用药", "处方"):
+                    v = extracted.get(k)
+                    if v:
+                        has_rx = True
+                        break
+            if not has_rx and text_clean:
+                rx_keywords = ["处方", "用药", "医嘱", "药品", "药方"]
+                has_rx = any(kw in text_clean for kw in rx_keywords)
+        except Exception:
+            has_rx = False
+        sections = ["类型", "日期", "要点", "诊断", "检查"]
+        if has_rx:
+            sections.append("用药")
+        sections_str = "、".join(sections)
+        user_prompt = (
+            f"【结构化信息】\n{extracted_str}\n\n"
+            f"【OCR全文】\n{text_clean}\n\n"
+            f"任务：在300字内概述真实信息，按‘{sections_str}’组织。"
+            "要求：只使用上述文本中的内容；禁止添加任何未出现的信息；禁止建议、风险推断或延伸结论；"
+            "不要输出‘无用药’或类似占位内容。"
+        )
+
+        try:
+            resp = await client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": sys_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=0.2,
+                max_tokens=400,
+            )
+            text = resp.choices[0].message.content or ""
+        except Exception as e:
+            logger.error(f"LLM 摘要请求失败: {e}")
+            return None
+
+        text = (text or "").strip().replace("\n", " ")
+        if not text:
+            return None
+        if len(text) > 300:
+            text = text[:300]
+        logger.info(f"LLM 摘要生成成功，长度={len(text)}")
+        return text
+    except Exception as e:
+        logger.error(f"LLM 摘要流程异常: {e}")
+        return None
 
 def row_to_health_record(row) -> HealthRecord:
     rid = str(row["id"]) if "id" in row else str(row[0])
@@ -412,6 +664,9 @@ def _save_to_hrm(user_id: str | None, record_type: str, title: str, content: str
     if not HRM_SAVE_RECORD:
         return
     try:
+        enabled = str(os.getenv("HRM_DOUBLEWRITE_ENABLED", "0")).lower() in ("1", "true", "yes")
+        if not enabled:
+            return
         # 空内容不进行HRM入库，避免生成空记录
         if content is None or (isinstance(content, str) and content.strip() == ""):
             return
@@ -476,6 +731,389 @@ async def startup_event():
 async def get_api_status():
     """检查API状态"""
     return {"status": "healthy", "timestamp": datetime.now()}
+
+@app.get("/api/visit-summaries/history", response_model=List[VisitSummary])
+async def get_visit_summaries(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(20, ge=1, le=100),
+    user_id: Optional[str] = Query(None),
+    request: Request = None
+):
+    """获取就诊摘要历史"""
+    try:
+        uid = _resolve_user_id(request, user_id)
+        if not uid:
+             # 如果没有用户ID，返回空列表而不是报错，或者可以抛出401
+             return []
+        
+        with get_db_connection() as conn:
+            with conn.cursor(row_factory=dict_row) as cursor:
+                cursor.execute(
+                    """
+                    SELECT * FROM visit_summaries 
+                    WHERE user_id = %s 
+                    ORDER BY visit_date DESC NULLS LAST, created_at DESC 
+                    LIMIT %s OFFSET %s
+                    """,
+                    (uid, limit, skip)
+                )
+                rows = cursor.fetchall()
+                results = []
+                for row in rows:
+                    # Handle JSONB fields
+                    for field in ['files', 'tests']:
+                        if isinstance(row.get(field), str):
+                            try:
+                                row[field] = json.loads(row[field])
+                            except:
+                                row[field] = []
+                        elif row.get(field) is None:
+                            row[field] = []
+                    results.append(VisitSummary(**row))
+                return results
+    except Exception as e:
+        logger.error(f"获取就诊摘要失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/visit-summaries/create", response_model=VisitSummary)
+async def create_visit_summary(summary: VisitSummaryCreate, user_id: Optional[str] = Query(None), request: Request = None):
+    """创建新的就诊摘要"""
+    try:
+        uid = _resolve_user_id(request, user_id)
+        if not uid:
+             raise HTTPException(status_code=401, detail="未认证用户")
+
+        with get_db_connection() as conn:
+            with conn.cursor(row_factory=dict_row) as cursor:
+                # 检查是否存在同名摘要
+                if summary.summary_id:
+                     cursor.execute("SELECT id FROM visit_summaries WHERE summary_id = %s", (summary.summary_id,))
+                     if cursor.fetchone():
+                         raise HTTPException(status_code=400, detail="摘要ID已存在")
+                
+                new_summary_id = summary.summary_id or generate_id()
+                now = datetime.now()
+
+                cursor.execute(
+                    """
+                    INSERT INTO visit_summaries (
+                        user_id, summary_id, title, visit_date, doctor, hospital, department,
+                        chief_complaint, symptoms, examination, diagnosis, treatment,
+                        prescription, follow_up, notes, files, tests, summary_content,
+                        generated_by, created_at
+                    ) VALUES (
+                        %s, %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s, %s,
+                        %s, %s
+                    ) RETURNING id
+                    """,
+                    (
+                        uid, new_summary_id, summary.title, summary.visit_date, summary.doctor, summary.hospital, summary.department,
+                        summary.chief_complaint, summary.symptoms, summary.examination, summary.diagnosis, summary.treatment,
+                        summary.prescription, summary.follow_up, summary.notes, Json(summary.files), Json(summary.tests), summary.summary_content,
+                        summary.generated_by, now
+                    )
+                )
+                new_id = cursor.fetchone()['id']
+                conn.commit()
+
+                # Fetch back the created record
+                cursor.execute("SELECT * FROM visit_summaries WHERE id = %s", (new_id,))
+                row = cursor.fetchone()
+                
+                # Handle JSONB fields
+                for field in ['files', 'tests']:
+                    if isinstance(row.get(field), str):
+                        try:
+                            row[field] = json.loads(row[field])
+                        except:
+                            row[field] = []
+                    elif row.get(field) is None:
+                        row[field] = []
+                
+                return VisitSummary(**row)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"创建就诊摘要失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/consultations/history", response_model=List[Consultation])
+async def get_consultation_history(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(20, ge=1, le=100),
+    user_id: Optional[str] = Query(None),
+    request: Request = None
+):
+    """获取健康咨询历史"""
+    try:
+        uid = _resolve_user_id(request, user_id)
+        if not uid:
+            return []
+            
+        with get_db_connection() as conn:
+            with conn.cursor(row_factory=dict_row) as cursor:
+                cursor.execute(
+                    """
+                    SELECT * FROM consultations 
+                    WHERE user_id = %s 
+                    ORDER BY created_at DESC 
+                    LIMIT %s OFFSET %s
+                    """,
+                    (uid, limit, skip)
+                )
+                rows = cursor.fetchall()
+                # Handle JSONB tags field
+                results = []
+                for row in rows:
+                    if isinstance(row.get('tags'), str):
+                        try:
+                            row['tags'] = json.loads(row['tags'])
+                        except:
+                            row['tags'] = []
+                    elif row.get('tags') is None:
+                         row['tags'] = []
+                    results.append(Consultation(**row))
+                return results
+    except Exception as e:
+        logger.error(f"获取咨询历史失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.put("/api/visit-summaries/update/{summary_id}", response_model=VisitSummary)
+async def update_visit_summary(
+    summary_id: int, 
+    summary: VisitSummaryCreate, 
+    user_id: Optional[str] = Query(None), 
+    request: Request = None
+):
+    """更新就诊摘要"""
+    try:
+        uid = _resolve_user_id(request, user_id)
+        if not uid:
+             raise HTTPException(status_code=401, detail="未认证用户")
+
+        with get_db_connection() as conn:
+            with conn.cursor(row_factory=dict_row) as cursor:
+                # 检查是否存在
+                cursor.execute("SELECT * FROM visit_summaries WHERE id = %s AND user_id = %s", (summary_id, uid))
+                existing = cursor.fetchone()
+                if not existing:
+                    raise HTTPException(status_code=404, detail="就诊摘要不存在或无权修改")
+                
+                now = datetime.now()
+                update_fields = []
+                params = []
+
+                if summary.title is not None:
+                    update_fields.append("title = %s")
+                    params.append(summary.title)
+                if summary.visit_date is not None:
+                    update_fields.append("visit_date = %s")
+                    params.append(summary.visit_date)
+                if summary.doctor is not None:
+                    update_fields.append("doctor = %s")
+                    params.append(summary.doctor)
+                if summary.hospital is not None:
+                    update_fields.append("hospital = %s")
+                    params.append(summary.hospital)
+                if summary.department is not None:
+                    update_fields.append("department = %s")
+                    params.append(summary.department)
+                if summary.chief_complaint is not None:
+                    update_fields.append("chief_complaint = %s")
+                    params.append(summary.chief_complaint)
+                if summary.symptoms is not None:
+                    update_fields.append("symptoms = %s")
+                    params.append(summary.symptoms)
+                if summary.examination is not None:
+                    update_fields.append("examination = %s")
+                    params.append(summary.examination)
+                if summary.diagnosis is not None:
+                    update_fields.append("diagnosis = %s")
+                    params.append(summary.diagnosis)
+                if summary.treatment is not None:
+                    update_fields.append("treatment = %s")
+                    params.append(summary.treatment)
+                if summary.prescription is not None:
+                    update_fields.append("prescription = %s")
+                    params.append(summary.prescription)
+                if summary.follow_up is not None:
+                    update_fields.append("follow_up = %s")
+                    params.append(summary.follow_up)
+                if summary.notes is not None:
+                    update_fields.append("notes = %s")
+                    params.append(summary.notes)
+                if summary.files is not None:
+                    update_fields.append("files = %s")
+                    params.append(Json(summary.files))
+                if summary.tests is not None:
+                    update_fields.append("tests = %s")
+                    params.append(Json(summary.tests))
+                if summary.summary_content is not None:
+                    update_fields.append("summary_content = %s")
+                    params.append(summary.summary_content)
+
+                if not update_fields:
+                    # 没有要更新的字段，直接返回原记录
+                    # Handle JSONB fields for return
+                    for field in ['files', 'tests']:
+                        if isinstance(existing.get(field), str):
+                            try:
+                                existing[field] = json.loads(existing[field])
+                            except:
+                                existing[field] = []
+                        elif existing.get(field) is None:
+                            existing[field] = []
+                    return VisitSummary(**existing)
+
+                query = f"UPDATE visit_summaries SET {', '.join(update_fields)} WHERE id = %s RETURNING *"
+                params.append(summary_id)
+                
+                cursor.execute(query, tuple(params))
+                row = cursor.fetchone()
+                conn.commit()
+                
+                # Handle JSONB fields
+                for field in ['files', 'tests']:
+                    if isinstance(row.get(field), str):
+                        try:
+                            row[field] = json.loads(row[field])
+                        except:
+                            row[field] = []
+                    elif row.get(field) is None:
+                        row[field] = []
+                
+                return VisitSummary(**row)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"更新就诊摘要失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/api/visit-summaries/delete/{summary_id}")
+async def delete_visit_summary(
+    summary_id: int, 
+    user_id: Optional[str] = Query(None), 
+    request: Request = None
+):
+    """删除就诊摘要"""
+    try:
+        uid = _resolve_user_id(request, user_id)
+        if not uid:
+             raise HTTPException(status_code=401, detail="未认证用户")
+
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("DELETE FROM visit_summaries WHERE id = %s AND user_id = %s RETURNING id", (summary_id, uid))
+                deleted = cursor.fetchone()
+                if not deleted:
+                    raise HTTPException(status_code=404, detail="就诊摘要不存在或无权删除")
+                conn.commit()
+                return {"message": "删除成功", "id": summary_id}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"删除就诊摘要失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+class ConsultationCreate(BaseModel):
+    question: str
+    answer: Optional[str] = None
+    consultation_id: Optional[str] = None
+    session_id: Optional[str] = None
+    tags: Optional[List[str]] = []
+
+@app.post("/api/consultations/create", response_model=Consultation)
+async def create_consultation(
+    consultation: ConsultationCreate, 
+    user_id: Optional[str] = Query(None), 
+    request: Request = None
+):
+    """创建新的咨询记录"""
+    try:
+        uid = _resolve_user_id(request, user_id)
+        if not uid:
+             raise HTTPException(status_code=401, detail="未认证用户")
+
+        with get_db_connection() as conn:
+            with conn.cursor(row_factory=dict_row) as cursor:
+                # 检查是否存在同名ID (如果提供了)
+                if consultation.consultation_id:
+                     cursor.execute("SELECT id FROM consultations WHERE consultation_id = %s", (consultation.consultation_id,))
+                     if cursor.fetchone():
+                         raise HTTPException(status_code=400, detail="咨询ID已存在")
+                
+                new_consultation_id = consultation.consultation_id or generate_id()
+                now = datetime.now()
+
+                cursor.execute(
+                    """
+                    INSERT INTO consultations (
+                        user_id, consultation_id, session_id, question, answer, tags, created_at
+                    ) VALUES (
+                        %s, %s, %s, %s, %s, %s, %s
+                    ) RETURNING id
+                    """,
+                    (
+                        uid, new_consultation_id, consultation.session_id, 
+                        consultation.question, consultation.answer, 
+                        Json(consultation.tags or []), now
+                    )
+                )
+                new_id = cursor.fetchone()['id']
+                conn.commit()
+
+                # Fetch back
+                cursor.execute("SELECT * FROM consultations WHERE id = %s", (new_id,))
+                row = cursor.fetchone()
+                
+                # Handle JSONB fields
+                if isinstance(row.get('tags'), str):
+                    try:
+                        row['tags'] = json.loads(row['tags'])
+                    except:
+                        row['tags'] = []
+                elif row.get('tags') is None:
+                        row['tags'] = []
+                
+                return Consultation(**row)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"创建咨询记录失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/api/consultations/delete/{consultation_id}")
+async def delete_consultation(
+    consultation_id: int, 
+    user_id: Optional[str] = Query(None), 
+    request: Request = None
+):
+    """删除咨询记录"""
+    try:
+        uid = _resolve_user_id(request, user_id)
+        if not uid:
+             raise HTTPException(status_code=401, detail="未认证用户")
+
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("DELETE FROM consultations WHERE id = %s AND user_id = %s RETURNING id", (consultation_id, uid))
+                deleted = cursor.fetchone()
+                if not deleted:
+                    raise HTTPException(status_code=404, detail="咨询记录不存在或无权删除")
+                conn.commit()
+                return {"message": "删除成功", "id": consultation_id}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"删除咨询记录失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/health-records", response_model=List[HealthRecord])
 async def get_health_records(
@@ -645,13 +1283,105 @@ async def create_health_record(record: HealthRecordCreate, user_id: Optional[str
                         pass
 
                 # 正常新增
+                # 追加：若提交为空内容且无文件ID，尝试与最近OCR生成的记录合并，避免重复
+                try:
+                    content_empty = (record.content is None) or (isinstance(record.content, str) and record.content.strip() == "")
+                    summary_empty = (record.summary is None) or (isinstance(record.summary, str) and record.summary.strip() == "")
+                    no_files = (not file_ids)
+                    if content_empty and summary_empty and no_files:
+                        cursor.execute(
+                            """
+                            SELECT * FROM health_records
+                            WHERE user_id = %s
+                            ORDER BY created_at DESC
+                            LIMIT 1
+                            """,
+                            (uid,)
+                        )
+                        recent = cursor.fetchone()
+                        def _has_ocr_marks(r: dict | None) -> bool:
+                            if not r:
+                                return False
+                            try:
+                                md = r.get("metadata")
+                                if isinstance(md, str):
+                                    md = deserialize_metadata(md)
+                                if isinstance(md, dict):
+                                    if md.get("uploaded_files") or md.get("file_id") or md.get("ocr_info"):
+                                        return True
+                                tags_v = r.get("tags")
+                                if isinstance(tags_v, str):
+                                    tags_v = deserialize_tags(tags_v)
+                                return isinstance(tags_v, list) and ("ocr" in tags_v or "auto_import" in tags_v)
+                            except Exception:
+                                return False
+                        def _within_minutes(r: dict | None, minutes: int = 10) -> bool:
+                            if not r:
+                                return False
+                            try:
+                                created_at = r.get("created_at")
+                                if isinstance(created_at, str):
+                                    created_dt = datetime.fromisoformat(created_at)
+                                else:
+                                    created_dt = created_at
+                                return (datetime.now() - created_dt).total_seconds() <= minutes * 60
+                            except Exception:
+                                return False
+                        if recent and _has_ocr_marks(recent) and _within_minutes(recent, 10):
+                            try:
+                                merged_meta = {}
+                                try:
+                                    old_meta = recent.get("metadata")
+                                    if isinstance(old_meta, str):
+                                        old_meta = deserialize_metadata(old_meta)
+                                    if isinstance(old_meta, dict):
+                                        merged_meta.update(old_meta)
+                                except Exception:
+                                    pass
+                                if isinstance(record.metadata, dict):
+                                    merged_meta.update(record.metadata)
+                                update_fields = [
+                                    "title = %s",
+                                    "record_type = %s",
+                                    "summary = %s",
+                                    "importance = %s",
+                                    "tags = %s",
+                                    "metadata = %s",
+                                    "record_date = %s",
+                                    "updated_at = %s",
+                                ]
+                                params = [
+                                    record.title,
+                                    record.record_type.value,
+                                    recent.get("summary"),
+                                    record.importance.value,
+                                    Json(record.tags or []),
+                                    Json(merged_meta),
+                                    record.record_date,
+                                    now,
+                                ]
+                                cursor.execute(
+                                    f"UPDATE health_records SET {', '.join(update_fields)} WHERE id = %s",
+                                    tuple(params + [recent.get("id")])
+                                )
+                                conn.commit()
+                                cursor.execute("SELECT * FROM health_records WHERE id = %s", (recent.get("id"),))
+                                row = cursor.fetchone()
+                                logger.info(f"create dedup merged into recent id={recent.get('id')} user_id={uid}")
+                                return row_to_health_record(row)
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
+
                 cursor.execute(
                     """
                     INSERT INTO health_records (
                         id, user_id, title, record_type, summary, content, importance,
                         tags, metadata, record_date, created_at, updated_at
                     ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    """,
+                    """
+                    ,
                     (
                         record_id,
                         uid,
@@ -822,6 +1552,9 @@ async def update_health_record(record_id: str, record_update: HealthRecordUpdate
                                     }
                                 )
                             except Exception:
+                                imp_map = {"low": 0.2, "medium": 0.5, "high": 0.8, "critical": 1.0}
+                                imp_key = updated.importance.value if hasattr(updated.importance, "value") else str(updated.importance)
+                                imp_val = imp_map.get(str(imp_key).lower(), 0.5)
                                 await health_records_memory_service.store_health_record(
                                     user_id=uid,
                                     record_type=updated.record_type,
@@ -832,10 +1565,13 @@ async def update_health_record(record_id: str, record_update: HealthRecordUpdate
                                         "metadata": updated.metadata or {}
                                     },
                                     summary=updated.summary or "",
-                                    importance=updated.importance,
+                                    importance=imp_val,
                                     tags=updated.tags or []
                                 )
                         else:
+                            imp_map = {"low": 0.2, "medium": 0.5, "high": 0.8, "critical": 1.0}
+                            imp_key = updated.importance.value if hasattr(updated.importance, "value") else str(updated.importance)
+                            imp_val = imp_map.get(str(imp_key).lower(), 0.5)
                             await health_records_memory_service.store_health_record(
                                 user_id=uid,
                                 record_type=updated.record_type,
@@ -846,7 +1582,7 @@ async def update_health_record(record_id: str, record_update: HealthRecordUpdate
                                     "metadata": updated.metadata or {}
                                 },
                                 summary=updated.summary or "",
-                                importance=updated.importance,
+                                importance=imp_val,
                                 tags=updated.tags or []
                             )
                 except Exception as e:
@@ -1032,6 +1768,7 @@ async def get_health_insights(
 async def upload_file(file: UploadFile = File(...), user_id: str = Form(None), request: Request = None):
     """上传文件"""
     try:
+        logger.info(f"upload start filename={getattr(file,'filename',None)} ct={getattr(file,'content_type',None)}")
         # 检查与规范化文件类型（支持 octet-stream 与扩展名推断）
         allowed_types = {
             "image/jpeg", "image/jpg", "image/png", "image/gif",
@@ -1211,14 +1948,21 @@ async def upload_file(file: UploadFile = File(...), user_id: str = Form(None), r
                         try:
                             if not health_records_memory_service.is_available():
                                 await health_records_memory_service.initialize()
-                            memory_id = await health_records_memory_service.store_ocr_result(
-                                user_id=user_id,
-                                document_type=document_type,
-                                ocr_text=ocr_text if isinstance(ocr_text, str) else str(ocr_text),
-                                extracted_info=extracted_info if isinstance(extracted_info, dict) else {},
-                                confidence=confidence,
-                                file_path=str(file_path)
-                            )
+                            try:
+                                memory_id = await asyncio.wait_for(
+                                    health_records_memory_service.store_ocr_result(
+                                        user_id=user_id,
+                                        document_type=document_type,
+                                        ocr_text=ocr_text if isinstance(ocr_text, str) else str(ocr_text),
+                                        extracted_info=extracted_info if isinstance(extracted_info, dict) else {},
+                                        confidence=confidence,
+                                        file_path=str(file_path)
+                                    ),
+                                    timeout=2.0,
+                                )
+                            except asyncio.TimeoutError:
+                                logger.warning("存储OCR结果到记忆超时，已跳过")
+                                memory_id = None
                         except Exception as e:
                             logger.warning(f"存储OCR结果到记忆失败: {e}")
 
@@ -1265,6 +2009,12 @@ async def upload_file(file: UploadFile = File(...), user_id: str = Form(None), r
                     record_id = generate_id()
                     title = f"{document_type or 'OCR文档'} - {file.filename}"
                     tags = ["ocr", "auto_import", document_type or "unknown", f"file:{file_id}"]
+                    # 计算文件哈希用于去重
+                    try:
+                        import hashlib
+                        file_hash = hashlib.sha256(file_content).hexdigest()
+                    except Exception:
+                        file_hash = None
                     metadata = {
                         "file_id": file_id,
                         "file_path": str(file_path),
@@ -1276,8 +2026,54 @@ async def upload_file(file: UploadFile = File(...), user_id: str = Form(None), r
                         },
                         "memory_id": memory_id,
                         "extracted_info": extracted_info if isinstance(extracted_info, dict) else {},
-                        "uploaded_files": [file_id]
+                        "uploaded_files": [file_id],
+                        **({"file_hash": file_hash} if file_hash else {})
                     }
+
+                    # 去重：同一用户相同OCR内容或文件哈希命中则复用记录并仅关联附件
+                    try:
+                        cursor.execute(
+                            """
+                            SELECT id FROM health_records
+                            WHERE user_id = %s AND (content = %s OR metadata ->> 'file_hash' = %s)
+                            ORDER BY created_at DESC LIMIT 1
+                            """
+                            ,
+                            (user_id, ocr_text_str, file_hash)
+                        )
+                        dup = cursor.fetchone()
+                        if dup and (dup.get('id') if isinstance(dup, dict) else dup[0]):
+                            dup_id = dup.get('id') if isinstance(dup, dict) else dup[0]
+                            cursor.execute(
+                                "UPDATE file_attachments SET record_id = %s WHERE id = %s",
+                                (dup_id, file_id)
+                            )
+                            conn.commit()
+                            logger.info(f"upload dedup merged file_id={file_id} record_id={dup_id} user_id={user_id} hash={file_hash}")
+                            return {
+                                "file_id": file_id,
+                                "record_id": dup_id,
+                                "ocr_info": {
+                                    "document_type": document_type,
+                                    "confidence": confidence,
+                                    "text_length": len(ocr_text_str)
+                                },
+                                "message": "duplicate_merged"
+                            }
+                    except Exception:
+                        pass
+
+                    # 生成摘要：优先使用大模型；失败则回退规则摘要
+                    try:
+                        llm_summary = await _maybe_llm_summary(ocr_text_str, metadata.get("extracted_info") if isinstance(metadata, dict) else None)
+                    except Exception as e:
+                        logger.warning(f"调用 LLM 摘要失败: {e}")
+                        llm_summary = None
+                    if llm_summary is not None:
+                        logger.info("使用 LLM 摘要")
+                    else:
+                        logger.info("使用规则摘要")
+                    final_summary = llm_summary or _generate_ai_summary(ocr_text_str, metadata.get("extracted_info") if isinstance(metadata, dict) else None)
 
                     cursor.execute(
                         """
@@ -1285,13 +2081,14 @@ async def upload_file(file: UploadFile = File(...), user_id: str = Form(None), r
                             id, user_id, title, record_type, summary, content, importance,
                             tags, metadata, record_date, created_at, updated_at
                         ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                        """,
+                        """
+                        ,
                         (
                             record_id,
                             user_id,
                             title,
                             record_type,
-                            (ocr_text_str[:300] if ocr_text_str else None),
+                            final_summary,
                             ocr_text_str,
                             ImportanceLevel.MEDIUM.value,
                             Json(tags),
@@ -1314,6 +2111,7 @@ async def upload_file(file: UploadFile = File(...), user_id: str = Form(None), r
 
                     # 成功则提交事务
                     conn.commit()
+                    logger.info(f"upload insert record_id={record_id} user_id={user_id} file_id={file_id} type={record_type} summary_len={len(final_summary or '')} content_len={len(ocr_text_str or '')}")
 
                     # 新增：写入HRM（PostgreSQL）以供Agent检索
                     try:
