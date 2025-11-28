@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef } from "react";
 import {
   Container,
   Box,
@@ -22,8 +22,8 @@ import {
   DialogContent,
   DialogActions,
   Alert,
-  CircularProgress
-} from '@mui/material';
+  CircularProgress,
+} from "@mui/material";
 import {
   Send,
   SmartToy,
@@ -37,51 +37,75 @@ import {
   LocalHospital,
   AttachFile,
   Mic,
-  Stop
-} from '@mui/icons-material';
-import { useRecoilValue } from 'recoil';
-import { userState } from '../store/recoilState';
-import Header from '../components/HealthHeader';
-import FileUpload from '../components/FileUpload';
-import AgentAssistant from '../components/AgentAssistant';
-import { getConsultationHistory, createConsultation } from '../api/healthApi';
-import { listRemoteAgents, getAgentCard, sendTaskStreaming } from '../api/api';
-import { v4 as uuidv4 } from 'uuid';
+  Stop,
+} from "@mui/icons-material";
+import { useRecoilValue } from "recoil";
+import { userState } from "../store/recoilState";
+import Header from "../components/HealthHeader";
+import AgentAssistant from "../components/AgentAssistant";
+import { getConsultationHistory, createConsultation } from "../api/healthApi";
+import { listRemoteAgents, getAgentCard, sendTaskStreaming } from "../api/api";
+import { v4 as uuidv4 } from "uuid";
 
 const Consultation = () => {
   const [messages, setMessages] = useState([]);
-  const [inputMessage, setInputMessage] = useState('');
+  const [inputMessage, setInputMessage] = useState("");
   const [loading, setLoading] = useState(false);
   const [consultations, setConsultations] = useState([]);
   const [currentConsultationId, setCurrentConsultationId] = useState(null);
   const [openNewDialog, setOpenNewDialog] = useState(false);
-  const [consultationTitle, setConsultationTitle] = useState('');
-  const [consultationType, setConsultationType] = useState('general');
+  const [consultationTitle, setConsultationTitle] = useState("");
+  const [consultationType, setConsultationType] = useState("general");
   const [isRecording, setIsRecording] = useState(false);
-  const [attachedFiles, setAttachedFiles] = useState([]);
+  const aiContentRef = useRef("");
   // 新增：A2A 状态
   const [agentCardState, setAgentCardState] = useState(null);
   const [sessionId, setSessionId] = useState(uuidv4());
   const abortStreamingRef = useRef(null);
   const currentStreamingMessageIdRef = useRef(null);
-  
+
   const messagesEndRef = useRef(null);
   const user = useRecoilValue(userState);
 
   const consultationTypes = [
-    { value: 'general', label: '一般咨询', icon: <MedicalServices />, color: '#2196F3' },
-    { value: 'mental', label: '心理健康', icon: <Psychology />, color: '#9C27B0' },
-    { value: 'fitness', label: '运动健身', icon: <FitnessCenter />, color: '#4CAF50' },
-    { value: 'nutrition', label: '营养饮食', icon: <Restaurant />, color: '#FF9800' },
-    { value: 'emergency', label: '紧急咨询', icon: <LocalHospital />, color: '#F44336' }
+    {
+      value: "general",
+      label: "一般咨询",
+      icon: <MedicalServices />,
+      color: "#2196F3",
+    },
+    {
+      value: "mental",
+      label: "心理健康",
+      icon: <Psychology />,
+      color: "#9C27B0",
+    },
+    {
+      value: "fitness",
+      label: "运动健身",
+      icon: <FitnessCenter />,
+      color: "#4CAF50",
+    },
+    {
+      value: "nutrition",
+      label: "营养饮食",
+      icon: <Restaurant />,
+      color: "#FF9800",
+    },
+    {
+      value: "emergency",
+      label: "紧急咨询",
+      icon: <LocalHospital />,
+      color: "#F44336",
+    },
   ];
 
   const quickQuestions = [
-    '我最近总是感到疲劳，这可能是什么原因？',
-    '如何改善睡眠质量？',
-    '适合我的运动方案有哪些？',
-    '如何制定健康的饮食计划？',
-    '我的体检报告显示什么问题？'
+    "我最近总是感到疲劳，这可能是什么原因？",
+    "如何改善睡眠质量？",
+    "适合我的运动方案有哪些？",
+    "如何制定健康的饮食计划？",
+    "我的体检报告显示什么问题？",
   ];
 
   useEffect(() => {
@@ -98,14 +122,14 @@ const Consultation = () => {
       try {
         const agents = await listRemoteAgents();
         if (Array.isArray(agents) && agents.length > 0) {
-          const addr = agents[0]?.url || agents[0]?.address || '';
+          const addr = agents[0]?.url || agents[0]?.address || "";
           if (addr) {
             const card = await getAgentCard(addr);
             setAgentCardState(card);
           }
         }
       } catch (e) {
-        console.error('初始化智能体失败:', e);
+        console.error("初始化智能体失败:", e);
       }
     };
     initAgent();
@@ -135,55 +159,92 @@ const Consultation = () => {
   }, [agentCardState]);
 
   const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   };
 
   const fetchConsultationHistory = async () => {
     try {
       const history = await getConsultationHistory();
-      setConsultations(history);
+      // Transform history to match UI expected format
+      const formattedHistory = history.map((item) => ({
+        id: item.consultation_id,
+        title:
+          item.question.length > 20
+            ? item.question.substring(0, 20) + "..."
+            : item.question,
+        type: "general", // Default or derive from tags
+        createdAt: item.created_at,
+        messages: [
+          {
+            id: item.consultation_id + "_q",
+            type: "user",
+            content: item.question,
+            timestamp: new Date(item.created_at),
+          },
+          {
+            id: item.consultation_id + "_a",
+            type: "ai",
+            content: item.answer,
+            timestamp: new Date(item.created_at),
+          },
+        ],
+      }));
+      setConsultations(formattedHistory);
     } catch (error) {
-      console.error('获取咨询历史失败:', error);
+      console.error("获取咨询历史失败:", error);
     }
   };
 
   const handleSendMessage = async () => {
-    if (!inputMessage.trim() && attachedFiles.length === 0) return;
+    if (!inputMessage.trim()) return;
+
+    // If no active consultation, create a local one
     if (!currentConsultationId) {
-      await handleCreateConsultation('快速咨询', 'general');
+      handleCreateConsultation("新咨询", "general");
     }
+
     if (!agentCardState?.agentEndpointUrl) {
-      console.warn('未配置远程智能体或无法读取 agentEndpointUrl');
+      console.warn("未配置远程智能体或无法读取 agentEndpointUrl");
       return;
     }
 
     const userMessage = {
       id: Date.now(),
-      type: 'user',
+      type: "user",
       content: inputMessage,
-      files: attachedFiles,
-      timestamp: new Date()
+      timestamp: new Date(),
     };
 
-    setMessages(prev => [...prev, userMessage]);
-    setInputMessage('');
-    setAttachedFiles([]);
+    setMessages((prev) => [...prev, userMessage]);
+    setInputMessage("");
     setLoading(true);
 
     // 插入一个正在流式的 AI 消息
     const agentMsgId = Date.now() + 1;
-    setMessages(prev => [...prev, { id: agentMsgId, type: 'ai', content: '', timestamp: new Date(), isStreaming: true }]);
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: agentMsgId,
+        type: "ai",
+        content: "",
+        thinking: "",
+        showThinking: false,
+        timestamp: new Date(),
+        isStreaming: true,
+      },
+    ]);
     currentStreamingMessageIdRef.current = agentMsgId;
+    aiContentRef.current = "";
 
     try {
       const taskId = uuidv4();
       const payload = {
         id: taskId,
         sessionId,
-        acceptedOutputModes: ['text', 'data'],
+        acceptedOutputModes: ["text", "data"],
         message: {
-          role: 'user',
-          parts: [ { type: 'text', text: userMessage.content } ],
+          role: "user",
+          parts: [{ type: "text", text: userMessage.content }],
         },
       };
 
@@ -192,35 +253,46 @@ const Consultation = () => {
         payload,
         // onMessage
         (evt) => {
-          // 1) 处理工作状态中的思考文本（可选）
           const statusParts = evt?.result?.status?.message?.parts || [];
           if (statusParts.length && currentStreamingMessageIdRef.current) {
             const thinkingText = statusParts
-              .filter(p => p?.type === 'text' && p.text)
-              .map(p => p.text)
-              .join('');
+              .filter((p) => p?.type === "text" && p.text)
+              .map((p) => p.text)
+              .join("");
             if (thinkingText) {
-              setMessages(prev => prev.map(m => m.id === currentStreamingMessageIdRef.current
-                ? { ...m, content: (m.content || '') + thinkingText }
-                : m
-              ));
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === currentStreamingMessageIdRef.current
+                    ? { ...m, thinking: (m.thinking || "") + thinkingText }
+                    : m
+                )
+              );
             }
           }
 
           // 2) 处理 artifact 分片（主要的流式内容）
           const artifact = evt?.result?.artifact;
-          if (artifact && artifact.parts && currentStreamingMessageIdRef.current) {
+          if (
+            artifact &&
+            artifact.parts &&
+            currentStreamingMessageIdRef.current
+          ) {
             const { parts, append, lastChunk } = artifact;
-            parts.forEach(part => {
-              if (part?.type === 'text' && typeof part.text === 'string') {
-                setMessages(prev => prev.map(m => m.id === currentStreamingMessageIdRef.current
-                  ? {
-                      ...m,
-                      content: append ? (m.content || '') + part.text : part.text,
-                      isStreaming: !lastChunk,
-                    }
-                  : m
-                ));
+            parts.forEach((part) => {
+              if (part?.type === "text" && typeof part.text === "string") {
+                setMessages((prev) =>
+                  prev.map((m) =>
+                    m.id === currentStreamingMessageIdRef.current
+                      ? {
+                          ...m,
+                          content: append
+                            ? (m.content || "") + part.text
+                            : part.text,
+                          isStreaming: !lastChunk,
+                        }
+                      : m
+                  )
+                );
               }
             });
           }
@@ -229,82 +301,110 @@ const Consultation = () => {
           const messageParts = evt?.result?.message?.parts || [];
           if (messageParts.length && currentStreamingMessageIdRef.current) {
             const text = messageParts
-              .filter(p => p?.type === 'text' && p.text)
-              .map(p => p.text)
-              .join('');
+              .filter((p) => p?.type === "text" && p.text)
+              .map((p) => p.text)
+              .join("");
             if (text) {
-              setMessages(prev => prev.map(m => m.id === currentStreamingMessageIdRef.current
-                ? { ...m, content: (m.content || '') + text }
-                : m
-              ));
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === currentStreamingMessageIdRef.current
+                    ? { ...m, content: (m.content || "") + text }
+                    : m
+                )
+              );
             }
           }
 
           // 3) 处理最终完成信号
-          if (evt?.result?.final || evt?.result?.status?.state === 'completed') {
-            setMessages(prev => prev.map(m => m.id === currentStreamingMessageIdRef.current
-              ? { ...m, isStreaming: false }
-              : m
-            ));
+          if (
+            evt?.result?.final ||
+            evt?.result?.status?.state === "completed"
+          ) {
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === currentStreamingMessageIdRef.current
+                  ? { ...m, isStreaming: false }
+                  : m
+              )
+            );
             setLoading(false);
-            // 不立即清理引用，留给 onClose 统一收尾
+            (async () => {
+              try {
+                await createConsultation({
+                  question: userMessage.content,
+                  answer: aiContentRef.current,
+                  session_id: sessionId,
+                  tags: [],
+                });
+              } catch (_) {}
+            })();
+            // Refresh history after a successful turn (because it's saved)
+            fetchConsultationHistory();
           }
         },
         // onError
         (err) => {
-          console.error('发送流式任务失败:', err);
-          setMessages(prev => prev.map(m => m.id === currentStreamingMessageIdRef.current
-            ? { ...m, content: '抱歉，AI 回复失败，请稍后重试。', isStreaming: false }
-            : m
-          ));
+          console.error("发送流式任务失败:", err);
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === currentStreamingMessageIdRef.current
+                ? {
+                    ...m,
+                    content: "抱歉，AI 回复失败，请稍后重试。",
+                    isStreaming: false,
+                  }
+                : m
+            )
+          );
           setLoading(false);
           abortStreamingRef.current = null;
           currentStreamingMessageIdRef.current = null;
         },
         // onClose
         () => {
-          setMessages(prev => prev.map(m => m.id === currentStreamingMessageIdRef.current
-            ? { ...m, isStreaming: false }
-            : m
-          ));
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === currentStreamingMessageIdRef.current
+                ? { ...m, isStreaming: false }
+                : m
+            )
+          );
           setLoading(false);
           abortStreamingRef.current = null;
           currentStreamingMessageIdRef.current = null;
         }
       );
     } catch (error) {
-      console.error('发送消息失败:', error);
+      console.error("发送消息失败:", error);
       const errorMessage = {
         id: Date.now() + 2,
-        type: 'ai',
-        content: '抱歉，我现在无法回复您的消息。请稍后再试。',
-        timestamp: new Date()
+        type: "ai",
+        content: "抱歉，我现在无法回复您的消息。请稍后再试。",
+        timestamp: new Date(),
       };
-      setMessages(prev => [...prev, errorMessage]);
+      setMessages((prev) => [...prev, errorMessage]);
       setLoading(false);
     }
   };
 
-  const handleCreateConsultation = async (title = consultationTitle, type = consultationType) => {
-    try {
-      const consultation = await createConsultation({ title, type });
-      setCurrentConsultationId(consultation.id);
-      setConsultations(prev => [consultation, ...prev]);
-      setMessages([]);
-      setOpenNewDialog(false);
-      setConsultationTitle('');
-      
-      // 添加欢迎消息
-      const welcomeMessage = {
+  const handleCreateConsultation = (
+    title = consultationTitle,
+    type = consultationType
+  ) => {
+    const newId = uuidv4();
+    setCurrentConsultationId(newId);
+    setMessages([
+      {
         id: Date.now(),
-        type: 'ai',
-        content: `您好！我是您的AI健康顾问。很高兴为您提供${consultationTypes.find(t => t.value === type)?.label}服务。请告诉我您想了解什么？`,
-        timestamp: new Date()
-      };
-      setMessages([welcomeMessage]);
-    } catch (error) {
-      console.error('创建咨询失败:', error);
-    }
+        type: "ai",
+        content: `您好！我是您的AI健康顾问。很高兴为您提供${
+          consultationTypes.find((t) => t.value === type)?.label || "健康咨询"
+        }服务。请告诉我您想了解什么？`,
+        timestamp: new Date(),
+      },
+    ]);
+    setOpenNewDialog(false);
+    setConsultationTitle("");
   };
 
   const handleLoadConsultation = (consultation) => {
@@ -317,26 +417,30 @@ const Consultation = () => {
   };
 
   const handleFileUpload = (files) => {
-    setAttachedFiles(prev => [...prev, ...files]);
+    setAttachedFiles((prev) => [...prev, ...files]);
   };
 
   const removeAttachedFile = (index) => {
-    setAttachedFiles(prev => prev.filter((_, i) => i !== index));
+    setAttachedFiles((prev) => prev.filter((_, i) => i !== index));
   };
 
   const getTypeInfo = (type) => {
-    return consultationTypes.find(t => t.value === type) || consultationTypes[0];
+    return (
+      consultationTypes.find((t) => t.value === type) || consultationTypes[0]
+    );
   };
 
   return (
-    <Box sx={{ flexGrow: 1, bgcolor: '#f5f5f5', minHeight: '100vh' }}>
+    <Box sx={{ flexGrow: 1, bgcolor: "#f5f5f5", minHeight: "100vh" }}>
       <Header />
       <Container maxWidth="xl" sx={{ mt: 4, mb: 4 }}>
-        <Grid container spacing={3} sx={{ height: 'calc(100vh - 200px)' }}>
+        <Grid container spacing={3} sx={{ height: "calc(100vh - 200px)" }}>
           {/* 左侧：咨询历史 */}
           <Grid item xs={12} md={3}>
-            <Paper sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-              <Box sx={{ p: 2, borderBottom: 1, borderColor: 'divider' }}>
+            <Paper
+              sx={{ height: "100%", display: "flex", flexDirection: "column" }}
+            >
+              <Box sx={{ p: 2, borderBottom: 1, borderColor: "divider" }}>
                 <Typography variant="h6" gutterBottom>
                   咨询历史
                 </Typography>
@@ -350,7 +454,7 @@ const Consultation = () => {
                   新建咨询
                 </Button>
               </Box>
-              <List sx={{ flexGrow: 1, overflow: 'auto' }}>
+              <List sx={{ flexGrow: 1, overflow: "auto" }}>
                 {consultations.map((consultation) => {
                   const typeInfo = getTypeInfo(consultation.type);
                   return (
@@ -363,14 +467,20 @@ const Consultation = () => {
                         borderRadius: 1,
                         mx: 1,
                         mb: 1,
-                        '&.Mui-selected': {
-                          bgcolor: 'primary.light',
-                          color: 'primary.contrastText'
-                        }
+                        "&.Mui-selected": {
+                          bgcolor: "primary.light",
+                          color: "primary.contrastText",
+                        },
                       }}
                     >
                       <ListItemAvatar>
-                        <Avatar sx={{ bgcolor: typeInfo.color, width: 32, height: 32 }}>
+                        <Avatar
+                          sx={{
+                            bgcolor: typeInfo.color,
+                            width: 32,
+                            height: 32,
+                          }}
+                        >
                           {typeInfo.icon}
                         </Avatar>
                       </ListItemAvatar>
@@ -382,7 +492,9 @@ const Consultation = () => {
                         }
                         secondary={
                           <Typography variant="caption" color="text.secondary">
-                            {new Date(consultation.createdAt).toLocaleDateString()}
+                            {new Date(
+                              consultation.createdAt
+                            ).toLocaleDateString()}
                           </Typography>
                         }
                       />
@@ -395,11 +507,13 @@ const Consultation = () => {
 
           {/* 中间：聊天区域 */}
           <Grid item xs={12} md={6}>
-            <Paper sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+            <Paper
+              sx={{ height: "100%", display: "flex", flexDirection: "column" }}
+            >
               {/* 聊天头部 */}
-              <Box sx={{ p: 2, borderBottom: 1, borderColor: 'divider' }}>
+              <Box sx={{ p: 2, borderBottom: 1, borderColor: "divider" }}>
                 <Typography variant="h6">
-                  {currentConsultationId ? '健康咨询' : '选择或创建咨询'}
+                  {currentConsultationId ? "健康咨询" : "选择或创建咨询"}
                 </Typography>
                 {currentConsultationId && (
                   <Typography variant="body2" color="text.secondary">
@@ -409,11 +523,17 @@ const Consultation = () => {
               </Box>
 
               {/* 消息列表 */}
-              <Box sx={{ flexGrow: 1, overflow: 'auto', p: 1 }}>
+              <Box sx={{ flexGrow: 1, overflow: "auto", p: 1 }}>
                 {!currentConsultationId ? (
-                  <Box sx={{ textAlign: 'center', mt: 4 }}>
-                    <SmartToy sx={{ fontSize: 80, color: 'text.secondary', mb: 2 }} />
-                    <Typography variant="h6" color="text.secondary" gutterBottom>
+                  <Box sx={{ textAlign: "center", mt: 4 }}>
+                    <SmartToy
+                      sx={{ fontSize: 80, color: "text.secondary", mb: 2 }}
+                    />
+                    <Typography
+                      variant="h6"
+                      color="text.secondary"
+                      gutterBottom
+                    >
                       开始您的健康咨询
                     </Typography>
                     <Typography variant="body2" color="text.secondary">
@@ -423,12 +543,24 @@ const Consultation = () => {
                 ) : (
                   <List>
                     {messages.map((message) => (
-                      <ListItem key={message.id} sx={{ alignItems: 'flex-start' }}>
+                      <ListItem
+                        key={message.id}
+                        sx={{ alignItems: "flex-start" }}
+                      >
                         <ListItemAvatar>
-                          <Avatar sx={{
-                            bgcolor: message.type === 'user' ? 'primary.main' : 'secondary.main'
-                          }}>
-                            {message.type === 'user' ? <Person /> : <SmartToy />}
+                          <Avatar
+                            sx={{
+                              bgcolor:
+                                message.type === "user"
+                                  ? "primary.main"
+                                  : "secondary.main",
+                            }}
+                          >
+                            {message.type === "user" ? (
+                              <Person />
+                            ) : (
+                              <SmartToy />
+                            )}
                           </Avatar>
                         </ListItemAvatar>
                         <ListItemText
@@ -450,25 +582,69 @@ const Consultation = () => {
                                   ))}
                                 </Box>
                               )}
+                              {message.type === "ai" && message.thinking && (
+                                <Box sx={{ mt: 1 }}>
+                                  <Button
+                                    variant="outlined"
+                                    size="small"
+                                    onClick={() => {
+                                      setMessages((prev) =>
+                                        prev.map((m) =>
+                                          m.id === message.id
+                                            ? {
+                                                ...m,
+                                                showThinking: !m.showThinking,
+                                              }
+                                            : m
+                                        )
+                                      );
+                                    }}
+                                  >
+                                    {message.showThinking
+                                      ? "隐藏思考过程"
+                                      : "查看思考过程"}
+                                  </Button>
+                                  {message.showThinking && (
+                                    <Paper
+                                      sx={{
+                                        mt: 1,
+                                        p: 1,
+                                        bgcolor: "grey.100",
+                                        whiteSpace: "pre-wrap",
+                                        fontSize: 14,
+                                      }}
+                                    >
+                                      {message.thinking}
+                                    </Paper>
+                                  )}
+                                </Box>
+                              )}
                               {message.suggestions && (
                                 <Box sx={{ mt: 1 }}>
-                                  {message.suggestions.map((suggestion, index) => (
-                                    <Chip
-                                      key={index}
-                                      label={suggestion}
-                                      size="small"
-                                      variant="outlined"
-                                      clickable
-                                      onClick={() => handleQuickQuestion(suggestion)}
-                                      sx={{ mr: 1, mb: 1 }}
-                                    />
-                                  ))}
+                                  {message.suggestions.map(
+                                    (suggestion, index) => (
+                                      <Chip
+                                        key={index}
+                                        label={suggestion}
+                                        size="small"
+                                        variant="outlined"
+                                        clickable
+                                        onClick={() =>
+                                          handleQuickQuestion(suggestion)
+                                        }
+                                        sx={{ mr: 1, mb: 1 }}
+                                      />
+                                    )
+                                  )}
                                 </Box>
                               )}
                             </Box>
                           }
                           secondary={
-                            <Typography variant="caption" color="text.secondary">
+                            <Typography
+                              variant="caption"
+                              color="text.secondary"
+                            >
                               {new Date(message.timestamp).toLocaleTimeString()}
                             </Typography>
                           }
@@ -478,15 +654,17 @@ const Consultation = () => {
                     {loading && (
                       <ListItem>
                         <ListItemAvatar>
-                          <Avatar sx={{ bgcolor: 'secondary.main' }}>
+                          <Avatar sx={{ bgcolor: "secondary.main" }}>
                             <SmartToy />
                           </Avatar>
                         </ListItemAvatar>
                         <ListItemText
                           primary={
-                            <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                            <Box sx={{ display: "flex", alignItems: "center" }}>
                               <CircularProgress size={20} sx={{ mr: 1 }} />
-                              <Typography variant="body2">AI正在思考...</Typography>
+                              <Typography variant="body2">
+                                AI正在思考...
+                              </Typography>
                             </Box>
                           }
                         />
@@ -499,23 +677,8 @@ const Consultation = () => {
 
               {/* 输入区域 */}
               {currentConsultationId && (
-                <Box sx={{ p: 2, borderTop: 1, borderColor: 'divider' }}>
-                  {/* 附件显示 */}
-                  {attachedFiles.length > 0 && (
-                    <Box sx={{ mb: 2 }}>
-                      {attachedFiles.map((file, index) => (
-                        <Chip
-                          key={index}
-                          icon={<AttachFile />}
-                          label={file.name}
-                          onDelete={() => removeAttachedFile(index)}
-                          sx={{ mr: 1, mb: 1 }}
-                        />
-                      ))}
-                    </Box>
-                  )}
-                  
-                  <Box sx={{ display: 'flex', alignItems: 'flex-end', gap: 1 }}>
+                <Box sx={{ p: 2, borderTop: 1, borderColor: "divider" }}>
+                  <Box sx={{ display: "flex", alignItems: "flex-end", gap: 1 }}>
                     <TextField
                       fullWidth
                       multiline
@@ -524,26 +687,16 @@ const Consultation = () => {
                       value={inputMessage}
                       onChange={(e) => setInputMessage(e.target.value)}
                       onKeyPress={(e) => {
-                        if (e.key === 'Enter' && !e.shiftKey) {
+                        if (e.key === "Enter" && !e.shiftKey) {
                           e.preventDefault();
                           handleSendMessage();
                         }
                       }}
                     />
-                    <FileUpload
-                      onUpload={handleFileUpload}
-                      accept=".pdf,.jpg,.jpeg,.png,.doc,.docx"
-                      multiple
-                      showButton
-                      buttonProps={{
-                        size: 'small',
-                        variant: 'outlined'
-                      }}
-                    />
                     <IconButton
                       color="primary"
                       onClick={handleSendMessage}
-                      disabled={!inputMessage.trim() && attachedFiles.length === 0}
+                      disabled={!inputMessage.trim()}
                     >
                       <Send />
                     </IconButton>
@@ -555,7 +708,14 @@ const Consultation = () => {
 
           {/* 右侧：快速问题和建议 */}
           <Grid item xs={12} md={3}>
-            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, height: '100%' }}>
+            <Box
+              sx={{
+                display: "flex",
+                flexDirection: "column",
+                gap: 2,
+                height: "100%",
+              }}
+            >
               {/* 咨询类型 */}
               <Card>
                 <CardContent>
@@ -578,10 +738,10 @@ const Consultation = () => {
                           sx={{
                             borderColor: type.color,
                             color: type.color,
-                            '&:hover': {
+                            "&:hover": {
                               bgcolor: type.color,
-                              color: 'white'
-                            }
+                              color: "white",
+                            },
                           }}
                         >
                           {type.label}
@@ -608,9 +768,7 @@ const Consultation = () => {
                       >
                         <ListItemText
                           primary={
-                            <Typography variant="body2">
-                              {question}
-                            </Typography>
+                            <Typography variant="body2">{question}</Typography>
                           }
                         />
                       </ListItem>
@@ -624,7 +782,12 @@ const Consultation = () => {
       </Container>
 
       {/* 新建咨询对话框 */}
-      <Dialog open={openNewDialog} onClose={() => setOpenNewDialog(false)} maxWidth="sm" fullWidth>
+      <Dialog
+        open={openNewDialog}
+        onClose={() => setOpenNewDialog(false)}
+        maxWidth="sm"
+        fullWidth
+      >
         <DialogTitle>新建健康咨询</DialogTitle>
         <DialogContent>
           <TextField
@@ -642,20 +805,17 @@ const Consultation = () => {
               <Grid item xs={6} key={type.value}>
                 <Card
                   sx={{
-                    cursor: 'pointer',
+                    cursor: "pointer",
                     border: consultationType === type.value ? 2 : 1,
-                    borderColor: consultationType === type.value ? type.color : 'divider',
-                    '&:hover': { borderColor: type.color }
+                    borderColor:
+                      consultationType === type.value ? type.color : "divider",
+                    "&:hover": { borderColor: type.color },
                   }}
                   onClick={() => setConsultationType(type.value)}
                 >
-                  <CardContent sx={{ textAlign: 'center', py: 2 }}>
-                    <Box sx={{ color: type.color, mb: 1 }}>
-                      {type.icon}
-                    </Box>
-                    <Typography variant="body2">
-                      {type.label}
-                    </Typography>
+                  <CardContent sx={{ textAlign: "center", py: 2 }}>
+                    <Box sx={{ color: type.color, mb: 1 }}>{type.icon}</Box>
+                    <Typography variant="body2">{type.label}</Typography>
                   </CardContent>
                 </Card>
               </Grid>
@@ -673,9 +833,9 @@ const Consultation = () => {
           </Button>
         </DialogActions>
       </Dialog>
-      
+
       {/* 智能助手 */}
-      <AgentAssistant 
+      <AgentAssistant
         agentType="consultation"
         contextPrompt="当前用户正在使用健康咨询页面，可能需要医疗建议、症状分析、健康指导等方面的帮助。"
         position="bottom-right"

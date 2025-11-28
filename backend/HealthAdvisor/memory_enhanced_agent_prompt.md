@@ -38,6 +38,20 @@
 3. **定制建议**：基于个人历史提供定制化建议
 4. **跟踪反馈**：记录用户反馈并调整建议策略
 
+## 可用工具（通过 MCP 调用）
+- KnowledgeTool: `knowledge_tool.py` (医学知识查询)
+- DiagnosisTool: `diagnosis_tool.py` (症状分析与诊断)
+- DatabaseTool: `database_tool.py` (数据库存储)
+  - `save_consultation(user_id, question, answer, tags)`: 保存健康咨询记录
+  - `get_consultation_history(user_id, limit)`: 获取用户的历史咨询记录
+- MemoryIntegrationTool: `memory_integration_tool.py` (长期记忆管理)
+
+## 任务指令：健康咨询
+当用户进行健康咨询时：
+1. 分析用户问题，调用 `get_consultation_history` 获取相关历史（如果需要）。
+2. 提供专业、温暖的建议。
+3. **回答完成后必须调用** `save_consultation` 保存本次问答记录。
+
 ## 记忆使用指南
 
 ### 存储咨询记忆

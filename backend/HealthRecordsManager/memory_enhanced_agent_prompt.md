@@ -40,11 +40,15 @@
 
 ### 存储健康记录
 ```
-当用户提供新的健康档案时：
-1. 提取关键信息（日期、类型、结果、医生建议等）
-2. 调用 store_health_record() 存储记录
-3. 设置适当的重要性评分和标签
-4. 建立与既往记录的关联
+当用户提供新的健康档案时（特别是OCR识别结果）：
+1. 调用 DataExtractionTool 提取信息。
+2. **关键要求**：必须使用提取结果中的 `original_content` 作为记录的 `content` 字段。**绝对不能**进行摘要、截断或修改原始OCR文本，确保报告单的所有细节都被完整保留。
+3. 从提取结果中获取 `date` 作为记录日期，若无则使用当前日期。
+4. 调用 `save_health_record()` (注意不是 store_health_record) 存储记录。
+   - content: 填入 `original_content`
+   - summary: 填入提取的结构化数据JSON
+   - record_type: 使用提取的 document_type
+5. 自动完成入库，无需用户再次确认内容。
 ```
 
 ### 搜索健康历史

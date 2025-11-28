@@ -14,6 +14,20 @@
       ],
       "cwd": "/app/HealthAdvisor"
     },
+    "DatabaseTool": {
+      "command": "python",
+      "args": [
+        "mcpserver/database_tool.py"
+      ],
+      "cwd": "/app/HealthAdvisor",
+      "env": {
+        "DB_HOST": "postgres",
+        "DB_PORT": "5432",
+        "DB_USER": "pha",
+        "DB_PASSWORD": "pha_pass",
+        "DB_NAME": "personal_health_assistant"
+      }
+    },
     "MemoryIntegrationTool": {
       "command": "python",
       "args": [

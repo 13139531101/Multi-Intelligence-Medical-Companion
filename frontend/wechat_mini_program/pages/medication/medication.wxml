@@ -148,6 +148,11 @@
       <text class="modal-close" bindtap="closeAddModal">×</text>
     </view>
     <view class="modal-body">
+      <view class="scan-section" style="margin-bottom: 20rpx;">
+        <button class="btn btn-primary" bindtap="scanMedication" style="width: 100%; display: flex; align-items: center; justify-content: center;">
+          <text style="margin-right: 10rpx;">📷</text> 拍照识别药品
+        </button>
+      </view>
       <view class="form-group">
         <text class="form-label">药品名称</text>
         <input class="form-input" placeholder="请输入药品名称" value="{{newMedication.name}}" bindinput="onInputChange" data-field="name"/>

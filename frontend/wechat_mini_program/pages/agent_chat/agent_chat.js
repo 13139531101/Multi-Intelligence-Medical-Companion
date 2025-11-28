@@ -5,6 +5,9 @@ import {
   listMessages,
   getProcessingMessages,
   queryEvents,
+  sendTaskStreaming,
+  listRemoteAgents,
+  getAgentCard,
 } from "../../utils/api";
 
 Page({
@@ -18,26 +21,139 @@ Page({
     isPolling: false,
     scrollIntoView: "",
     isSending: false, // 确保初始状态为false，防止页面加载时就处于发送状态
+    mode: "default", // default, summary, consultation
+    agentUrl: "",
+    sessionId: "",
   },
 
   // 在页面实例上维护已处理的事件ID集合（微信小程序data不支持Set类型）
   processedEventIds: new Set(),
+  // 维护流式请求任务
+  requestTask: null,
 
   /**
    * Lifecycle function--Called when page load
    */
   async onLoad(options) {
-    try {
-      const conv = await createConversation();
-      console.log("Conversation created:", conv);
-      const conversationId = conv.conversation_id;
-      this.setData({ conversationId: conversationId });
-      const rawMessages = await listMessages(conversationId);
-      this.setData({ messages: this.formatMessages(rawMessages) });
-    } catch (error) {
-      console.error("Failed to start conversation", error);
-      wx.showToast({ title: "无法开始对话", icon: "error" });
+    const mode = options.mode || "default";
+    let agentUrl = options.agentUrl || "";
+
+    this.setData({
+      mode,
+      agentUrl,
+      sessionId: this.generateUUID(),
+    });
+
+    if (mode === "summary") {
+      wx.setNavigationBarTitle({ title: "就诊摘要助手" });
+
+      // 如果没有提供 agentUrl，尝试自动查找
+      if (!agentUrl) {
+        try {
+          const agents = await listRemoteAgents();
+          let targetAgent = agents.find(
+            (a) =>
+              (a.url && a.url.includes("10013")) ||
+              (a.name && a.name.includes("summary")) ||
+              (a.name && a.name.includes("摘要"))
+          );
+          if (targetAgent) {
+            agentUrl = targetAgent.url || targetAgent.address || "";
+            this.setData({ agentUrl });
+            console.log("Found summary agent:", agentUrl);
+          } else {
+            // Fallback default
+            agentUrl = "http://localhost:10013";
+            this.setData({ agentUrl });
+          }
+        } catch (e) {
+          console.error("查找智能体失败:", e);
+          // Fallback
+          agentUrl = "http://localhost:10013";
+          this.setData({ agentUrl });
+        }
+      }
+
+      // Initial greeting for summary mode
+      this.setData({
+        messages: [
+          {
+            id: "system_welcome",
+            role: "assistant",
+            content:
+              '您好！我是您的就诊摘要助手。您可以直接告诉我您的需求，例如："生成最近3个月的就诊摘要" 或 "总结上次在市一医院的检查结果"。',
+            timestamp: Date.now() / 1000,
+            timeString: this.formatTime(Date.now() / 1000),
+          },
+        ],
+      });
+    } else if (mode === "consultation") {
+      wx.setNavigationBarTitle({ title: "健康顾问" });
+
+      // 如果没有提供 agentUrl，尝试自动查找健康顾问
+      if (!agentUrl) {
+        try {
+          const agents = await listRemoteAgents();
+          let targetAgent = agents.find(
+            (a) =>
+              (a.url && a.url.includes("10011")) ||
+              (a.name && a.name.includes("health")) ||
+              (a.name && a.name.includes("顾问"))
+          );
+          if (targetAgent) {
+            agentUrl = targetAgent.url || targetAgent.address || "";
+            this.setData({ agentUrl });
+            console.log("Found health advisor agent:", agentUrl);
+          } else {
+            // Fallback default
+            agentUrl = "http://localhost:10011";
+            this.setData({ agentUrl });
+          }
+        } catch (e) {
+          console.error("查找智能体失败:", e);
+          // Fallback
+          agentUrl = "http://localhost:10011";
+          this.setData({ agentUrl });
+        }
+      }
+
+      // Initial greeting for consultation mode
+      this.setData({
+        messages: [
+          {
+            id: "system_welcome",
+            role: "assistant",
+            content:
+              "您好！我是您的健康顾问。您可以咨询任何健康问题，我会为您提供初步的建议和指导。",
+            timestamp: Date.now() / 1000,
+            timeString: this.formatTime(Date.now() / 1000),
+          },
+        ],
+      });
+    } else {
+      try {
+        const conv = await createConversation();
+        console.log("Conversation created:", conv);
+        const conversationId = conv.conversation_id;
+        this.setData({ conversationId: conversationId });
+        const rawMessages = await listMessages(conversationId);
+        this.setData({ messages: this.formatMessages(rawMessages) });
+      } catch (error) {
+        console.error("Failed to start conversation", error);
+        wx.showToast({ title: "无法开始对话", icon: "error" });
+      }
     }
+  },
+
+  generateUUID() {
+    return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(
+      /[xy]/g,
+      function (c) {
+        var r = (Math.random() * 16) | 0,
+          v = c == "x" ? r : (r & 0x3) | 0x8;
+        return v.toString(16);
+      }
+    );
   },
 
   /**
@@ -134,8 +250,7 @@ Page({
     console.log("🚀🚀🚀 performSend 方法被调用 🚀🚀🚀");
     console.log("=== performSend 开始执行 ===");
     console.log("消息内容:", messageContent);
-    console.log("会话ID:", this.data.conversationId);
-    console.log("当前时间:", new Date().toLocaleTimeString());
+    console.log("模式:", this.data.mode);
 
     const timestamp = Date.now() / 1000;
 
@@ -155,6 +270,103 @@ Page({
 
     // 滚动到底部显示新消息
     this.scrollToBottom();
+
+    // Handle Summary and Consultation Mode
+    if (this.data.mode === "summary" || this.data.mode === "consultation") {
+      console.log("进入智能体直连模式发送逻辑");
+      if (!this.data.agentUrl) {
+        wx.showToast({ title: "无法连接到智能体", icon: "none" });
+        this.setData({ isSending: false });
+        return;
+      }
+
+      // Add assistant placeholder
+      const agentMsgId = `ai_${Date.now()}`;
+      const agentMessage = {
+        id: agentMsgId,
+        role: "assistant",
+        content: "",
+        thinking: "",
+        showThinking: false,
+        timestamp: Date.now() / 1000,
+        timeString: this.formatTime(Date.now() / 1000),
+        isStreaming: true,
+      };
+
+      this.setData({
+        messages: [...this.data.messages, agentMessage],
+      });
+      this.scrollToBottom();
+
+      const payload = {
+        session_id: this.data.sessionId,
+        messages: [
+          { role: "user", content: { type: "text", text: messageContent } },
+        ],
+      };
+
+      try {
+        this.requestTask = sendTaskStreaming(
+          this.data.agentUrl,
+          payload,
+          (event) => {
+            // onMessage
+            if (event?.result?.delta) {
+              const messages = this.data.messages;
+              const msgIndex = messages.findIndex((m) => m.id === agentMsgId);
+              if (msgIndex !== -1) {
+                const updatedMsg = messages[msgIndex];
+                updatedMsg.content += event.result.delta;
+                updatedMsg.formattedContent = this.formatMarkdown(
+                  updatedMsg.content
+                );
+
+                this.setData({
+                  [`messages[${msgIndex}]`]: updatedMsg,
+                });
+                // 滚动到底部
+                this.scrollToBottom();
+              }
+            }
+
+            const statusParts = event?.result?.status?.message?.parts || [];
+            if (statusParts.length) {
+              const thinkingText = statusParts
+                .filter((p) => p?.type === "text" && p.text)
+                .map((p) => p.text)
+                .join("");
+              if (thinkingText) {
+                const messages = this.data.messages;
+                const msgIndex = messages.findIndex((m) => m.id === agentMsgId);
+                if (msgIndex !== -1) {
+                  const updatedMsg = messages[msgIndex];
+                  updatedMsg.thinking = (updatedMsg.thinking || "") + thinkingText;
+                  this.setData({ [`messages[${msgIndex}]`]: updatedMsg });
+                }
+              }
+            }
+
+            if (event?.result?.status === "completed" || event?.result?.final) {
+              this.setData({ isSending: false });
+            }
+          },
+          (error) => {
+            // onError
+            console.error("Streaming error:", error);
+            this.setData({ isSending: false });
+            wx.showToast({ title: "生成摘要失败", icon: "none" });
+          },
+          () => {
+            // onComplete
+            this.setData({ isSending: false });
+          }
+        );
+      } catch (error) {
+        console.error("Send message failed:", error);
+        this.setData({ isSending: false });
+      }
+      return;
+    }
 
     try {
       console.log("准备发送消息到API...");
@@ -190,6 +402,16 @@ Page({
         messages: this.data.messages.slice(0, -1),
         isSending: false,
       });
+    }
+  },
+
+  toggleThinking(e) {
+    const idx = e.currentTarget.dataset.index;
+    const messages = this.data.messages;
+    if (idx >= 0 && idx < messages.length) {
+      const updated = messages[idx];
+      updated.showThinking = !updated.showThinking;
+      this.setData({ [`messages[${idx}]`]: updated });
     }
   },
 
@@ -232,7 +454,10 @@ Page({
     }
 
     // 开始新的轮询时，清理已处理的事件ID集合，避免重复过滤
-    console.log('开始新的轮询，清理processedEventIds，之前大小:', this.processedEventIds.size);
+    console.log(
+      "开始新的轮询，清理processedEventIds，之前大小:",
+      this.processedEventIds.size
+    );
     this.processedEventIds.clear();
 
     this.setData({
@@ -266,15 +491,18 @@ Page({
       ])
         .then(([pendingResponse, eventsResponse]) => {
           console.log("pendingResponse:", pendingResponse);
-          console.log("eventsResponse length:", eventsResponse ? eventsResponse.length : 0);
-          
+          console.log(
+            "eventsResponse length:",
+            eventsResponse ? eventsResponse.length : 0
+          );
+
           // 1. 检查是否还在处理中
           if (pendingResponse && trackedMessageId) {
             activeTrackedIdIsStillPending = pendingResponse.some((item) =>
               item.includes(trackedMessageId)
             );
           }
-          
+
           console.log(
             `[${(elapsedTime / 1000).toFixed(
               1
@@ -290,31 +518,58 @@ Page({
 
             console.log(`处理 ${sortedEvents.length} 个事件`);
             for (const event of sortedEvents) {
-              console.log('处理事件:', event.id, event.content?.role, event.content?.parts?.length);
-              console.log('事件会话ID:', event.content?.metadata?.conversation_id);
-              console.log('当前会话ID:', this.data.conversationId);
-              console.log('ID是否已处理:', this.processedEventIds.has(event.id));
-              console.log('会话ID匹配:', event.content?.metadata?.conversation_id === this.data.conversationId);
-              console.log('事件ID存在:', !!event.id);
-              
-              const conversationMatches = event.content?.metadata?.conversation_id === this.data.conversationId;
+              console.log(
+                "处理事件:",
+                event.id,
+                event.content?.role,
+                event.content?.parts?.length
+              );
+              console.log(
+                "事件会话ID:",
+                event.content?.metadata?.conversation_id
+              );
+              console.log("当前会话ID:", this.data.conversationId);
+              console.log(
+                "ID是否已处理:",
+                this.processedEventIds.has(event.id)
+              );
+              console.log(
+                "会话ID匹配:",
+                event.content?.metadata?.conversation_id ===
+                  this.data.conversationId
+              );
+              console.log("事件ID存在:", !!event.id);
+
+              const conversationMatches =
+                event.content?.metadata?.conversation_id ===
+                this.data.conversationId;
               const eventIdExists = !!event.id;
               const notProcessed = !this.processedEventIds.has(event.id);
-              
-              console.log('条件检查 - 会话匹配:', conversationMatches, '事件ID存在:', eventIdExists, '未处理:', notProcessed);
-              
+
+              console.log(
+                "条件检查 - 会话匹配:",
+                conversationMatches,
+                "事件ID存在:",
+                eventIdExists,
+                "未处理:",
+                notProcessed
+              );
+
               if (eventIdExists && conversationMatches && notProcessed) {
                 this.processedEventIds.add(event.id);
                 const formattedMessage = this.formatEventToMessage(event);
-                console.log('格式化后的消息:', formattedMessage);
+                console.log("格式化后的消息:", formattedMessage);
                 if (formattedMessage && this.hasContent(formattedMessage)) {
-                  console.log('添加消息到newMessages:', formattedMessage.content);
+                  console.log(
+                    "添加消息到newMessages:",
+                    formattedMessage.content
+                  );
                   newMessages.push(formattedMessage);
                 } else {
-                  console.log('消息被过滤，原因: 无内容或格式化失败');
+                  console.log("消息被过滤，原因: 无内容或格式化失败");
                 }
               } else {
-                console.log('事件被跳过，原因: ID重复或会话ID不匹配');
+                console.log("事件被跳过，原因: ID重复或会话ID不匹配");
               }
             }
 
@@ -355,13 +610,16 @@ Page({
 
           // 检查本次轮询是否收到了新的AI回复
           const hasNewAssistantReply = newMessages.some(
-            (msg) => msg.role === "assistant" && msg.content && msg.content.trim()
+            (msg) =>
+              msg.role === "assistant" && msg.content && msg.content.trim()
           );
-          
+
           console.log(
             `[${(elapsedTime / 1000).toFixed(
               1
-            )}s] 本次轮询收到新AI回复: ${hasNewAssistantReply}, 新消息数量: ${newMessages.length}`
+            )}s] 本次轮询收到新AI回复: ${hasNewAssistantReply}, 新消息数量: ${
+              newMessages.length
+            }`
           );
 
           // 停止条件：处理完成且本次轮询收到了AI回复
@@ -386,17 +644,19 @@ Page({
               )}s] 处理完成但本次轮询未收到AI回复，继续轮询等待回复`
             );
           }
-          
+
           // 超时保护：30秒后强制停止
           if (elapsedTime > maxPollingTime) {
-            console.log(`[${(elapsedTime / 1000).toFixed(1)}s] 轮询超时，停止轮询`);
+            console.log(
+              `[${(elapsedTime / 1000).toFixed(1)}s] 轮询超时，停止轮询`
+            );
             this.setData({
               isPolling: false,
               isSending: false,
             });
             return;
           }
-          
+
           // 继续轮询
           if (this.data.isPolling && this.data.isSending) {
             setTimeout(poll, 500); // 每0.5秒轮询一次
@@ -416,7 +676,7 @@ Page({
   // 将事件转换为消息格式
   formatEventToMessage(event) {
     if (!event || !event.content) {
-      console.log('formatEventToMessage: 事件或内容为空', event);
+      console.log("formatEventToMessage: 事件或内容为空", event);
       return null;
     }
 
@@ -425,30 +685,35 @@ Page({
     const role = content.role || "assistant";
     const timestamp = event.timestamp || Date.now() / 1000;
 
-    console.log('formatEventToMessage: 事件内容详情', {
+    console.log("formatEventToMessage: 事件内容详情", {
       role: role,
       messageId: messageId,
       parts: content.parts,
-      partsLength: content.parts?.length
+      partsLength: content.parts?.length,
     });
 
     // 处理消息内容
     let text = "";
     if (content.parts && Array.isArray(content.parts)) {
-      console.log('formatEventToMessage: 处理parts数组', content.parts);
+      console.log("formatEventToMessage: 处理parts数组", content.parts);
       text = content.parts
         .filter((part) => {
-          console.log('formatEventToMessage: 检查part', part, 'type:', part.type);
+          console.log(
+            "formatEventToMessage: 检查part",
+            part,
+            "type:",
+            part.type
+          );
           return part.type === "text";
         })
         .map((part) => {
-          console.log('formatEventToMessage: 提取text', part.text);
+          console.log("formatEventToMessage: 提取text", part.text);
           return part.text;
         })
         .join("\n");
     }
 
-    console.log('formatEventToMessage: 最终提取的文本', text);
+    console.log("formatEventToMessage: 最终提取的文本", text);
 
     return {
       id: messageId,
@@ -469,39 +734,42 @@ Page({
   // 合并新消息，处理重复消息和assistant流式回复
   mergeMessages(currentMessages, newMessages) {
     let mergedMessages = [...currentMessages];
-    console.log('合并消息前:', mergedMessages.length, '条消息');
-    console.log('新消息数量:', newMessages.length);
+    console.log("合并消息前:", mergedMessages.length, "条消息");
+    console.log("新消息数量:", newMessages.length);
 
     for (const newMsg of newMessages) {
-      console.log('处理新消息:', newMsg.role, newMsg.content?.substring(0, 50));
-      
+      console.log("处理新消息:", newMsg.role, newMsg.content?.substring(0, 50));
+
       // 检查是否存在相同ID或相同内容的消息
-      const existingMsgIndex = mergedMessages.findIndex(msg => {
+      const existingMsgIndex = mergedMessages.findIndex((msg) => {
         // 优先检查消息ID
         if (msg.id && newMsg.id && msg.id === newMsg.id) {
           return true;
         }
         // 检查相同角色和内容的消息（考虑时间戳差异小于5秒的情况）
-        if (msg.role === newMsg.role && 
-            msg.content && newMsg.content &&
-            msg.content.trim() === newMsg.content.trim() &&
-            Math.abs(msg.timestamp - newMsg.timestamp) < 5) {
+        if (
+          msg.role === newMsg.role &&
+          msg.content &&
+          newMsg.content &&
+          msg.content.trim() === newMsg.content.trim() &&
+          Math.abs(msg.timestamp - newMsg.timestamp) < 5
+        ) {
           return true;
         }
         return false;
       });
-      
+
       if (existingMsgIndex !== -1) {
         // 如果找到重复消息，选择时间戳更新的消息
         const existingMsg = mergedMessages[existingMsgIndex];
         if (newMsg.timestamp >= existingMsg.timestamp) {
-          console.log('替换重复消息:', newMsg.id || '无ID');
+          console.log("替换重复消息:", newMsg.id || "无ID");
           mergedMessages[existingMsgIndex] = {
             ...newMsg,
             dupCount: 1,
           };
         } else {
-          console.log('跳过较旧的重复消息');
+          console.log("跳过较旧的重复消息");
         }
       } else {
         // 检查是否是流式回复的更新
@@ -515,14 +783,14 @@ Page({
           Math.abs(newMsg.timestamp - lastMsg.timestamp) < 10
         ) {
           // 如果新的assistant消息包含上一条assistant消息的内容且更长，说明是流式回复的更新
-          console.log('更新流式回复');
+          console.log("更新流式回复");
           mergedMessages[mergedMessages.length - 1] = {
             ...newMsg,
             dupCount: 1,
           };
         } else {
           // 新消息，直接添加
-          console.log('添加新消息到列表');
+          console.log("添加新消息到列表");
           mergedMessages.push({
             ...newMsg,
             dupCount: 1,
@@ -531,7 +799,7 @@ Page({
       }
     }
 
-    console.log('合并消息后:', mergedMessages.length, '条消息');
+    console.log("合并消息后:", mergedMessages.length, "条消息");
     return mergedMessages;
   },
 

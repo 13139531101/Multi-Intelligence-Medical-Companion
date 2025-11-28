@@ -17,6 +17,14 @@
       <view class="message-bubble">
         <!-- 消息内容 -->
         <rich-text class="message-content" nodes="{{item.formattedContent || item.content}}"></rich-text>
+        <view wx:if="{{item.role === 'assistant' && item.thinking}}" class="thinking-container">
+          <button class="thinking-toggle" bindtap="toggleThinking" data-index="{{index}}">
+            {{item.showThinking ? '隐藏思考过程' : '查看思考过程'}}
+          </button>
+          <view wx:if="{{item.showThinking}}" class="thinking-content">
+            <rich-text nodes="{{item.thinking}}"></rich-text>
+          </view>
+        </view>
         
         <!-- 时间戳 -->
         <view class="message-time">{{item.timeString}}</view>

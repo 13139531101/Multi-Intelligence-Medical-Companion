@@ -28,6 +28,7 @@ def extract_medical_info(text: str) -> str:
             'doctor_info': extract_doctor_info(text),
             'date': extract_date(text),
             'medical_advice': extract_medical_advice(text),
+            'original_content': text,
             'extraction_time': datetime.now().isoformat()
         }
         

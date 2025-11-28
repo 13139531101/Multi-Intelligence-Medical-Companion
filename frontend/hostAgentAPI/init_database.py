@@ -160,6 +160,36 @@ def init_database():
             );
             """
         )
+
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS visit_summaries (
+                id SERIAL PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                summary_id VARCHAR(64) UNIQUE,
+                visit_date DATE,
+                summary_content TEXT,
+                generated_by VARCHAR(50),
+                diagnosis TEXT,
+                created_at TIMESTAMPTZ DEFAULT now()
+            );
+            """
+        )
+
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS consultations (
+                id SERIAL PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                consultation_id VARCHAR(64) UNIQUE,
+                session_id VARCHAR(64),
+                question TEXT,
+                answer TEXT,
+                tags JSONB,
+                created_at TIMESTAMPTZ DEFAULT now()
+            );
+            """
+        )
         
         connection.commit()
         print("数据库初始化完成！")

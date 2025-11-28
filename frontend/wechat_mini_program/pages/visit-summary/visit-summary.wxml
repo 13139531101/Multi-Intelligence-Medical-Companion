@@ -8,15 +8,15 @@
 
   <!-- 快速操作 -->
   <view class="quick-actions">
-    <view class="action-item" bindtap="createSummary">
+    <view class="action-item" bindtap="chatToGenerate">
       <text class="action-icon">📝</text>
       <text class="action-title">生成摘要</text>
       <text class="action-desc">AI智能生成就诊摘要</text>
     </view>
-    <view class="action-item" bindtap="uploadReport">
-      <text class="action-icon">📄</text>
-      <text class="action-title">上传报告</text>
-      <text class="action-desc">上传检查报告生成摘要</text>
+    <view class="action-item" bindtap="manualCreate">
+      <text class="action-icon">✍️</text>
+      <text class="action-title">手工记录</text>
+      <text class="action-desc">手动添加就诊记录</text>
     </view>
   </view>
 
@@ -103,7 +103,7 @@
     </view>
   </view>
 
-  <!-- 健康建议 */
+  <!-- 健康建议 -->
   <view class="suggestions-section">
     <view class="section-title">健康建议</view>
     <view wx:if="{{suggestions.length > 0}}" class="suggestions-list">

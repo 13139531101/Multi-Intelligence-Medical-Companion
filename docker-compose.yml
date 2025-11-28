@@ -31,7 +31,11 @@ services:
     ports:
       - "10011:10011"
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request, sys; urllib.request.urlopen('http://localhost:10011/.well-known/agent.json')\" || exit 1"]
+      test:
+        [
+          "CMD-SHELL",
+          'python -c "import urllib.request, sys; urllib.request.urlopen(''http://localhost:10011/.well-known/agent.json'')" || exit 1',
+        ]
       interval: 5s
       timeout: 3s
       retries: 12
@@ -52,7 +56,11 @@ services:
     ports:
       - "10012:10012"
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request, sys; urllib.request.urlopen('http://localhost:10012/.well-known/agent.json')\" || exit 1"]
+      test:
+        [
+          "CMD-SHELL",
+          'python -c "import urllib.request, sys; urllib.request.urlopen(''http://localhost:10012/.well-known/agent.json'')" || exit 1',
+        ]
       interval: 5s
       timeout: 3s
       retries: 12
@@ -70,7 +78,11 @@ services:
     ports:
       - "10013:10013"
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request, sys; urllib.request.urlopen('http://localhost:10013/.well-known/agent.json')\" || exit 1"]
+      test:
+        [
+          "CMD-SHELL",
+          'python -c "import urllib.request, sys; urllib.request.urlopen(''http://localhost:10013/.well-known/agent.json'')" || exit 1',
+        ]
       interval: 5s
       timeout: 3s
       retries: 12
@@ -100,10 +112,17 @@ services:
       - ALIYUN_REGION_ID=${ALIYUN_REGION_ID}
       - ALIYUN_OCR_ENDPOINT=${ALIYUN_OCR_ENDPOINT}
       - ALIYUN_OCR_TYPE=${ALIYUN_OCR_TYPE}
+      - USE_LLM_SUMMARY=${USE_LLM_SUMMARY}
+      - LLM_BASE_URL=${LLM_BASE_URL}
+      - LLM_MODEL=${LLM_MODEL}
     ports:
       - "10010:10010"
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request, sys; urllib.request.urlopen('http://localhost:10010/.well-known/agent.json')\" || exit 1"]
+      test:
+        [
+          "CMD-SHELL",
+          'python -c "import urllib.request, sys; urllib.request.urlopen(''http://localhost:10010/.well-known/agent.json'')" || exit 1',
+        ]
       interval: 5s
       timeout: 3s
       retries: 12
@@ -115,8 +134,12 @@ services:
     environment:
       - HOST_API_PORT=13002
       - HOST_API_BIND=0.0.0.0
-      - PYTHONPATH=/app/backend:/app
+      - PYTHONPATH=/app
+      - BACKEND_DIR=/app/backend
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+      - USE_LLM_SUMMARY=${USE_LLM_SUMMARY}
+      - LLM_BASE_URL=${LLM_BASE_URL}
+      - LLM_MODEL=${LLM_MODEL}
       # 为 Host API 注入数据库 DSN，供提醒工具等使用
       - DATABASE_URL=${DATABASE_URL}
       - DB_HOST=${DB_HOST}
@@ -137,6 +160,7 @@ services:
       - ALIYUN_OCR_TYPE=${ALIYUN_OCR_TYPE}
     ports:
       - "13002:13002"
+    mem_limit: 1g
     volumes:
       - ./backend:/app/backend
     depends_on:

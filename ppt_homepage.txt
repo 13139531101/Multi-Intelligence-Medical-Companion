@@ -1,0 +1,87 @@
+
+逐页内容（每个智能体的功能、实现、系统设计与技术要点）
+
+第1页｜项目主页（基于A2A与MCP的个人健康系统）
+- 做什么：统一管理个人健康档案，支持文件直链与OCR/结构化，提供咨询与用药提醒
+- 怎么做：前端→HostAPI→后端→MCP工具→记忆系统→数据库闭环；JWT 保证用户ID一致
+- 系统设计：React + FastAPI + PostgreSQL；A2A 智能体通过 MCP 工具协同
+ - A2A/MCP应用点：A2A 智能体（档案/咨询/提醒/摘要/检索）通过 MCP 工具（OCR/DataExtraction/Storage/Document/AIAnalysis/RAG/Search/Medication）完成采集、解析、存储、检索与提醒
+ - 关键技术要点：
+ - 用户鉴权链路：JWT 注入→网关解析→后端校验，拒绝默认/空用户ID
+ - 类型映射兼容：UI→后端→HRM 多级映射，异常回退 other 保证一致
+ - 去重与序列化：file_id+content_hash 判重；UUID 转字符串避免序列化异常
+ - 结构化/OCR：空识别直接 422；统一返回 extracted_info/ocr_info
+
+第2页｜健康档案管理员（HealthRecordsManager）
+- 功能：OCR识别→信息抽取→档案入库→附件直链→结构化信息查询
+ - A2A角色：采集与入库主智能体，负责记录生命周期管控
+ - MCP工具：OCRTool、DataExtractionTool、StorageTool
+- 实现：
+  - 工具：
+    - OCRTool：输入图片/PDF，输出 OCR 文本与置信度；失败时返回错误信息
+    - DataExtractionTool：输入 OCR 文本与文档类型（auto/门诊/处方/检验/影像），输出结构化字段（患者信息、诊断、用药、检验结果、日期、医生信息、医嘱）
+    - StorageTool：输入记录类型、标题、摘要/内容、附件列表、记录日期、用户ID；执行去重（按 file_id 与内容哈希）、入库与附件关联；输出 record_id
+  - 类型映射：UI 类型→后端枚举→HRM 归类，异常回退到 other，保证跨模块一致
+  - 文件直链与预览：附件以 file_id 建立直链，图片展示缩略图，其他文件提供下载
+  - 查询接口：列表/详情/结构化信息查询，支持类型/日期/关键词过滤
+- 系统设计：`health_records` 与 `file_attachments` 关联；`metadata` 存放 `extracted_info/ocr_info`
+- 技术要点：用户ID校验、UI⇄后端⇄HRM 类型映射、UUID 序列化、文件与内容哈希去重
+
+第3页｜健康顾问（HealthAdvisor）
+- 功能：健康咨询、初步建议、个性化推荐；咨询历史检索与记忆联动
+ - A2A角色：面向用户对话与建议的智能体
+ - MCP工具：DiagnosisTool、KnowledgeTool、store_consultation_memory、search_consultation_history
+- 实现：
+  - 工具：
+    - DiagnosisTool：输入症状/病史摘要，输出一般性健康建议与注意事项（不替代医疗诊断）
+    - KnowledgeTool：输入健康问题，输出规范化的知识解答与参考来源说明
+    - store_consultation_memory：将咨询内容、症状、建议写入长期记忆，附加用户ID与标签
+    - search_consultation_history：按关键词/时间范围/用户ID检索历史咨询，支持限量与排序
+  - 会话与记忆：对话产生的关键信息进入 structured_data，供后续检索与个性化推荐
+- 系统设计：对话→工具调用→写入长期记忆→按用户ID检索与过滤
+- 技术要点：结构化 `structured_data` 的使用、查询过滤与限流、与档案数据的弱耦合联动
+
+第4页｜用药提醒助手（MedicationReminder）
+- 功能：用药计划、服药提醒、库存预警、复诊提醒；用药历史搜索
+ - A2A角色：提醒与日程控制的智能体
+ - MCP工具：store_medication_record、search_medication_history、ReminderTool、NotificationTool
+- 实现：
+  - 工具：
+    - store_medication_record：输入药物名称、剂量、频率、起止日期、用户ID、备注/标签；输出记录ID
+    - search_medication_history：按用户ID与时间范围、药物关键词检索用药历史；支持分页与排序
+    - ReminderTool：根据处方自动创建提醒计划（每日/每周/特定时间），管理启停与状态
+    - NotificationTool：将提醒推送到客户端/消息渠道，包含成功/失败状态与重试策略
+  - 计划与状态：提醒项具备激活/暂停/停止状态，记录依从性与漏服次数，生成报告
+- 系统设计：按 `user_id` 存储提醒记录，结合时间日程与状态管理
+- 技术要点：计划执行与幂等、提醒开关与状态、与档案记录的关联展示
+
+第5页｜就诊摘要生成器（VisitSummaryGenerator）
+- 功能：解析门诊/处方/检验/影像文档，生成摘要与结构化字段
+ - A2A角色：就诊摘要生成与文档解析的智能体
+ - MCP工具：DocumentTool、AIAnalysisTool
+- 实现：
+  - 工具：
+    - DocumentTool：自动识别文档类型（门诊/处方/检验/影像/其他），按类型抽取关键字段
+    - AIAnalysisTool：基于抽取与历史数据，生成就诊前摘要与风险提示，提供可读性优化
+  - 抽取策略：规则/正则提取与字典增强，缺失字段回退处理；对表格类检验结果支持批量解析
+- 系统设计：识别文档类型→正则/规则抽取→生成 `extracted_info`→写入档案 `metadata`
+- 技术要点：类型自动判断、容错与缺失字段回退、与 OCR 文本的融合
+
+第6页｜系统整合（前端/HostAPI/后端/MCP/DB 数据流）
+- 前端：React + MUI + Vite；JWT 注入；类型映射与附件直链渲染；最近/历史分组与计数一致
+- HostAPI：FastAPI 路由代理；参数枚举与日期预处理；统一字段输出；用户ID解析与校验
+- 后端：健康档案 CRUD；文件上传/直链；结构化与 OCR 接口；记忆写入回退与去重策略
+- 工具链：MCP 工具通过统一协议调用；输入输出采用 JSON 结构化；失败降级与错误提示
+- 数据库：健康档案/附件/提醒等表，metadata 承载扩展字段与结构化信息
+ - A2A协同：事件/对话→MCP 工具链→记忆/数据库→下游智能体读取与响应
+ - MCP契约：统一 JSON schema；工具串联（OCR→抽取→存储）；失败降级不阻断核心流程
+
+
+第7页｜工程技术要点（问题-方案-结果）
+ - 用户ID一致性：移除默认用户兜底；JWT 注入与解析统一；后端拒绝无效ID；结果是数据归属与权限正确
+ - 类型与枚举兼容：UI→后端→HRM 多级映射，异常回退 other；结果是跨模块存取一致、减少校验错误
+ - 去重与序列化：按 file_id/内容哈希判重；UUID 统一转字符串；结果是消除重复写入与序列化异常
+ - 结构化/OCR接口：统一入口返回 extracted_info/ocr_info；空识别直接报错不入库；结果是数据质量可控
+ - 计数与视图一致：顶部计数按当前标签页计算；结果是展示与数据一致性提升
+ - 端口与部署：Compose 端口统一、服务不重命名；结果是稳定的容器化部署与联通性
+ - 性能与体验：分页/筛选、直链缩略图、前端异步加载；结果是交互延迟降低、页面可用性提升
