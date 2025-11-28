@@ -94,14 +94,6 @@ const Dashboard = () => {
       color: '#9C27B0',
       path: '/summary',
       count: healthSummary?.summariesCount || 0
-    },
-    {
-      title: '智能助手',
-      description: '一句话调用所有健康智能体',
-      icon: <SmartToy sx={{ fontSize: 40 }} />,
-      color: '#E91E63',
-      path: '/agent-chat',
-      count: '新功能'
     }
   ];
 

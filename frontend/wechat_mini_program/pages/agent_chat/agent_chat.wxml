@@ -16,7 +16,9 @@
       <!-- 消息气泡 -->
       <view class="message-bubble">
         <!-- 消息内容 -->
-        <rich-text class="message-content" nodes="{{item.formattedContent || item.content}}"></rich-text>
+        <view class="message-content-scroll-wrapper">
+          <rich-text class="message-content" nodes="{{item.formattedContent || item.content}}"></rich-text>
+        </view>
         <view wx:if="{{item.role === 'assistant' && item.thinking}}" class="thinking-container">
           <button class="thinking-toggle" bindtap="toggleThinking" data-index="{{index}}">
             {{item.showThinking ? '隐藏思考过程' : '查看思考过程'}}

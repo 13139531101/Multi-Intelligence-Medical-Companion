@@ -436,7 +436,7 @@ const Consultation = () => {
       <Container maxWidth="xl" sx={{ mt: 4, mb: 4 }}>
         <Grid container spacing={3} sx={{ height: "calc(100vh - 200px)" }}>
           {/* 左侧：咨询历史 */}
-          <Grid item xs={12} md={3}>
+          <Grid item xs={12} md={3} sx={{ height: "100%" }}>
             <Paper
               sx={{ height: "100%", display: "flex", flexDirection: "column" }}
             >
@@ -506,9 +506,14 @@ const Consultation = () => {
           </Grid>
 
           {/* 中间：聊天区域 */}
-          <Grid item xs={12} md={6}>
+          <Grid item xs={12} md={6} sx={{ height: "100%" }}>
             <Paper
-              sx={{ height: "100%", display: "flex", flexDirection: "column" }}
+              sx={{
+                height: "100%",
+                display: "flex",
+                flexDirection: "column",
+                overflow: "hidden", // Ensure paper doesn't grow
+              }}
             >
               {/* 聊天头部 */}
               <Box sx={{ p: 2, borderBottom: 1, borderColor: "divider" }}>
@@ -523,7 +528,7 @@ const Consultation = () => {
               </Box>
 
               {/* 消息列表 */}
-              <Box sx={{ flexGrow: 1, overflow: "auto", p: 1 }}>
+              <Box sx={{ flexGrow: 1, overflow: "auto", p: 1, minHeight: 0 }}>
                 {!currentConsultationId ? (
                   <Box sx={{ textAlign: "center", mt: 4 }}>
                     <SmartToy
@@ -566,7 +571,10 @@ const Consultation = () => {
                         <ListItemText
                           primary={
                             <Box>
-                              <Typography variant="body1" sx={{ mb: 1 }}>
+                              <Typography
+                                variant="body1"
+                                sx={{ whiteSpace: "pre-wrap" }}
+                              >
                                 {message.content}
                               </Typography>
                               {message.files && message.files.length > 0 && (
@@ -707,7 +715,7 @@ const Consultation = () => {
           </Grid>
 
           {/* 右侧：快速问题和建议 */}
-          <Grid item xs={12} md={3}>
+          <Grid item xs={12} md={3} sx={{ height: "100%" }}>
             <Box
               sx={{
                 display: "flex",

@@ -84,6 +84,8 @@ const TestChat = () => {
           borderRadius: '4px',
           backgroundColor: '#f9f9f9',
           minHeight: '100px',
+          maxHeight: '500px',
+          overflowY: 'auto',
           whiteSpace: 'pre-wrap'
         }}>
           {response || '暂无响应'}

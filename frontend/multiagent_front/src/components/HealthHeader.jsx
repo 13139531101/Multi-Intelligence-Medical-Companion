@@ -89,11 +89,6 @@ const HealthHeader = () => {
       label: '就诊摘要',
       path: '/summary',
       icon: <Assignment />
-    },
-    {
-      label: '智能助手',
-      path: '/agent-chat',
-      icon: <Chat />
     }
   ];
 

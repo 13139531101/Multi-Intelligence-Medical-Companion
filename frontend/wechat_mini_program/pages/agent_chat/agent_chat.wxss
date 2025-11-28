@@ -85,6 +85,12 @@
   word-break: break-word;
 }
 
+/* AI回答滚动窗口 */
+.message-bubble-container.assistant .message-content-scroll-wrapper {
+  max-height: 600rpx;
+  overflow-y: auto;
+}
+
 /* 时间戳 */
 .message-time {
   font-size: 22rpx;
