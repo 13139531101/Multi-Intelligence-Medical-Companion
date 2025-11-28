@@ -429,34 +429,33 @@ def _generate_ai_summary(ocr_text: str, extracted: dict | None) -> str:
             if date:
                 parts.append(f"日期：{date}")
             if key:
-                parts.append(f"要点：{str(key)[:120]}")
+                parts.append(f"要点：{str(key)}")
             if diagnosis:
-                parts.append(f"诊断：{str(diagnosis)[:120]}")
+                parts.append(f"诊断：{str(diagnosis)}")
             if result:
-                parts.append(f"结果：{str(result)[:120]}")
+                parts.append(f"结果：{str(result)}")
             if prescription:
-                parts.append(f"用药：{str(prescription)[:120]}")
+                parts.append(f"用药：{str(prescription)}")
             if tests:
-                parts.append(f"检查：{str(tests)[:120]}")
+                parts.append(f"检查：{str(tests)}")
 
         # 优先使用OCR正文；若OCR文本足够（>=50字），直接截断为摘要
         if len(text_clean) >= 50:
-            summary = text_clean[:300]
+            summary = text_clean
         else:
             # 若仅有少量元信息，尝试组合元信息 + OCR片段
             info = "；".join([p for p in parts if p])
             if info and text_clean:
-                remain = 300 - len(info)
-                summary = (info + "；" + text_clean[:max(remain, 0)])
+                summary = (info + "；" + text_clean)
             else:
                 summary = info or text_clean
-            summary = summary[:300]
+            summary = summary
 
         return summary
     except Exception:
         t = (ocr_text or "")
         t = t.strip().replace("\n", " ")
-        return t[:300]
+        return t
 
 async def _maybe_llm_summary(ocr_text: str, extracted: dict | None) -> str | None:
     try:
@@ -493,7 +492,7 @@ async def _maybe_llm_summary(ocr_text: str, extracted: dict | None) -> str | Non
         sys_prompt = (
             "你是医疗文档摘要助手。仅依据输入文本生成中文摘要，禁止编造、推断或引用外部知识。"
             "必须完全从提供的内容中摘取信息，不得修改数值、单位或术语。缺失的字段不要补充；不存在的部分不要输出。"
-            "输出不超过300字，面向医生。"
+            "尽量完整列出关键检查项目，避免截断。面向医生。"
         )
         has_rx = False
         try:
@@ -515,7 +514,7 @@ async def _maybe_llm_summary(ocr_text: str, extracted: dict | None) -> str | Non
         user_prompt = (
             f"【结构化信息】\n{extracted_str}\n\n"
             f"【OCR全文】\n{text_clean}\n\n"
-            f"任务：在300字内概述真实信息，按‘{sections_str}’组织。"
+            f"任务：概述真实信息，按‘{sections_str}’组织。"
             "要求：只使用上述文本中的内容；禁止添加任何未出现的信息；禁止建议、风险推断或延伸结论；"
             "不要输出‘无用药’或类似占位内容。"
         )
@@ -528,7 +527,7 @@ async def _maybe_llm_summary(ocr_text: str, extracted: dict | None) -> str | Non
                     {"role": "user", "content": user_prompt},
                 ],
                 temperature=0.2,
-                max_tokens=400,
+                max_tokens=1200,
             )
             text = resp.choices[0].message.content or ""
         except Exception as e:
@@ -538,8 +537,7 @@ async def _maybe_llm_summary(ocr_text: str, extracted: dict | None) -> str | Non
         text = (text or "").strip().replace("\n", " ")
         if not text:
             return None
-        if len(text) > 300:
-            text = text[:300]
+        # 不做硬截断，保留完整摘要，由前端决定展示长度
         logger.info(f"LLM 摘要生成成功，长度={len(text)}")
         return text
     except Exception as e:
