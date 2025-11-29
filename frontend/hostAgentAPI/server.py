@@ -207,6 +207,23 @@ class ConversationServer:
         os.environ['HOSTAPI_AUTH_TOKEN'] = auth.strip()
     except Exception:
       pass
+    try:
+      tgt = request.headers.get('X-Target-Agent') or request.headers.get('x-target-agent') or ''
+      if isinstance(tgt, str) and tgt.strip():
+        name = tgt.strip()
+        alias = {
+          '就诊摘要生成器': '就诊摘要生成',
+          '就诊摘要': '就诊摘要生成',
+          '健康档案': '健康档案管理员',
+          '健康档案管理': '健康档案管理员',
+          '档案管理员': '健康档案管理员'
+        }
+        if name in alias:
+          name = alias[name]
+        message.metadata = message.metadata or {}
+        message.metadata['selected_agent'] = name
+    except Exception:
+      pass
     
     # 如果用户已登录，验证会话权限
     if current_user:

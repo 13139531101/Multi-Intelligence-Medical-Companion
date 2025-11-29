@@ -5,6 +5,8 @@ from typing import Dict, List, Any, Optional
 from datetime import datetime
 from mcp.server.fastmcp import FastMCP
 from dotenv import load_dotenv
+import sys
+import pathlib
 
 # 加载环境变量
 load_dotenv()
@@ -101,89 +103,84 @@ SYMPTOM_WEIGHTS = {
     "体重下降": {"糖尿病": 0.7}
 }
 
+def _resolve_db_manager():
+    try:
+        from HealthAdvisor.database_config import get_db_manager as fn
+        return fn
+    except Exception:
+        pass
+    try:
+        base = pathlib.Path(__file__).resolve().parents[1]
+        p = str(base)
+        if p not in sys.path:
+            sys.path.append(p)
+        from HealthAdvisor.database_config import get_db_manager as fn
+        return fn
+    except Exception:
+        pass
+    try:
+        from database_config import get_db_manager as fn
+        return fn
+    except Exception:
+        pass
+    return None
+
 @mcp.tool()
-def analyze_symptoms(symptoms: List[str], patient_age: Optional[int] = None, patient_gender: Optional[str] = None) -> Dict[str, Any]:
+def analyze_symptoms(symptoms: List[str], patient_age: Optional[int] = None, patient_gender: Optional[str] = None, user_id: str = "", days: int = 180) -> Dict[str, Any]:
     """
-    基于症状分析可能的疾病
-    
-    Args:
-        symptoms: 症状列表
-        patient_age: 患者年龄（可选）
-        patient_gender: 患者性别（可选）
-    
-    Returns:
-        可能疾病的分析结果
+    基于真实数据的症状关联检索与证据汇总
     """
     if not symptoms:
+        return {"status": "error", "message": "请提供至少一个症状"}
+    try:
+        _get_db = _resolve_db_manager()
+        if _get_db is None:
+            return {
+                "status": "success",
+                "patient": {"age": patient_age, "gender": patient_gender},
+                "symptoms": symptoms,
+                "evidence_count": 0,
+                "evidence": []
+            }
+        db = _get_db()
+        clauses = ["(summary ILIKE %s OR content ILIKE %s)"] * len(symptoms)
+        where_symptom = " OR ".join(clauses)
+        params: List[Any] = []
+        for s in symptoms:
+            like = f"%{s.strip()}%"
+            params.extend([like, like])
+        if user_id:
+            where_symptom = f"({where_symptom}) AND user_id = %s"
+            params.append(user_id)
+        rows = db.execute_query(
+            f"""
+            SELECT id, user_id, record_type, title, summary, content, created_at
+            FROM health_records
+            WHERE {where_symptom}
+            ORDER BY created_at DESC
+            LIMIT 100
+            """,
+            tuple(params)
+        )
+        evidence = [
+            {
+                "id": str(r.get("id")),
+                "type": r.get("record_type"),
+                "title": r.get("title"),
+                "excerpt": (r.get("summary") or r.get("content") or "")[:200],
+                "created_at": str(r.get("created_at")),
+            }
+            for r in rows
+        ]
         return {
-            "status": "error",
-            "message": "请提供至少一个症状"
+            "status": "success",
+            "patient": {"age": patient_age, "gender": patient_gender},
+            "symptoms": symptoms,
+            "evidence_count": len(evidence),
+            "evidence": evidence,
         }
-    
-    # 计算每种疾病的匹配度
-    disease_scores = {}
-    
-    for symptom in symptoms:
-        symptom = symptom.strip()
-        if symptom in SYMPTOM_WEIGHTS:
-            for disease, weight in SYMPTOM_WEIGHTS[symptom].items():
-                if disease not in disease_scores:
-                    disease_scores[disease] = 0
-                disease_scores[disease] += weight
-    
-    # 按匹配度排序
-    sorted_diseases = sorted(disease_scores.items(), key=lambda x: x[1], reverse=True)
-    
-    # 构建结果
-    analysis_result = {
-        "input_symptoms": symptoms,
-        "patient_info": {
-            "age": patient_age,
-            "gender": patient_gender
-        },
-        "possible_diseases": [],
-        "recommendations": [],
-        "analysis_time": datetime.now().isoformat()
-    }
-    
-    # 添加可能的疾病
-    for disease, score in sorted_diseases[:3]:  # 只返回前3个最可能的疾病
-        if disease in DISEASE_DB:
-            confidence = min(score / len(symptoms), 1.0)  # 标准化置信度
-            analysis_result["possible_diseases"].append({
-                "disease": disease,
-                "confidence": round(confidence * 100, 1),
-                "info": DISEASE_DB[disease],
-                "matched_symptoms": [s for s in symptoms if s in SYMPTOM_WEIGHTS and disease in SYMPTOM_WEIGHTS[s]]
-            })
-    
-    # 添加建议
-    if analysis_result["possible_diseases"]:
-        top_disease = analysis_result["possible_diseases"][0]
-        if top_disease["confidence"] > 60:
-            analysis_result["recommendations"].extend([
-                f"根据症状分析，可能患有{top_disease['disease']}",
-                "建议及时就医进行专业诊断",
-                "注意观察症状变化"
-            ])
-        else:
-            analysis_result["recommendations"].extend([
-                "症状不够典型，建议进一步观察",
-                "如症状持续或加重，请及时就医",
-                "保持良好的生活习惯"
-            ])
-    else:
-        analysis_result["recommendations"].extend([
-            "未能匹配到明确的疾病模式",
-            "建议咨询专业医生进行详细检查",
-            "记录症状的详细情况和变化"
-        ])
-    
-    return {
-        "status": "success",
-        "analysis": analysis_result,
-        "disclaimer": "此分析仅供参考，不能替代专业医疗诊断。如有疑虑请及时就医。"
-    }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
 
 @mcp.tool()
 def get_disease_info(disease_name: str) -> Dict[str, Any]:

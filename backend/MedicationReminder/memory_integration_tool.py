@@ -39,13 +39,7 @@ async def ensure_memory_system() -> None:
     if memory_system is not None:
         return
     try:
-        database_url = os.getenv('DATABASE_URL', 'sqlite:///medication_reminder_memory.db')
-        embedding_model = os.getenv('EMBEDDING_MODEL', 'text-embedding-3-small')
-
-        ms = AgentMemorySystem(
-            database_url=database_url,
-            embedding_model=embedding_model
-        )
+        ms = AgentMemorySystem()
         await ms.initialize()
         memory_system = ms
         logger.info("用药提醒记忆系统初始化成功(惰性)")
@@ -243,7 +237,7 @@ async def handle_list_tools() -> list[types.Tool]:
                 "type": "object",
                 "properties": {
                     "query": {"type": "string", "description": "搜索关键词"},
-                    "user_id": {"type": "string", "description": "用户ID（可选）"},
+                    "user_id": {"type": "string", "description": "用户ID。如果已知当前用户，请务必提供。"},
                     "medication_name": {"type": "string", "description": "药物名称（可选）"},
                     "date_range": {"type": "string", "description": "日期范围（可选）"},
                     "limit": {"type": "integer", "description": "返回结果数量限制", "default": 10}

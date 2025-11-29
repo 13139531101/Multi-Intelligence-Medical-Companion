@@ -43,7 +43,12 @@ import { useRecoilValue } from "recoil";
 import { userState } from "../store/recoilState";
 import Header from "../components/HealthHeader";
 import AgentAssistant from "../components/AgentAssistant";
-import { getConsultationHistory, createConsultation } from "../api/healthApi";
+import {
+  getConsultationHistory,
+  createConsultation,
+  sendMessage,
+  getConsultationMessages,
+} from "../api/healthApi";
 import { listRemoteAgents, getAgentCard, sendTaskStreaming } from "../api/api";
 import { v4 as uuidv4 } from "uuid";
 
@@ -53,9 +58,9 @@ const Consultation = () => {
   const [loading, setLoading] = useState(false);
   const [consultations, setConsultations] = useState([]);
   const [currentConsultationId, setCurrentConsultationId] = useState(null);
-  const [openNewDialog, setOpenNewDialog] = useState(false);
-  const [consultationTitle, setConsultationTitle] = useState("");
-  const [consultationType, setConsultationType] = useState("general");
+  // const [openNewDialog, setOpenNewDialog] = useState(false); // Removed
+  // const [consultationTitle, setConsultationTitle] = useState(""); // Removed
+  // const [consultationType, setConsultationType] = useState("general"); // Removed
   const [isRecording, setIsRecording] = useState(false);
   const aiContentRef = useRef("");
   // 新增：A2A 状态
@@ -122,7 +127,11 @@ const Consultation = () => {
       try {
         const agents = await listRemoteAgents();
         if (Array.isArray(agents) && agents.length > 0) {
-          const addr = agents[0]?.url || agents[0]?.address || "";
+          const advisor =
+            agents.find((a) => a?.name === "健康顾问") ||
+            agents.find((a) => (a?.name || "").includes("顾问")) ||
+            agents[0];
+          const addr = advisor?.url || advisor?.address || "";
           if (addr) {
             const card = await getAgentCard(addr);
             setAgentCardState(card);
@@ -198,9 +207,16 @@ const Consultation = () => {
   const handleSendMessage = async () => {
     if (!inputMessage.trim()) return;
 
-    // If no active consultation, create a local one
-    if (!currentConsultationId) {
-      handleCreateConsultation("新咨询", "general");
+    let activeConsultationId = currentConsultationId;
+
+    // If no active consultation, create one
+    if (!activeConsultationId) {
+      activeConsultationId = await handleCreateConsultation();
+      if (!activeConsultationId) return;
+      try {
+        setCurrentConsultationId(activeConsultationId);
+        setSessionId(activeConsultationId);
+      } catch (_) {}
     }
 
     if (!agentCardState?.agentEndpointUrl) {
@@ -214,6 +230,16 @@ const Consultation = () => {
       content: inputMessage,
       timestamp: new Date(),
     };
+
+    // Save User Message
+    try {
+      await sendMessage(activeConsultationId, {
+        role: "user",
+        content: inputMessage,
+      });
+    } catch (e) {
+      console.warn("保存用户消息失败:", e);
+    }
 
     setMessages((prev) => [...prev, userMessage]);
     setInputMessage("");
@@ -240,7 +266,7 @@ const Consultation = () => {
       const taskId = uuidv4();
       const payload = {
         id: taskId,
-        sessionId,
+        sessionId: activeConsultationId,
         acceptedOutputModes: ["text", "data"],
         message: {
           role: "user",
@@ -252,7 +278,7 @@ const Consultation = () => {
         agentCardState.agentEndpointUrl,
         payload,
         // onMessage
-        (evt) => {
+        async (evt) => {
           const statusParts = evt?.result?.status?.message?.parts || [];
           if (statusParts.length && currentStreamingMessageIdRef.current) {
             const thinkingText = statusParts
@@ -280,14 +306,17 @@ const Consultation = () => {
             const { parts, append, lastChunk } = artifact;
             parts.forEach((part) => {
               if (part?.type === "text" && typeof part.text === "string") {
+                const text = part.text;
+                aiContentRef.current = append
+                  ? aiContentRef.current + text
+                  : text;
+
                 setMessages((prev) =>
                   prev.map((m) =>
                     m.id === currentStreamingMessageIdRef.current
                       ? {
                           ...m,
-                          content: append
-                            ? (m.content || "") + part.text
-                            : part.text,
+                          content: append ? (m.content || "") + text : text,
                           isStreaming: !lastChunk,
                         }
                       : m
@@ -305,6 +334,7 @@ const Consultation = () => {
               .map((p) => p.text)
               .join("");
             if (text) {
+              aiContentRef.current += text;
               setMessages((prev) =>
                 prev.map((m) =>
                   m.id === currentStreamingMessageIdRef.current
@@ -328,18 +358,16 @@ const Consultation = () => {
               )
             );
             setLoading(false);
-            (async () => {
-              try {
-                await createConsultation({
-                  question: userMessage.content,
-                  answer: aiContentRef.current,
-                  session_id: sessionId,
-                  tags: [],
-                });
-              } catch (_) {}
-            })();
-            // Refresh history after a successful turn (because it's saved)
-            fetchConsultationHistory();
+
+            // Save AI Message
+            try {
+              await sendMessage(activeConsultationId, {
+                role: "ai",
+                content: aiContentRef.current,
+              });
+            } catch (e) {
+              console.warn("保存AI消息失败:", e);
+            }
           }
         },
         // onError
@@ -387,29 +415,105 @@ const Consultation = () => {
     }
   };
 
-  const handleCreateConsultation = (
-    title = consultationTitle,
-    type = consultationType
-  ) => {
-    const newId = uuidv4();
-    setCurrentConsultationId(newId);
-    setMessages([
-      {
-        id: Date.now(),
-        type: "ai",
-        content: `您好！我是您的AI健康顾问。很高兴为您提供${
-          consultationTypes.find((t) => t.value === type)?.label || "健康咨询"
-        }服务。请告诉我您想了解什么？`,
-        timestamp: new Date(),
-      },
-    ]);
-    setOpenNewDialog(false);
-    setConsultationTitle("");
+  const handleCreateConsultation = async () => {
+    const now = new Date();
+    const title = `咨询 ${now.toLocaleString()}`;
+    const newSessionId = uuidv4();
+    const initialMsg = "您好！我是您的AI健康顾问。请问有什么可以帮您？";
+
+    try {
+      // 1. Create in DB immediately
+      const result = await createConsultation({
+        question: title,
+        answer: initialMsg,
+        session_id: newSessionId,
+        tags: [],
+      });
+
+      // 2. Construct local object to update UI immediately
+      // Assuming result contains the created ID, or we generate one if backend doesn't return consistent ID for 'consultation_id' vs 'id'
+      // But getConsultationHistory maps item.consultation_id to id.
+      // Let's assume backend generates an ID. If we don't have it, we might need to fetch history.
+      // To be safe and simple: fetch history and select the first one (latest).
+
+      await fetchConsultationHistory();
+
+      // We need to set the current consultation to the one we just created.
+      // Since fetchConsultationHistory updates state asynchronously, we can't rely on 'consultations' state here immediately.
+      // However, we can try to find it or just reload the page? No, that's bad.
+
+      // Better approach: fetchHistory returns the list?
+      // In fetchConsultationHistory:
+      // const history = await getConsultationHistory();
+      // setConsultations(formattedHistory);
+      // I should modify fetchConsultationHistory to return the formatted list.
+
+      const history = await getConsultationHistory();
+      const formattedHistory = history.map((item) => ({
+        id: item.consultation_id,
+        title:
+          item.question.length > 20
+            ? item.question.substring(0, 20) + "..."
+            : item.question,
+        type: "general",
+        createdAt: item.created_at,
+        messages: [
+          {
+            id: item.consultation_id + "_q",
+            type: "user",
+            content: item.question,
+            timestamp: new Date(item.created_at),
+          },
+          {
+            id: item.consultation_id + "_a",
+            type: "ai",
+            content: item.answer,
+            timestamp: new Date(item.created_at),
+          },
+        ],
+      }));
+
+      setConsultations(formattedHistory);
+
+      // Find the one with our session_id if possible, or just the latest
+      // The backend sorts by created_at desc usually?
+      // Let's assume the new one is the first one or we match by question title
+      const newItem = formattedHistory.find(
+        (item) =>
+          item.title.includes(title) || item.messages[0].content === title
+      );
+
+      if (newItem) {
+        handleLoadConsultation(newItem);
+        setSessionId(newSessionId); // Ensure session ID matches
+      }
+      return newSessionId;
+    } catch (error) {
+      console.error("Failed to create consultation:", error);
+      return null;
+    }
   };
 
-  const handleLoadConsultation = (consultation) => {
+  const handleLoadConsultation = async (consultation) => {
     setCurrentConsultationId(consultation.id);
-    setMessages(consultation.messages || []);
+    setSessionId(consultation.id);
+    try {
+      const msgs = await getConsultationMessages(consultation.id);
+      if (msgs && msgs.length > 0) {
+        const uiMsgs = msgs.map((m) => ({
+          id: m.id,
+          type: m.role,
+          content: m.content,
+          timestamp: new Date(m.created_at),
+        }));
+        setMessages(uiMsgs);
+      } else {
+        setMessages(consultation.messages || []);
+      }
+    } catch (e) {
+      console.error("Failed to load messages:", e);
+      setMessages(consultation.messages || []);
+    }
   };
 
   const handleQuickQuestion = (question) => {
@@ -448,7 +552,7 @@ const Consultation = () => {
                   fullWidth
                   variant="contained"
                   startIcon={<Add />}
-                  onClick={() => setOpenNewDialog(true)}
+                  onClick={handleCreateConsultation}
                   sx={{ borderRadius: 2 }}
                 >
                   新建咨询
@@ -789,58 +893,7 @@ const Consultation = () => {
         </Grid>
       </Container>
 
-      {/* 新建咨询对话框 */}
-      <Dialog
-        open={openNewDialog}
-        onClose={() => setOpenNewDialog(false)}
-        maxWidth="sm"
-        fullWidth
-      >
-        <DialogTitle>新建健康咨询</DialogTitle>
-        <DialogContent>
-          <TextField
-            fullWidth
-            label="咨询标题"
-            value={consultationTitle}
-            onChange={(e) => setConsultationTitle(e.target.value)}
-            sx={{ mt: 2, mb: 2 }}
-          />
-          <Typography variant="subtitle2" gutterBottom>
-            选择咨询类型：
-          </Typography>
-          <Grid container spacing={2}>
-            {consultationTypes.map((type) => (
-              <Grid item xs={6} key={type.value}>
-                <Card
-                  sx={{
-                    cursor: "pointer",
-                    border: consultationType === type.value ? 2 : 1,
-                    borderColor:
-                      consultationType === type.value ? type.color : "divider",
-                    "&:hover": { borderColor: type.color },
-                  }}
-                  onClick={() => setConsultationType(type.value)}
-                >
-                  <CardContent sx={{ textAlign: "center", py: 2 }}>
-                    <Box sx={{ color: type.color, mb: 1 }}>{type.icon}</Box>
-                    <Typography variant="body2">{type.label}</Typography>
-                  </CardContent>
-                </Card>
-              </Grid>
-            ))}
-          </Grid>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setOpenNewDialog(false)}>取消</Button>
-          <Button
-            onClick={() => handleCreateConsultation()}
-            variant="contained"
-            disabled={!consultationTitle.trim()}
-          >
-            开始咨询
-          </Button>
-        </DialogActions>
-      </Dialog>
+      {/* 新建咨询对话框 - 已移除 */}
 
       {/* 智能助手 */}
       <AgentAssistant

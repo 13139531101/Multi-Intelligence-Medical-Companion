@@ -178,6 +178,24 @@ class ADKHostManager(ApplicationManager):
             'input_message_metadata': message.metadata,
             'session_id': conversation_id,
         }
+        try:
+            incoming_md = message.metadata or {}
+            incoming_agent = incoming_md.get('selected_agent')
+            if isinstance(incoming_agent, str) and incoming_agent.strip():
+                name = incoming_agent.strip()
+                alias = {
+                    '就诊摘要生成器': '就诊摘要生成',
+                    '就诊摘要': '就诊摘要生成',
+                    '健康档案': '健康档案管理员',
+                    '健康档案管理': '健康档案管理员',
+                    '档案管理员': '健康档案管理员'
+                }
+                if name in alias:
+                    name = alias[name]
+                if any(a.name == name for a in self._agents):
+                    state_update['agent'] = name
+        except Exception:
+            pass
         last_message_id = get_last_message_id(message)
         if (
             last_message_id

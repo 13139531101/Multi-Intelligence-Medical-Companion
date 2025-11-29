@@ -98,7 +98,7 @@ class SSEMCPClient:
         while attempt < retries:
             try:
                 logger.info(f"开始使用SSE MCP协议调用工具，tool_name: {tool_name}, arguments: {arguments}")
-                response = await self.session.call_tool(tool_name, arguments, read_timeout_seconds=timedelta(seconds=6))
+                response = await self.session.call_tool(tool_name, arguments, read_timeout_seconds=timedelta(seconds=20))
                 # 将 pydantic 模型转换为字典格式
                 response_data = response.model_dump() if hasattr(response, 'model_dump') else response
                 if response_data.get("isError"):
@@ -291,8 +291,17 @@ class MCPClient:
         attempt = 0
         while attempt < retries:
             try:
-                logger.info(f"执行工具: {tool_name}...，最多等待6秒")
-                response = await self.session.call_tool(tool_name, arguments, read_timeout_seconds=timedelta(seconds=6))
+                try:
+                    timeout_env = os.environ.get("MCP_READ_TIMEOUT_SEC", "45")
+                    timeout_sec = int(timeout_env)
+                    if timeout_sec < 10:
+                        timeout_sec = 10
+                    if timeout_sec > 120:
+                        timeout_sec = 120
+                except Exception:
+                    timeout_sec = 45
+                logger.info(f"执行工具: {tool_name}...，最多等待{timeout_sec}秒")
+                response = await self.session.call_tool(tool_name, arguments, read_timeout_seconds=timedelta(seconds=timeout_sec))
                 response_data = response.model_dump() if hasattr(response, 'model_dump') else response
                 if response_data.get("isError"):
                     # 说明发生了错误，那么进行重试
@@ -315,13 +324,13 @@ class MCPClient:
             except Exception as e:
                 attempt += 1
                 logger.warning(
-                    f"Error executing tool: {e}. Attempt {attempt} of {retries}."
+                    f"Error executing tool '{tool_name}': {e}. Attempt {attempt} of {retries}."
                 )
                 if attempt < retries:
                     logger.info(f"Retrying in {delay} seconds...")
                     await asyncio.sleep(delay)
                 else:
-                    logger.error(f"Max retries run tools reached.: {traceback.format_exc()}")
+                    logger.error(f"Max retries reached for tool '{tool_name}'. Error: {e}. Traceback: {traceback.format_exc()}")
                     raise
 
     async def stop(self):

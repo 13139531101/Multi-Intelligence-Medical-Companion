@@ -1069,20 +1069,20 @@ async def create_medication_reminder(request: Request, user: dict = Depends(get_
 async def get_consultation_history_api(limit: int = 10, user: dict = Depends(get_current_user)):
     try:
         user_id = str(user.get("id") or user.get("user_id") or user.get("uid"))
-        
+
         # 尝试动态加载 HealthAdvisor 的 database_tool
         # 注意：这里需要确保路径正确，或者直接连接数据库查询
         # 为了简单起见，我们这里直接使用 SQL 查询，复用已有的 DB 连接机制（如果有的话）
         # 或者加载 database_tool.py
-        
+
         # 方案：直接查询 PostgreSQL 数据库
         # 我们假设数据库配置与 HRM 相同或兼容，因为都在同一个 PostgreSQL 实例中
-        
+
         try:
             db_manager = get_db_manager()
             if not db_manager:
                 raise Exception("DB Manager not available")
-                
+
             query = """
                 SELECT consultation_id, question, answer, tags, created_at
                 FROM consultations
@@ -1090,16 +1090,13 @@ async def get_consultation_history_api(limit: int = 10, user: dict = Depends(get
                 ORDER BY created_at DESC
                 LIMIT %s
             """
-            
+
             # 使用 HRM 的 db_manager 执行查询 (它应该能访问同一个库)
             # 注意：execute_query 返回的是 dict list (因为 row_factory=dict_row)
             results = db_manager.execute_query(query, (user_id, limit))
-            
-            return {
-                "success": True,
-                "history": results
-            }
-            
+
+            return results
+
         except Exception as db_err:
              logging.error(f"直接查询数据库失败: {db_err}, 尝试回退方案...")
              # 如果直接查询失败，可以尝试其他方式，或者直接返回空
@@ -1109,16 +1106,144 @@ async def get_consultation_history_api(limit: int = 10, user: dict = Depends(get
         logging.error(f"获取咨询历史失败: {e}")
         return {"success": False, "message": f"获取咨询历史失败: {str(e)}"}
 
-@meds_router.get("/api/visit-summaries/history")
-async def get_visit_summary_history_api(limit: int = 10, user: dict = Depends(get_current_user)):
+@meds_router.post("/api/consultations/create")
+async def create_consultation_api(request: Request, user: dict = Depends(get_current_user)):
     try:
         user_id = str(user.get("id") or user.get("user_id") or user.get("uid"))
-        
+        payload = await request.json()
+
+        question = payload.get("question")
+        answer = payload.get("answer")
+        session_id = payload.get("session_id")
+        tags = payload.get("tags", [])
+
+        if not question or not answer:
+            return {"success": False, "message": "Missing required fields"}
+
+        # Use session_id if provided, otherwise generate new
+        consultation_id = session_id if session_id else str(uuid.uuid4())
+
         try:
             db_manager = get_db_manager()
             if not db_manager:
                 raise Exception("DB Manager not available")
-                
+
+            # Ensure chat_messages table exists (Lazy init)
+            try:
+                create_table_query = """
+                CREATE TABLE IF NOT EXISTS chat_messages (
+                    id VARCHAR(64) PRIMARY KEY,
+                    consultation_id VARCHAR(50) NOT NULL,
+                    role VARCHAR(20) NOT NULL,
+                    content TEXT,
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+                );
+                """
+                db_manager.execute_insert(create_table_query)
+                # Create index separately
+                db_manager.execute_insert("CREATE INDEX IF NOT EXISTS idx_chat_messages_consultation_id ON chat_messages(consultation_id)")
+            except Exception as e:
+                logging.warning(f"Table creation warning: {e}")
+
+            query = """
+                INSERT INTO consultations (user_id, consultation_id, question, answer, tags)
+                VALUES (%s, %s, %s, %s, %s)
+                RETURNING consultation_id
+            """
+
+            import json
+            tags_json = json.dumps(tags, ensure_ascii=False)
+
+            # Insert into consultations
+            db_manager.execute_insert(query, (user_id, consultation_id, question, answer, tags_json))
+
+            # Insert initial messages into chat_messages (explicit IDs)
+            try:
+                msg_id_user = str(uuid.uuid4())
+                db_manager.execute_insert(
+                    "INSERT INTO chat_messages (id, consultation_id, role, content) VALUES (%s, %s, 'user', %s)",
+                    (msg_id_user, consultation_id, question)
+                )
+            except Exception as e:
+                logging.warning(f"Seed user message insert failed: {e}")
+            try:
+                msg_id_ai = str(uuid.uuid4())
+                db_manager.execute_insert(
+                    "INSERT INTO chat_messages (id, consultation_id, role, content) VALUES (%s, %s, 'ai', %s)",
+                    (msg_id_ai, consultation_id, answer)
+                )
+            except Exception as e:
+                logging.warning(f"Seed ai message insert failed: {e}")
+
+            return {
+                "success": True,
+                "consultation_id": consultation_id
+            }
+
+        except Exception as db_err:
+            logging.error(f"创建咨询失败: {db_err}")
+            return {"success": False, "message": f"创建咨询失败: {str(db_err)}"}
+
+    except Exception as e:
+        logging.error(f"创建咨询API异常: {e}")
+        return {"success": False, "message": f"创建咨询API异常: {str(e)}"}
+
+@meds_router.post("/api/consultations/message")
+async def save_consultation_message(request: Request, user: dict = Depends(get_current_user)):
+    try:
+        payload = await request.json()
+        consultation_id = payload.get("consultation_id")
+        role = payload.get("role")
+        content = payload.get("content")
+
+        if not consultation_id or not role or not content:
+            return {"success": False, "message": "Missing required fields"}
+
+        db_manager = get_db_manager()
+        if not db_manager:
+            return {"success": False, "message": "DB Manager not available"}
+
+        msg_id = str(uuid.uuid4())
+        db_manager.execute_insert(
+            "INSERT INTO chat_messages (id, consultation_id, role, content) VALUES (%s, %s, %s, %s)",
+            (msg_id, consultation_id, role, content)
+        )
+        return {"success": True}
+    except Exception as e:
+        logging.error(f"Save message error: {e}")
+        return {"success": False, "message": str(e)}
+
+@meds_router.get("/api/consultations/{consultation_id}/messages")
+async def get_consultation_messages(consultation_id: str, user: dict = Depends(get_current_user)):
+    try:
+        db_manager = get_db_manager()
+        if not db_manager:
+            return {"success": False, "message": "DB Manager not available"}
+
+        rows = db_manager.execute_query(
+            "SELECT * FROM chat_messages WHERE consultation_id = %s ORDER BY created_at ASC",
+            (consultation_id,)
+        )
+        # Convert UUID and datetime to string
+        for row in rows:
+            if row.get('id'): row['id'] = str(row['id'])
+            if row.get('created_at'): row['created_at'] = str(row['created_at'])
+
+        return {"success": True, "messages": rows}
+    except Exception as e:
+        logging.error(f"Get messages error: {e}")
+        return {"success": False, "message": str(e)}
+
+@meds_router.get("/api/visit-summaries/history")
+async def get_visit_summary_history_api(limit: int = 10, user: dict = Depends(get_current_user)):
+    try:
+        user_id = str(user.get("id") or user.get("user_id") or user.get("uid"))
+
+        try:
+            db_manager = get_db_manager()
+            if not db_manager:
+                raise Exception("DB Manager not available")
+
             query = """
                 SELECT summary_id, visit_date, summary_content, generated_by, diagnosis, created_at
                 FROM visit_summaries
@@ -1126,14 +1251,11 @@ async def get_visit_summary_history_api(limit: int = 10, user: dict = Depends(ge
                 ORDER BY created_at DESC
                 LIMIT %s
             """
-            
+
             results = db_manager.execute_query(query, (user_id, limit))
-            
-            return {
-                "success": True,
-                "history": results
-            }
-            
+
+            return results
+
         except Exception as db_err:
              logging.error(f"直接查询数据库失败: {db_err}")
              return {"success": False, "message": f"查询失败: {str(db_err)}", "history": []}
@@ -1167,16 +1289,16 @@ async def recognize_medication_image(file: UploadFile = File(...), user: dict = 
         content = await file.read()
         if not content:
             return {"success": False, "message": "文件为空"}
-        
+
         # 转换为Base64
         import base64
         b64_content = base64.b64encode(content).decode("utf-8")
-        
+
         # 调用OCR工具
         extract_text = getattr(health_api, "extract_text_from_image", None)
         if not extract_text:
             return {"success": False, "message": "OCR服务不可用"}
-            
+
         # extract_text_from_image 是一个 MCP 工具函数，可能直接调用或者通过 fn 调用
         text = ""
         try:
@@ -1187,11 +1309,11 @@ async def recognize_medication_image(file: UploadFile = File(...), user: dict = 
         except Exception as ocr_err:
             logging.error(f"OCR识别出错: {ocr_err}")
             return {"success": False, "message": f"识别失败: {str(ocr_err)}"}
-            
+
         # 简单的后处理，尝试提取可能的药物名称（假设第一行是名称）
         lines = [line.strip() for line in text.split('\n') if line.strip()]
         drug_name = lines[0] if lines else ""
-        
+
         return {
             "success": True,
             "text": text,
@@ -2081,35 +2203,35 @@ async def smart_chat(request: Request, current_user: Optional[Dict[str, Any]] = 
                 text = raw.decode("utf-8", errors="replace")
         data = json.loads(text) if text else {}
         user_message = data.get('message', '')
-        
+
         if not user_message:
             return {"error": "消息内容不能为空"}
-        
+
         # 智能路由逻辑：根据关键词判断应该调用哪个智能体
         agent_mapping = {
             "健康档案管理员": ["档案", "病史", "记录", "健康记录", "医疗记录", "病历"],
             "健康顾问": ["建议", "咨询", "症状", "诊断", "治疗", "健康问题", "医疗建议"],
             "用药提醒助手": ["用药", "药物", "提醒", "服药", "药品", "medication"],
-            "就诊摘要生成器": ["摘要", "总结", "就诊", "报告", "文档", "解析"]
+            "就诊摘要生成": ["摘要", "总结", "就诊", "报告", "文档", "解析"]
         }
-        
+
         # 找到最匹配的智能体
         selected_agent = None
         max_matches = 0
-        
+
         for agent_name, keywords in agent_mapping.items():
             matches = sum(1 for keyword in keywords if keyword in user_message)
             if matches > max_matches:
                 max_matches = matches
                 selected_agent = agent_name
-        
+
         # 如果没有明确匹配，默认使用健康顾问
         if not selected_agent:
             selected_agent = "健康顾问"
-        
+
         # 创建会话并发送消息
         conversation = agent_server.manager.create_conversation()
-        
+
         # 构造消息
         from A2AServer.common.A2Atypes import Message, TextPart
         message = Message(
@@ -2141,7 +2263,7 @@ async def smart_chat(request: Request, current_user: Optional[Dict[str, Any]] = 
                         pass
         except Exception:
             pass
-        
+
         # 发送消息到智能体
         message = agent_server.manager.sanitize_message(message)
         task = asyncio.create_task(agent_server.manager.process_message(message))
@@ -2176,7 +2298,7 @@ async def smart_chat(request: Request, current_user: Optional[Dict[str, Any]] = 
                 except Exception:
                     pass
         task.add_done_callback(_done_cb)
-        
+
         return {
             "success": True,
             "message": f"已将您的请求转发给{selected_agent}",
@@ -2184,7 +2306,7 @@ async def smart_chat(request: Request, current_user: Optional[Dict[str, Any]] = 
             "message_id": message.metadata['message_id'],
             "selected_agent": selected_agent
         }
-        
+
     except Exception as e:
         logger.error(f"智能路由处理错误: {str(e)}")
         return {"error": f"处理请求时发生错误: {str(e)}"}

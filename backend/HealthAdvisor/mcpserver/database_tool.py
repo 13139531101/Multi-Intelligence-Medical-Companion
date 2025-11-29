@@ -4,6 +4,9 @@ import os
 import uuid
 from datetime import datetime
 from mcp.server.fastmcp import FastMCP
+import sys
+# Add parent directory to sys.path to import database_config
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from database_config import DatabaseManager
 
 # Initialize FastMCP
@@ -73,3 +76,6 @@ def get_consultation_history(user_id: str, limit: int = 10) -> str:
     except Exception as e:
         logger.error(f"获取咨询历史失败: {e}")
         return json.dumps({'success': False, 'message': str(e)}, ensure_ascii=False)
+
+if __name__ == "__main__":
+    mcp.run()

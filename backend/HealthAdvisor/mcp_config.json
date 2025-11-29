@@ -43,6 +43,13 @@
         "EMBEDDING_MODEL": "all-MiniLM-L6-v2",
         "MEMORY_ENCRYPTION_ENABLED": "false"
       }
+    },
+    "A2AIntegrationTool": {
+      "command": "python",
+      "args": [
+        "mcpserver/a2a_integration_tool.py"
+      ],
+      "cwd": "/app/HealthAdvisor"
     }
   }
 }

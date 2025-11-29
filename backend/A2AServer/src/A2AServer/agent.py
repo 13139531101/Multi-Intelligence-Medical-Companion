@@ -5,6 +5,8 @@ import os
 import traceback
 import json
 import base64
+import asyncio
+import sys
 from dotenv import load_dotenv
 from typing import AsyncIterable, Any, Literal
 from pydantic import BaseModel
@@ -317,65 +319,81 @@ class BasicAgent:
 
 
     async def _non_stream_response(self, sessionId):
-         """Handles the non-streaming response logic."""
-         # Move the non-stream logic from original init here
-         final_text = ""
-         while True:
-             gen_result = await generate_text(self.session_conversations[sessionId], self.chosen_model, self.all_functions, stream=False) # AWAIT valid here
+        """Handles the non-streaming response logic."""
+        final_text = ""
+        while True:
+            gen_result = await generate_text(self.session_conversations[sessionId], self.chosen_model, self.all_functions, stream=False)
 
-             assistant_text = gen_result["assistant_text"]
-             final_text = assistant_text
-             tool_calls = gen_result.get("tool_calls", [])
+            assistant_text = gen_result["assistant_text"]
+            final_text = assistant_text
+            tool_calls = gen_result.get("tool_calls", [])
 
-             assistant_message = {"role": "assistant", "content": assistant_text}
-             if tool_calls:
-                 for tc in tool_calls:
-                     tc["type"] = "function"
-                 assistant_message["tool_calls"] = tool_calls
-             self.session_conversations[sessionId].append(assistant_message)
-             logger.info(f"Added assistant message: {json.dumps(assistant_message, indent=2)}")
+            assistant_message = {"role": "assistant", "content": assistant_text}
+            if tool_calls:
+                for tc in tool_calls:
+                    tc["type"] = "function"
+                assistant_message["tool_calls"] = tool_calls
+            self.session_conversations[sessionId].append(assistant_message)
+            logger.info(f"Added assistant message: {json.dumps(assistant_message, indent=2)}")
 
-             if not tool_calls:
-                 break
+            if not tool_calls:
+                break
 
-             for tc in tool_calls:
-                 result = await process_tool_call(tc, self.servers, self.quiet_mode) # AWAIT valid here
-                 if result:
-                     self.session_conversations[sessionId].append(result)
-                     logger.info(f"Added tool result: {json.dumps(result, indent=2)}")
-                     # 可选：将工具结果写入记忆
-                     try:
-                         if self.memory_system:
-                             agent_id = os.environ.get("AGENT_ID", "A2AAgent")
-                             user_id = os.environ.get("USER_ID", sessionId)
-                             # 简化写入：以文本形式存储工具结果摘要
-                             tool_text = json.dumps(result, ensure_ascii=False)
-                             self.memory_system.store_memory(
-                                 agent_id=agent_id,
-                                 user_id=user_id,
-                                 content={"text": tool_text, "metadata": {"sessionId": sessionId, "source": "tool_result"}},
-                                 memory_type="working",
-                                 importance=0.5,
-                             )
-                     except Exception as e:
-                         logger.warning(f"写入工具结果记忆失败：{e}")
+            for tc in tool_calls:
+                result = await process_tool_call(tc, self.servers, self.quiet_mode)
+                if result:
+                    self.session_conversations[sessionId].append(result)
+                    logger.info(f"Added tool result: {json.dumps(result, indent=2)}")
+                    # 可选：将工具结果写入记忆
+                    try:
+                        if self.memory_system:
+                            agent_id = os.environ.get("AGENT_ID", "A2AAgent")
+                            user_id = os.environ.get("USER_ID", sessionId)
+                            tool_text = json.dumps(result, ensure_ascii=False)
+                            async def _store_tool_result():
+                                try:
+                                    await asyncio.to_thread(
+                                        self.memory_system.store_memory,
+                                        agent_id=agent_id,
+                                        user_id=user_id,
+                                        content={"text": tool_text, "metadata": {"sessionId": sessionId, "source": "tool_result"}},
+                                        memory_type="working",
+                                        importance=0.5,
+                                    )
+                                except Exception as _e:
+                                    logger.warning(f"写入工具结果记忆失败：{_e}")
+                            try:
+                                asyncio.create_task(asyncio.wait_for(_store_tool_result(), timeout=2.0))
+                            except Exception:
+                                pass
+                    except Exception as e:
+                        logger.warning(f"写入工具结果记忆失败：{e}")
 
-         # 将最终回答写入记忆（若启用记忆系统）
-         try:
-             if self.memory_system and final_text:
-                 agent_id = os.environ.get("AGENT_ID", "A2AAgent")
-                 user_id = os.environ.get("USER_ID", sessionId)
-                 self.memory_system.store_memory(
-                     agent_id=agent_id,
-                     user_id=user_id,
-                     content={"text": final_text, "metadata": {"sessionId": sessionId}},
-                     memory_type="working",
-                     importance=0.6,
-                 )
-         except Exception as e:
-             logger.warning(f"写入回答记忆失败：{e}")
+        # 将最终回答写入记忆（若启用记忆系统）
+        try:
+            if self.memory_system and final_text:
+                agent_id = os.environ.get("AGENT_ID", "A2AAgent")
+                user_id = os.environ.get("USER_ID", sessionId)
+                async def _store_final():
+                    try:
+                        await asyncio.to_thread(
+                            self.memory_system.store_memory,
+                            agent_id=agent_id,
+                            user_id=user_id,
+                            content={"text": final_text, "metadata": {"sessionId": sessionId}},
+                            memory_type="working",
+                            importance=0.6,
+                        )
+                    except Exception as _e:
+                        logger.warning(f"写入回答记忆失败：{_e}")
+                try:
+                    asyncio.create_task(asyncio.wait_for(_store_final(), timeout=2.0))
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.warning(f"写入回答记忆失败：{e}")
 
-         return final_text
+        return final_text
 
 
     async def cleanup(self):

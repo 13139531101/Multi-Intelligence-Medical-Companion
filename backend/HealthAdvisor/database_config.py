@@ -105,3 +105,7 @@ class DatabaseManager:
                     return True
         except Exception:
             return False
+
+def get_db_manager():
+    """获取数据库管理器实例"""
+    return DatabaseManager()

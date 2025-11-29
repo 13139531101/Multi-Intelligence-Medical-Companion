@@ -215,20 +215,23 @@ export const createConsultation = async (consultationData) => {
 // 发送消息
 export const sendMessage = async (consultationId, messageData) => {
   try {
-    // 暂未实现后端消息端点，通常通过智能体流式接口交互
-    console.warn("sendMessage endpoint not implemented in backend");
-    return { success: true };
+    const response = await healthApi.post("/api/consultations/message", {
+      consultation_id: consultationId,
+      ...messageData,
+    });
+    return response.data;
   } catch (error) {
     throw error.response?.data || { message: "发送消息失败" };
   }
 };
 
 // 获取咨询消息
-export const getConsultationMessages = async (consultationId, params = {}) => {
+export const getConsultationMessages = async (consultationId) => {
   try {
-    // 暂未实现后端消息端点，历史记录包含消息
-    console.warn("getConsultationMessages endpoint not implemented in backend");
-    return [];
+    const response = await healthApi.get(
+      `/api/consultations/${consultationId}/messages`
+    );
+    return response.data.messages || [];
   } catch (error) {
     throw error.response?.data || { message: "获取消息失败" };
   }
