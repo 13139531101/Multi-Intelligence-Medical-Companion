@@ -999,20 +999,15 @@ async def list_medication_reminders(date: str = "", active_only: bool = True, us
                 taken_flag = False
                 if dbm:
                     try:
-                        # 先查主提醒ID（medication_reminders.reminder_id）
-                        rid_rows = dbm.execute_query(
-                            "SELECT reminder_id FROM medication_reminders WHERE id = %s",
-                            (r.get("id"),)
+                        # 直接使用 medication_reminders.id 查询日志
+                        # 注意：reminder_logs.reminder_id 对应的是 medication_reminders.id
+                        log_rows = dbm.execute_query(
+                            "SELECT status FROM reminder_logs WHERE reminder_id = %s AND user_id = %s AND scheduled_time = %s ORDER BY completion_time DESC LIMIT 1",
+                            (r.get("id"), user_id, scheduled)
                         )
-                        main_rid = rid_rows[0].get("reminder_id") if rid_rows else None
-                        if main_rid:
-                            log_rows = dbm.execute_query(
-                                "SELECT status FROM reminder_logs WHERE reminder_id = %s AND user_id = %s AND scheduled_time = %s ORDER BY completion_time DESC LIMIT 1",
-                                (main_rid, user_id, scheduled)
-                            )
-                            if log_rows:
-                                status = str(log_rows[0].get("status") or "").lower()
-                                taken_flag = status in ("completed", "taken")
+                        if log_rows:
+                            status = str(log_rows[0].get("status") or "").lower()
+                            taken_flag = status in ("completed", "taken")
                     except Exception:
                         taken_flag = False
 

@@ -25,6 +25,46 @@ def init_database():
     """初始化PostgreSQL数据库（防御性创建表）"""
     with get_pg_conn() as conn:
         with conn.cursor() as cur:
+            # user_medications table (from HealthRecordsManager schema)
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS user_medications (
+                    id SERIAL PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    drug_name TEXT NOT NULL,
+                    dosage TEXT,
+                    frequency TEXT,
+                    start_date DATE,
+                    end_date DATE,
+                    notes TEXT,
+                    is_active BOOLEAN DEFAULT TRUE,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+                """
+            )
+
+            # reminders table (Global reminders)
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS reminders (
+                    id SERIAL PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    reminder_type TEXT NOT NULL, -- 'medication', 'health', etc.
+                    title TEXT NOT NULL,
+                    description TEXT,
+                    reminder_time TIMESTAMPTZ NOT NULL,
+                    is_completed INTEGER DEFAULT 0,
+                    completed_at TIMESTAMPTZ,
+                    is_deleted INTEGER DEFAULT 0,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+                """
+            )
+
+            # medication_reminders table (Linking table)
+            # Ensure it has reminder_id and medication_id
             cur.execute(
                 """
                 CREATE TABLE IF NOT EXISTS medication_reminders (
@@ -38,11 +78,14 @@ def init_database():
                     reminder_times JSONB NOT NULL,
                     notes TEXT,
                     is_active BOOLEAN DEFAULT TRUE,
+                    medication_id INTEGER REFERENCES user_medications(id),
+                    reminder_id INTEGER REFERENCES reminders(id),
                     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
                 )
                 """
             )
+
             cur.execute(
                 """
                 CREATE TABLE IF NOT EXISTS reminder_logs (
@@ -52,10 +95,13 @@ def init_database():
                     actual_time TIMESTAMPTZ,
                     status TEXT NOT NULL,
                     notes TEXT,
+                    completion_time TIMESTAMPTZ,
+                    user_id TEXT,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
                 )
                 """
             )
+
             cur.execute(
                 """
                 CREATE TABLE IF NOT EXISTS appointment_reminders (
@@ -80,12 +126,12 @@ def init_database():
 init_database()
 
 @mcp.tool()
-def add_medication_reminder(user_id: str, medication_name: str, dosage: str, frequency: str, 
-                          start_date: str, reminder_times: List[str], end_date: Optional[str] = None, 
+def add_medication_reminder(user_id: str, medication_name: str, dosage: str, frequency: str,
+                          start_date: str, reminder_times: List[str], end_date: Optional[str] = None,
                           notes: Optional[str] = None) -> Dict[str, Any]:
     """
-    添加用药提醒
-    
+    添加用药提醒 (同步创建 user_medications, reminders 和 medication_reminders)
+
     Args:
         user_id: 用户ID
         medication_name: 药物名称
@@ -95,46 +141,94 @@ def add_medication_reminder(user_id: str, medication_name: str, dosage: str, fre
         reminder_times: 提醒时间列表（如：["08:00", "14:00", "20:00"]）
         end_date: 结束日期（可选）
         notes: 备注（可选）
-    
+
     Returns:
         添加结果
     """
     try:
         now = datetime.now()
+        start_dt = datetime.strptime(start_date, "%Y-%m-%d").date()
+        end_dt = datetime.strptime(end_date, "%Y-%m-%d").date() if end_date else None
+
+        # 格式化频率文本
+        frequency_text = frequency if frequency else f"每日{len(reminder_times)}次"
+
         with get_pg_conn() as conn:
             with conn.cursor() as cur:
+                # 1. 插入 user_medications
                 cur.execute(
                     """
-                    INSERT INTO medication_reminders
-                    (user_id, medication_name, dosage, frequency, start_date, end_date,
-                     reminder_times, notes, created_at, updated_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    INSERT INTO user_medications
+                    (user_id, drug_name, dosage, frequency, start_date, end_date, notes)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
                     RETURNING id
                     """,
-                    (
-                        user_id,
-                        medication_name,
-                        dosage,
-                        frequency,
-                        datetime.strptime(start_date, "%Y-%m-%d").date(),
-                        datetime.strptime(end_date, "%Y-%m-%d").date() if end_date else None,
-                        Json(reminder_times),
-                        notes,
-                        now,
-                        now,
-                    ),
+                    (user_id, medication_name, dosage, frequency_text, start_dt, end_dt, notes)
                 )
-                reminder_id = cur.fetchone()["id"]
+                medication_id = cur.fetchone()["id"]
+
+                reminder_ids = []
+
+                # 2. 为每个时间点创建提醒
+                for time_str in reminder_times:
+                    # 2a. 插入 reminders (主提醒表)
+                    # 计算首次提醒时间
+                    try:
+                        t = datetime.strptime(time_str, "%H:%M").time()
+                        first_reminder_dt = datetime.combine(start_dt, t)
+                    except ValueError:
+                         # 如果时间格式不对，跳过或默认
+                         continue
+
+                    cur.execute(
+                        """
+                        INSERT INTO reminders
+                        (user_id, reminder_type, title, description, reminder_time)
+                        VALUES (%s, %s, %s, %s, %s)
+                        RETURNING id
+                        """,
+                        (user_id, "medication", medication_name, notes or f"请按时服用{medication_name}", first_reminder_dt)
+                    )
+                    main_reminder_id = cur.fetchone()["id"]
+
+                    # 2b. 插入 medication_reminders (详情表)
+                    cur.execute(
+                        """
+                        INSERT INTO medication_reminders
+                        (reminder_id, user_id, medication_id, medication_name, dosage, frequency,
+                         reminder_times, start_date, end_date, notes, created_at, updated_at)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        RETURNING id
+                        """,
+                        (
+                            main_reminder_id,
+                            user_id,
+                            medication_id,
+                            medication_name,
+                            dosage,
+                            frequency_text,
+                            Json([time_str]), # Store single time as JSON array for compatibility
+                            start_dt,
+                            end_dt,
+                            notes,
+                            now,
+                            now,
+                        ),
+                    )
+                    mr_id = cur.fetchone()["id"]
+                    reminder_ids.append(mr_id)
+
                 conn.commit()
-        
+
         return {
             "status": "success",
-            "reminder_id": reminder_id,
+            "medication_id": medication_id,
+            "reminder_ids": reminder_ids,
             "message": f"成功添加{medication_name}的用药提醒",
             "details": {
                 "medication": medication_name,
                 "dosage": dosage,
-                "frequency": frequency,
+                "frequency": frequency_text,
                 "reminder_times": reminder_times,
                 "start_date": start_date,
                 "end_date": end_date
@@ -147,14 +241,15 @@ def add_medication_reminder(user_id: str, medication_name: str, dosage: str, fre
         }
 
 @mcp.tool()
-def get_medication_reminders(user_id: str, active_only: bool = True) -> Dict[str, Any]:
+def get_medication_reminders(user_id: str, date: Optional[str] = None, active_only: bool = True) -> Dict[str, Any]:
     """
     获取用户的用药提醒列表
-    
+
     Args:
         user_id: 用户ID
+        date: 指定日期 (YYYY-MM-DD)，为空则获取全部（如果active_only为True则默认为今天）
         active_only: 是否只返回活跃的提醒
-    
+
     Returns:
         用药提醒列表
     """
@@ -162,31 +257,88 @@ def get_medication_reminders(user_id: str, active_only: bool = True) -> Dict[str
         with get_pg_conn() as conn:
             with conn.cursor() as cur:
                 if active_only:
+                    target_date = datetime.strptime(date, "%Y-%m-%d").date() if date else datetime.now().date()
                     cur.execute(
                         """
                         SELECT id, user_id, medication_name, dosage, frequency, start_date, end_date,
-                               reminder_times, notes, is_active, created_at
-                        FROM medication_reminders
-                        WHERE user_id = %s AND is_active = TRUE
-                        ORDER BY created_at DESC
-                        """,
-                        (user_id,),
-                    )
-                else:
-                    cur.execute(
-                        """
-                        SELECT id, user_id, medication_name, dosage, frequency, start_date, end_date,
-                               reminder_times, notes, is_active, created_at
+                               reminder_times, notes, is_active, created_at, reminder_id, medication_id
                         FROM medication_reminders
                         WHERE user_id = %s
+                          AND is_active = TRUE
+                          AND (start_date <= %s)
+                          AND (end_date IS NULL OR end_date >= %s)
                         ORDER BY created_at DESC
                         """,
-                        (user_id,),
+                        (user_id, target_date, target_date),
                     )
+                else:
+                    # 如果不是只查活跃的，且指定了日期，也可以过滤，但通常 active_only=False 用于查历史
+                    if date:
+                         target_date = datetime.strptime(date, "%Y-%m-%d").date()
+                         cur.execute(
+                            """
+                            SELECT id, user_id, medication_name, dosage, frequency, start_date, end_date,
+                                   reminder_times, notes, is_active, created_at, reminder_id, medication_id
+                            FROM medication_reminders
+                            WHERE user_id = %s
+                              AND (start_date <= %s)
+                              AND (end_date IS NULL OR end_date >= %s)
+                            ORDER BY created_at DESC
+                            """,
+                            (user_id, target_date, target_date),
+                        )
+                    else:
+                        cur.execute(
+                            """
+                            SELECT id, user_id, medication_name, dosage, frequency, start_date, end_date,
+                                   reminder_times, notes, is_active, created_at, reminder_id, medication_id
+                            FROM medication_reminders
+                            WHERE user_id = %s
+                            ORDER BY created_at DESC
+                            """,
+                            (user_id,),
+                        )
                 reminders = cur.fetchall()
+
+                # 获取当天的服药记录
+                cur.execute(
+                    """
+                    SELECT reminder_id, scheduled_time, actual_time, status
+                    FROM reminder_logs
+                    WHERE user_id = %s
+                      AND scheduled_time::date = %s
+                    """,
+                    (user_id, target_date)
+                )
+                logs = cur.fetchall()
+
+                # 构建 logs 字典，key 为 reminder_id (medication_reminders.id)
+                logs_map = {}
+                for log in logs:
+                    rid = log["reminder_id"]
+                    if rid not in logs_map:
+                        logs_map[rid] = []
+
+                    # 提取 HH:MM
+                    try:
+                        if log["scheduled_time"]:
+                            time_str = log["scheduled_time"].strftime("%H:%M")
+                            logs_map[rid].append({
+                                "time": time_str,
+                                "status": log["status"],
+                                "actual_time": log["actual_time"].strftime("%H:%M") if log["actual_time"] else None
+                            })
+                    except Exception:
+                        pass
 
         reminder_list = []
         for r in reminders:
+            # 查找该提醒对应的日志
+            r_logs = logs_map.get(r["id"], [])
+
+            # 提取已服用的时间点
+            taken_times = [l["time"] for l in r_logs if l["status"] == "completed" or l["status"] == "taken"]
+
             reminder_list.append({
                 "id": r["id"],
                 "medication_name": r["medication_name"],
@@ -198,8 +350,12 @@ def get_medication_reminders(user_id: str, active_only: bool = True) -> Dict[str
                 "notes": r["notes"],
                 "is_active": bool(r["is_active"]),
                 "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+                "reminder_id": r["reminder_id"],
+                "medication_id": r["medication_id"],
+                "taken_records": taken_times,  # 新增：已服用的时间列表
+                "logs": r_logs                 # 新增：详细日志
             })
-        
+
         return {
             "status": "success",
             "reminders": reminder_list,
@@ -215,10 +371,10 @@ def get_medication_reminders(user_id: str, active_only: bool = True) -> Dict[str
 def get_today_reminders(user_id: str) -> Dict[str, Any]:
     """
     获取今日的用药提醒
-    
+
     Args:
         user_id: 用户ID
-    
+
     Returns:
         今日用药提醒列表
     """
@@ -228,7 +384,7 @@ def get_today_reminders(user_id: str) -> Dict[str, Any]:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT id, medication_name, dosage, reminder_times, notes
+                    SELECT id, medication_name, dosage, reminder_times, notes, reminder_id
                     FROM medication_reminders
                     WHERE user_id = %s AND is_active = TRUE
                       AND start_date <= %s
@@ -238,21 +394,51 @@ def get_today_reminders(user_id: str) -> Dict[str, Any]:
                 )
                 reminders = cur.fetchall()
 
+                # 获取当天的服药记录
+                cur.execute(
+                    """
+                    SELECT reminder_id, scheduled_time, status
+                    FROM reminder_logs
+                    WHERE user_id = %s
+                      AND scheduled_time::date = %s
+                    """,
+                    (user_id, today)
+                )
+                logs = cur.fetchall()
+
+                # 构建 (reminder_id, time_str) -> status 映射
+                taken_map = {}
+                for log in logs:
+                    try:
+                        if log["scheduled_time"]:
+                            t_str = log["scheduled_time"].strftime("%H:%M")
+                            key = (log["reminder_id"], t_str)
+                            taken_map[key] = log["status"]
+                    except Exception:
+                        pass
+
         today_reminders = []
         for r in reminders:
             reminder_times = r["reminder_times"] or []
             for t in reminder_times:
+                # 检查是否已服用
+                status = taken_map.get((r["id"], t))
+                is_taken = (status == "completed" or status == "taken")
+
                 today_reminders.append({
                     "id": r["id"],
                     "medication_name": r["medication_name"],
                     "dosage": r["dosage"],
                     "time": t,
                     "notes": r["notes"],
+                    "reminder_id": r["reminder_id"],
+                    "is_taken": is_taken,  # 新增：是否已服用
+                    "status": status       # 新增：状态
                 })
-        
+
         # 按时间排序
         today_reminders.sort(key=lambda x: x["time"])
-        
+
         return {
             "status": "success",
             "date": today,
@@ -269,12 +455,12 @@ def get_today_reminders(user_id: str) -> Dict[str, Any]:
 def log_medication_taken(reminder_id: int, actual_time: Optional[str] = None, notes: Optional[str] = None) -> Dict[str, Any]:
     """
     记录用药情况
-    
+
     Args:
-        reminder_id: 提醒ID
+        reminder_id: 提醒ID (medication_reminders表的主键ID)
         actual_time: 实际用药时间（可选，默认为当前时间）
         notes: 备注（可选）
-    
+
     Returns:
         记录结果
     """
@@ -303,7 +489,7 @@ def log_medication_taken(reminder_id: int, actual_time: Optional[str] = None, no
                     (reminder_id, scheduled_dt, actual_dt, "taken", notes, now),
                 )
                 conn.commit()
-        
+
         return {
             "status": "success",
             "message": "用药记录已保存",
@@ -316,12 +502,12 @@ def log_medication_taken(reminder_id: int, actual_time: Optional[str] = None, no
         }
 
 @mcp.tool()
-def add_appointment_reminder(user_id: str, doctor_name: str, department: str, 
+def add_appointment_reminder(user_id: str, doctor_name: str, department: str,
                            appointment_date: str, appointment_time: str, hospital: str,
                            reminder_advance_days: int = 1, notes: Optional[str] = None) -> Dict[str, Any]:
     """
     添加复诊提醒
-    
+
     Args:
         user_id: 用户ID
         doctor_name: 医生姓名
@@ -331,7 +517,7 @@ def add_appointment_reminder(user_id: str, doctor_name: str, department: str,
         hospital: 医院名称
         reminder_advance_days: 提前提醒天数（默认1天）
         notes: 备注（可选）
-    
+
     Returns:
         添加结果
     """
@@ -362,7 +548,7 @@ def add_appointment_reminder(user_id: str, doctor_name: str, department: str,
                 )
                 appointment_id = cur.fetchone()["id"]
                 conn.commit()
-        
+
         return {
             "status": "success",
             "appointment_id": appointment_id,
@@ -386,11 +572,11 @@ def add_appointment_reminder(user_id: str, doctor_name: str, department: str,
 def get_upcoming_appointments(user_id: str, days_ahead: int = 7) -> Dict[str, Any]:
     """
     获取即将到来的复诊预约
-    
+
     Args:
         user_id: 用户ID
         days_ahead: 查看未来多少天的预约（默认7天）
-    
+
     Returns:
         即将到来的预约列表
     """
@@ -424,7 +610,7 @@ def get_upcoming_appointments(user_id: str, days_ahead: int = 7) -> Dict[str, An
                 "notes": a["notes"],
                 "reminder_advance_days": a["reminder_advance_days"],
             })
-        
+
         return {
             "status": "success",
             "appointments": appointment_list,

@@ -290,6 +290,33 @@ def mark_reminder_taken(user_id: str, reminder_id: int, taken_time: str = "") ->
         except Exception:
             pass
 
+        # 检查 reminder_id 是否存在，如果不存在则自动修复
+        if not reminder.get('reminder_id'):
+            logger.warning(f"检测到用药提醒数据异常 (reminder_id is NULL), 正在尝试自动修复... ID: {reminder_id}")
+            try:
+                fix_today = datetime.now().date()
+                fix_reminder_dt = datetime.combine(fix_today, datetime.strptime(time_str, "%H:%M").time())
+
+                # 创建缺失的 reminders 记录
+                fix_insert_query = """
+                    INSERT INTO reminders
+                    (user_id, reminder_type, title, description, reminder_time)
+                    VALUES (%s, %s, %s, %s, %s)
+                """
+                fix_new_id = reminder_manager.db_manager.execute_insert(
+                    fix_insert_query,
+                    (user_id, "medication", reminder['medication_name'], "自动修复的提醒记录", fix_reminder_dt)
+                )
+
+                if fix_new_id:
+                    # 更新 medication_reminders 关联
+                    fix_update_query = "UPDATE medication_reminders SET reminder_id = %s WHERE id = %s"
+                    reminder_manager.db_manager.execute_update(fix_update_query, (fix_new_id, reminder_id))
+                    reminder['reminder_id'] = fix_new_id
+                    logger.info(f"数据修复成功，新 reminder_id: {fix_new_id}")
+            except Exception as fix_e:
+                logger.error(f"自动修复数据失败: {fix_e}")
+
         # 记录服药日志（状态使用枚举中的 completed，并写入完成时间）
         log_query = """
             INSERT INTO reminder_logs
@@ -302,7 +329,7 @@ def mark_reminder_taken(user_id: str, reminder_id: int, taken_time: str = "") ->
 
         log_id = reminder_manager.db_manager.execute_insert(
             log_query,
-            (reminder['reminder_id'], user_id, scheduled_time, taken_dt, taken_dt)
+            (reminder['id'], user_id, scheduled_time, taken_dt, taken_dt)
         )
 
         return json.dumps({
