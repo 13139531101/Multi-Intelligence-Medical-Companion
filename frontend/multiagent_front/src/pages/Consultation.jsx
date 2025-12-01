@@ -38,6 +38,7 @@ import {
   AttachFile,
   Mic,
   Stop,
+  Delete,
 } from "@mui/icons-material";
 import { useRecoilValue } from "recoil";
 import { userState } from "../store/recoilState";
@@ -48,6 +49,7 @@ import {
   createConsultation,
   sendMessage,
   getConsultationMessages,
+  deleteConsultation,
 } from "../api/healthApi";
 import { listRemoteAgents, getAgentCard, sendTaskStreaming } from "../api/api";
 import { v4 as uuidv4 } from "uuid";
@@ -169,6 +171,23 @@ const Consultation = () => {
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  };
+
+  const handleDeleteConsultation = async (e, id) => {
+    e.stopPropagation();
+    if (window.confirm("确定要删除这条咨询记录吗？")) {
+      try {
+        await deleteConsultation(id);
+        setConsultations((prev) => prev.filter((c) => c.id !== id));
+        if (currentConsultationId === id) {
+          setCurrentConsultationId(null);
+          setMessages([]);
+        }
+      } catch (error) {
+        console.error("删除咨询失败:", error);
+        alert("删除失败，请稍后重试");
+      }
+    }
   };
 
   const fetchConsultationHistory = async () => {
@@ -567,10 +586,23 @@ const Consultation = () => {
                       button
                       selected={currentConsultationId === consultation.id}
                       onClick={() => handleLoadConsultation(consultation)}
+                      secondaryAction={
+                        <IconButton
+                          edge="end"
+                          aria-label="delete"
+                          onClick={(e) =>
+                            handleDeleteConsultation(e, consultation.id)
+                          }
+                          size="small"
+                        >
+                          <Delete fontSize="small" />
+                        </IconButton>
+                      }
                       sx={{
                         borderRadius: 1,
                         mx: 1,
                         mb: 1,
+                        pr: 6,
                         "&.Mui-selected": {
                           bgcolor: "primary.light",
                           color: "primary.contrastText",

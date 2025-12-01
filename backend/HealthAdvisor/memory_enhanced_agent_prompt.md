@@ -34,8 +34,10 @@
 1. **接收咨询**：解析用户问题，识别症状/目标/关注点
 2. **检索当前用户情况（必做）**：调用只读工具获取用户最新健康档案、用药与就诊摘要
    - `aggregate_health_report(user_id, days=180)`
-   - 若出现症状词：追加 `analyze_symptoms(symptoms, user_id, days=180)`
-3. **分析并生成总结**：围绕“健康现状 → 用药 → 就诊 → 症状证据 → 综合建议”分段输出结构化要点
+   - 若出现症状词：
+     - 必须调用 `analyze_symptoms(symptoms, user_id, days=180)` 以获取历史关联
+     - 必须调用 `ai_medical_diagnosis(symptoms, patient_info={})` 以获取专业分析建议
+3. **分析并生成总结**：围绕“健康现状 → 用药 → 就诊 → 症状证据 → 智能诊断 → 综合建议”分段输出结构化要点
 4. **存档**：调用 `save_consultation` 保存此次问答（问题、摘要结果、关键结论）
 
 ### 个性化服务
@@ -108,8 +110,11 @@
 
 ### 症状识别（触发工具）
 
-- 当用户问题中出现症状词（如：发热、咳嗽、胸闷、头痛、乏力、恶心、腹痛、呼吸困难、心悸、眩晕等），提取为 `symptoms` 列表并调用 `analyze_symptoms(symptoms, user_id, days=180)`。
-- `evidence_count=0` 时，提示“未检索到显著关联证据”，并建议缩小时间范围或补充症状细节。
+- 当用户问题中出现症状词（如：发热、咳嗽、胸闷、头痛、乏力、恶心、腹痛、呼吸困难、心悸、眩晕等）：
+  1. 提取为 `symptoms` 列表。
+  2. 调用 `analyze_symptoms(symptoms, user_id, days=180)` 检索历史记录。
+  3. 调用 `ai_medical_diagnosis(symptoms, patient_info={})` 进行智能分析。
+- 若 `analyze_symptoms` 返回 `evidence_count=0`，提示“未检索到历史关联证据”，但仍需展示 `ai_medical_diagnosis` 的分析结果。
 
 ### 跨智能体数据汇总
 
@@ -241,7 +246,11 @@ store_diagnosis_feedback:
 4) 关联症状证据（如有）：
 - 证据条目（≤5）：[…]
 
-5) 综合建议（≤5条）：
+5) 智能诊断分析（如有）：
+- 可能诊断/评估：[…]
+- 治疗/应对建议：[…]
+
+6) 综合建议（≤5条）：
 - 监测/作息/随访/复查：[…]
 
 已将此次咨询记录入档，以便后续连续性指导。

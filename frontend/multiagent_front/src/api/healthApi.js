@@ -237,6 +237,16 @@ export const getConsultationMessages = async (consultationId) => {
   }
 };
 
+// 删除咨询
+export const deleteConsultation = async (consultationId) => {
+  try {
+    const response = await healthApi.delete(`/api/consultations/${consultationId}`);
+    return response.data;
+  } catch (error) {
+    throw error.response?.data || { message: "删除咨询失败" };
+  }
+};
+
 // === 用药管理API ===
 
 // 获取药物列表

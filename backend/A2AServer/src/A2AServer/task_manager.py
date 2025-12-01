@@ -48,7 +48,7 @@ class AgentTaskManager(InMemoryTaskManager):
     async def on_send_task(self, request: SendTaskRequest) -> SendTaskResponse:
         """
         Handle synchronous task requests.
-        
+
         This method processes one-time task requests and returns a complete response.
         Unlike streaming tasks, this waits for the full agent response before returning.
         """
@@ -65,12 +65,18 @@ class AgentTaskManager(InMemoryTaskManager):
         task_send_params: TaskSendParams = request.params
         query = self._get_user_query(task_send_params)
 
+        # 从元数据中提取用户ID
+        user_id = None
+        if task_send_params.metadata:
+             user_id = task_send_params.metadata.get("user_id")
+
         try:
             # 使用 Agent 的非流式推理以实现同步调用
             final_text = await self.agent.run_inference(
                 user_query=query,
                 sessionId=task_send_params.sessionId,
                 stream=False,
+                user_id=user_id,
             )
             agent_response = {
                 "content": final_text,
@@ -109,9 +115,9 @@ class AgentTaskManager(InMemoryTaskManager):
     ) -> SendTaskResponse:
         """
         Handle the 'tasks/send' JSON-RPC method by processing agent response.
-        
+
         This method processes the synchronous (one-time) response from the agent,
-        transforms it into the appropriate task status and artifacts, and 
+        transforms it into the appropriate task status and artifacts, and
         returns a complete SendTaskResponse.
         """
         task_send_params: TaskSendParams = request.params
@@ -145,11 +151,17 @@ class AgentTaskManager(InMemoryTaskManager):
         """
         task_send_params: TaskSendParams = request.params
         query = self._get_user_query(task_send_params)
+
+        # 从元数据中提取用户ID
+        user_id = None
+        if task_send_params.metadata:
+             user_id = task_send_params.metadata.get("user_id")
+
         logger.info(f"发送过来的请求是 {query}, 参数是 {task_send_params}")
         is_first_token = True
         artifacts = []
         try:
-            async for item in self.agent.stream(query, task_send_params.sessionId):
+            async for item in self.agent.stream(query, task_send_params.sessionId, user_id=user_id):
                 logger.info("返回的item: ", item)
                 if item.get("type") and item["type"] == "tool_call":
                     tool_data = decode_tool_calls_to_string(item["content"])
@@ -296,10 +308,10 @@ class AgentTaskManager(InMemoryTaskManager):
     ) -> JSONRPCResponse | None:
         """
         Validate task request parameters for compatibility with agent capabilities.
-        
+
         Ensures that the client's requested output modalities are compatible with
         what the agent can provide.
-        
+
         Returns:
             JSONRPCResponse with an error if validation fails, None otherwise.
         """
@@ -318,16 +330,16 @@ class AgentTaskManager(InMemoryTaskManager):
     def _get_user_query(self, task_send_params: TaskSendParams) -> str:
         """
         Extract the user's text query from the task parameters.
-        
+
         Extracts and returns the text content from the first part of the user's message.
         Currently only supports text parts.
-        
+
         Args:
             task_send_params: The parameters of the task containing the user's message.
-            
+
         Returns:
             str: The extracted text query.
-            
+
         Raises:
             ValueError: If the message part is not a TextPart.
         """

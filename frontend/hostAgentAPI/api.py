@@ -575,7 +575,8 @@ except Exception as e:
 try:
     # 优先将 backend 下的具体 Agent 目录按文件路径动态加载，避免 "mcpserver" 包名冲突
     import importlib.util
-    backend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "backend"))
+    # 使用与健康档案API一致的后端路径解析逻辑
+    backend_dir = os.environ.get("BACKEND_DIR") or os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "backend"))
     hrm_dir = os.path.join(backend_dir, "HealthRecordsManager")
     mr_dir = os.path.join(backend_dir, "MedicationReminder")
 
@@ -1232,6 +1233,35 @@ async def get_consultation_messages(consultation_id: str, user: dict = Depends(g
         return {"success": True, "messages": rows}
     except Exception as e:
         logging.error(f"Get messages error: {e}")
+        return {"success": False, "message": str(e)}
+
+@meds_router.delete("/api/consultations/{consultation_id}")
+async def delete_consultation_api(consultation_id: str, user: dict = Depends(get_current_user)):
+    try:
+        user_id = str(user.get("id") or user.get("user_id") or user.get("uid"))
+
+        db_manager = get_db_manager()
+        if not db_manager:
+             return {"success": False, "message": "DB Manager not available"}
+
+        # Verify ownership
+        check_query = "SELECT user_id FROM consultations WHERE consultation_id = %s"
+        rows = db_manager.execute_query(check_query, (consultation_id,))
+        if not rows:
+            return {"success": False, "message": "Consultation not found"}
+
+        if rows[0]['user_id'] != user_id:
+             return {"success": False, "message": "Permission denied"}
+
+        # Delete messages first
+        db_manager.execute_update("DELETE FROM chat_messages WHERE consultation_id = %s", (consultation_id,))
+
+        # Delete consultation
+        db_manager.execute_update("DELETE FROM consultations WHERE consultation_id = %s", (consultation_id,))
+
+        return {"success": True}
+    except Exception as e:
+        logging.error(f"Delete consultation error: {e}")
         return {"success": False, "message": str(e)}
 
 @meds_router.get("/api/visit-summaries/history")

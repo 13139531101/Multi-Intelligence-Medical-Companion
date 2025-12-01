@@ -196,7 +196,7 @@ class BasicAgent:
         self.tool_ready = True # Setup was successful
         return True
 
-    async def run_inference(self, user_query, sessionId, stream=True):
+    async def run_inference(self, user_query, sessionId, stream=True, user_id=None):
         """
         推理和工具的设置
         """
@@ -213,7 +213,7 @@ class BasicAgent:
 
 
         # Build initial conversation (system message + user query)
-        self._build_initial_conversation(sessionId, user_query) # This helper can be synchronous
+        self._build_initial_conversation(sessionId, user_query, user_id=user_id) # This helper can be synchronous
 
 
         # try:
@@ -225,7 +225,7 @@ class BasicAgent:
         #     # Ensure cleanup is called when run() finishes or an exception occurs
         #     await self.cleanup() # <-- AWAIT is valid here
 
-    def _build_initial_conversation(self, sessionId, user_query):
+    def _build_initial_conversation(self, sessionId, user_query, user_id=None):
          # Helper method to build the initial conversation list (synchronous)
          self.conversation = []
          # 默认的prompt
@@ -237,17 +237,23 @@ class BasicAgent:
          except Exception as e:
              logger.warning(f"Failed to read Agent prompt file: {e}")
              self.session_conversations[sessionId].append({"role": "system", "content": agent_prompt})
-        # 加上当前的时间
-         self.session_conversations[sessionId][0]['content'] = f"当前时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}。" + self.session_conversations[sessionId][0]['content']
+
+         # 确定用户ID (优先使用传入的user_id，其次环境变量，最后是sessionId)
+         final_user_id = str(user_id) if user_id else (os.environ.get("A2A_CURRENT_USER_ID") or os.environ.get("USER_ID") or str(sessionId))
+
+         # 加上当前的时间和用户ID信息到System Prompt
+         header_info = f"当前用户ID: {final_user_id}。\n当前时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}。"
+         self.session_conversations[sessionId][0]['content'] = header_info + "\n" + self.session_conversations[sessionId][0]['content']
+
          # 注入记忆上下文（若启用记忆系统）
          try:
              if self.memory_system:
                  agent_id = os.environ.get("AGENT_ID", "A2AAgent")
-                 user_id = os.environ.get("USER_ID", sessionId)
+                 # 使用确定的用户ID进行记忆检索
                  memories = self.memory_system.search_memories(
                      query=user_query,
                      agent_id=agent_id,
-                     user_id=user_id,
+                     user_id=final_user_id,
                      memory_types=["long_term", "working"],
                      limit=5,
                      min_similarity=0.5,
@@ -431,7 +437,7 @@ class BasicAgent:
                 "content": response
             }
 
-    async def stream(self, query: str, sessionId: str) -> AsyncIterable[dict[str, Any]]:
+    async def stream(self, query: str, sessionId: str, user_id: str = None) -> AsyncIterable[dict[str, Any]]:
         """Stream updates from the MCP agent.
         """
         print(f"问题: {query}的sessionId为： {sessionId}")
@@ -451,6 +457,7 @@ class BasicAgent:
                     user_query=query,
                     sessionId=sessionId,
                     stream=True,
+                    user_id=user_id,
                 )
                 # Iterate through the chunks yielded by the response_generator
                 async for chunk in response_generator:
