@@ -2,7 +2,7 @@
 <view class="chat-container">
   <!-- 聊天历史区域 -->
   <scroll-view scroll-y="true" class="chat-history" id="messageList" scroll-into-view="{{scrollIntoView}}">
-    <view wx:for="{{messages}}" wx:key="timestamp" id="{{'msg-' + index}}" class="message-bubble-container {{item.role}}">
+    <view wx:for="{{messages}}" wx:for-item="item" wx:for-index="idx" wx:key="id" id="{{'msg-' + item.id}}" class="message-bubble-container {{item.role}}">
       <!-- 用户头像 -->
       <view wx:if="{{item.role === 'user'}}" class="avatar user-avatar">
         <text class="avatar-text">我</text>
@@ -17,10 +17,20 @@
       <view class="message-bubble">
         <!-- 消息内容 -->
         <view class="message-content-scroll-wrapper">
-          <rich-text class="message-content" nodes="{{item.formattedContent || item.content}}"></rich-text>
+          <block wx:for="{{item.contentParts}}" wx:key="index" wx:for-item="part">
+            <rich-text wx:if="{{part.type === 'text'}}" class="message-content" nodes="{{part.content}}"></rich-text>
+            <image wx:if="{{part.type === 'image'}}" src="{{part.url}}" mode="widthFix" class="message-image" bindtap="previewImage" data-src="{{part.url}}"></image>
+            <view wx:if="{{part.type === 'file'}}" class="message-file" bindtap="openFile" data-url="{{part.url}}" data-type="{{part.mimeType}}">
+              <view class="file-icon">📄</view>
+              <view class="file-info">
+                <view class="file-name">{{part.name}}</view>
+                <view class="file-type">点击预览</view>
+              </view>
+            </view>
+          </block>
         </view>
         <view wx:if="{{item.role === 'assistant' && item.thinking}}" class="thinking-container">
-          <button class="thinking-toggle" bindtap="toggleThinking" data-index="{{index}}">
+          <button class="thinking-toggle" bindtap="toggleThinking" data-index="{{idx}}">
             {{item.showThinking ? '隐藏思考过程' : '查看思考过程'}}
           </button>
           <view wx:if="{{item.showThinking}}" class="thinking-content">

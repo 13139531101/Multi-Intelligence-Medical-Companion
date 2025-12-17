@@ -40,8 +40,8 @@
       <view class="record-footer">
         <view class="record-hospital" wx:if="{{item.hospital}}">{{item.hospital}}</view>
         <view class="record-actions">
-          <view class="action-btn edit" bindtap="editRecord" data-id="{{item.id}}" catchtap="true">编辑</view>
-          <view class="action-btn delete" bindtap="deleteRecord" data-id="{{item.id}}" catchtap="true">删除</view>
+          <view class="action-btn edit" bindtap="editRecord" data-id="{{item.id}}" catchtap="noop">编辑</view>
+          <view class="action-btn delete" bindtap="deleteRecord" data-id="{{item.id}}" catchtap="noop">删除</view>
         </view>
       </view>
     </view>
@@ -68,7 +68,7 @@
 
 <!-- 添加/编辑弹窗 -->
 <view class="modal" wx:if="{{showModal}}" bindtap="closeModal">
-  <view class="modal-content" catchtap="true">
+  <view class="modal-content" catchtap="noop">
     <view class="modal-header">
       <view class="modal-title">{{isEditing ? '编辑档案' : '添加档案'}}</view>
       <view class="modal-close" bindtap="closeModal">×</view>
@@ -99,18 +99,18 @@
             <view class="upload-icon">📎</view>
             <view class="upload-text">选择文件</view>
           </view>
-          <view class="uploaded-files" wx:if="{{formData.file_url}}">
-            <view class="file-item">
-              <view class="file-name">{{formData.file_name || '已上传文件'}}</view>
-              <view class="file-remove" bindtap="removeFile">×</view>
-            </view>
+          <view class="file-info" wx:if="{{formData.file_name}}">
+            <view class="file-name">{{formData.file_name}}</view>
           </view>
         </view>
       </view>
     </view>
     <view class="modal-footer">
-      <view class="btn btn-cancel" bindtap="closeModal">取消</view>
-      <view class="btn btn-primary" bindtap="saveRecord">{{isEditing ? '保存' : '添加'}}</view>
+      <button class="btn-cancel" bindtap="closeModal">取消</button>
+      <button class="btn-submit" bindtap="submitRecord">保存</button>
     </view>
   </view>
 </view>
+
+<!-- AI助手小窗 -->
+<floating-ai-btn agent-type="health_records" />

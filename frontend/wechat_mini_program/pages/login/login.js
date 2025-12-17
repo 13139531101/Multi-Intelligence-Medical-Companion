@@ -1,5 +1,5 @@
 // login.js
-import { checkApiStatus, login } from "../../utils/api";
+const { checkApiStatus, login } = require("../../utils/api");
 
 Page({
   data: {

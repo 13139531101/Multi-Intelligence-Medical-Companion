@@ -1,274 +1,59 @@
-<!--visit-summary.wxml-->
+<!--pages/visit-summary/visit-summary.wxml-->
 <view class="container">
-  <!-- 页面标题 -->
   <view class="page-header">
-    <text class="page-title">就诊摘要</text>
-    <text class="page-desc">智能生成，一目了然</text>
+    <view class="page-title">就诊摘要</view>
+    <view class="page-desc">智能整理您的每次就诊记录</view>
   </view>
 
-  <!-- 快速操作 -->
-  <view class="quick-actions">
-    <view class="action-item" bindtap="chatToGenerate">
-      <text class="action-icon">📝</text>
-      <text class="action-title">生成摘要</text>
-      <text class="action-desc">AI智能生成就诊摘要</text>
-    </view>
-    <view class="action-item" bindtap="manualCreate">
-      <text class="action-icon">✍️</text>
-      <text class="action-title">手工记录</text>
-      <text class="action-desc">手动添加就诊记录</text>
+  <!-- 上传区域 -->
+  <view class="upload-section">
+    <view class="upload-card" bindtap="chooseImage">
+      <view class="upload-icon">📸</view>
+      <view class="upload-text">拍照/上传病历</view>
+      <view class="upload-sub">支持处方单、检查报告、病历本等</view>
     </view>
   </view>
 
-  <!-- 最近摘要 -->
-  <view class="recent-section">
-    <view class="section-header">
-      <text class="section-title">最近摘要</text>
-      <text class="section-more" bindtap="viewAllSummaries">查看全部</text>
+  <!-- 摘要列表 -->
+  <view class="summary-list">
+    <view class="list-header">
+      <text class="list-title">历史摘要</text>
     </view>
-    
-    <view wx:if="{{recentSummaries.length > 0}}" class="summary-list">
-      <view wx:for="{{recentSummaries}}" wx:key="id" class="summary-item" bindtap="viewSummaryDetail" data-id="{{item.id}}">
-        <view class="summary-header">
-          <view class="summary-type">{{item.type}}</view>
-          <view class="summary-date">{{item.date}}</view>
+
+    <view class="loading" wx:if="{{isLoading}}">
+      <view class="loading-spinner"></view>
+      <text>加载中...</text>
+    </view>
+
+    <view class="summary-items" wx:if="{{summaries.length > 0}}">
+      <view class="summary-item" wx:for="{{summaries}}" wx:key="id" bindtap="viewDetail" data-id="{{item.summary_id}}">
+        <view class="item-header">
+          <text class="hospital-name">{{item.hospital || '未知医院'}}</text>
+          <text class="visit-date">{{item.visit_date}}</text>
         </view>
-        <view class="summary-title">{{item.title}}</view>
-        <view class="summary-hospital">{{item.hospital}}</view>
-        <view class="summary-content">{{item.summary}}</view>
-        <view class="summary-footer">
-          <view class="summary-tags">
-            <text wx:for="{{item.tags}}" wx:key="index" class="tag">{{item}}</text>
+        <view class="item-body">
+          <view class="diagnosis-row">
+            <text class="label">诊断：</text>
+            <text class="value">{{item.diagnosis || '未识别'}}</text>
           </view>
-          <view class="summary-status">
-            <text class="status-text {{item.status}}">{{getStatusName(item.status)}}</text>
+          <view class="tags-row" wx:if="{{item.prescription && item.prescription.medicines}}">
+            <view class="tag" wx:for="{{item.prescription.medicines}}" wx:key="name" wx:for-item="med">
+              {{med.name}}
+            </view>
           </view>
+        </view>
+        <view class="item-footer">
+          <text class="view-more">查看详情 ></text>
         </view>
       </view>
     </view>
 
-    <view wx:else class="empty-state">
-      <text class="empty-icon">📋</text>
-      <text class="empty-title">暂无就诊摘要</text>
-      <text class="empty-desc">点击上方"生成摘要"开始创建</text>
-    </view>
-  </view>
-
-  <!-- 摘要分类 -->
-  <view class="category-section">
-    <view class="section-title">摘要分类</view>
-    <view class="category-grid">
-      <view wx:for="{{categories}}" wx:key="type" class="category-item" bindtap="viewCategorySummaries" data-type="{{item.type}}">
-        <text class="category-icon">{{item.icon}}</text>
-        <text class="category-name">{{item.name}}</text>
-        <text class="category-count">{{item.count}}份</text>
-      </view>
-    </view>
-  </view>
-
-  <!-- 智能分析 -->
-  <view class="analysis-section">
-    <view class="section-title">智能分析</view>
-    <view class="analysis-card">
-      <view class="analysis-header">
-        <text class="analysis-title">健康趋势分析</text>
-        <text class="analysis-period">近3个月</text>
-      </view>
-      <view class="analysis-content">
-        <view class="trend-item">
-          <text class="trend-label">就诊频次</text>
-          <view class="trend-chart">
-            <view class="chart-bar" style="height: {{trends.visitFrequency}}%"></view>
-          </view>
-          <text class="trend-value">{{trends.visitCount}}次</text>
-        </view>
-        <view class="trend-item">
-          <text class="trend-label">健康指数</text>
-          <view class="trend-chart">
-            <view class="chart-bar health" style="height: {{trends.healthIndex}}%"></view>
-          </view>
-          <text class="trend-value">{{trends.healthScore}}分</text>
-        </view>
-        <view class="trend-item">
-          <text class="trend-label">用药依从</text>
-          <view class="trend-chart">
-            <view class="chart-bar medication" style="height: {{trends.medicationAdherence}}%"></view>
-          </view>
-          <text class="trend-value">{{trends.adherenceRate}}%</text>
-        </view>
-      </view>
-      <view class="analysis-summary">
-        <text class="summary-text">{{trends.summary}}</text>
-      </view>
-    </view>
-  </view>
-
-  <!-- 健康建议 -->
-  <view class="suggestions-section">
-    <view class="section-title">健康建议</view>
-    <view wx:if="{{suggestions.length > 0}}" class="suggestions-list">
-      <view wx:for="{{suggestions}}" wx:key="id" class="suggestion-item">
-        <view class="suggestion-icon">{{item.icon}}</view>
-        <view class="suggestion-content">
-          <text class="suggestion-title">{{item.title}}</text>
-          <text class="suggestion-desc">{{item.description}}</text>
-        </view>
-        <view class="suggestion-priority">
-          <text class="priority-text {{item.priority}}">{{getPriorityName(item.priority)}}</text>
-        </view>
-      </view>
-    </view>
-
-    <view wx:else class="empty-state">
-      <text class="empty-icon">💡</text>
-      <text class="empty-title">暂无健康建议</text>
-      <text class="empty-desc">生成更多摘要后获得个性化建议</text>
+    <view class="empty-state" wx:elif="{{!isLoading}}">
+      <view class="empty-icon">📝</view>
+      <text>暂无就诊摘要记录</text>
     </view>
   </view>
 </view>
 
-<!-- 生成摘要弹窗 -->
-<view wx:if="{{showCreateModal}}" class="modal" bindtap="closeCreateModal">
-  <view class="modal-content" catchtap="true">
-    <view class="modal-header">
-      <text class="modal-title">生成就诊摘要</text>
-      <text class="modal-close" bindtap="closeCreateModal">×</text>
-    </view>
-    <view class="modal-body">
-      <view class="create-options">
-        <view class="option-item" bindtap="selectCreateType" data-type="manual">
-          <text class="option-icon">✍️</text>
-          <view class="option-info">
-            <text class="option-title">手动输入</text>
-            <text class="option-desc">手动输入就诊信息生成摘要</text>
-          </view>
-          <text class="option-arrow">></text>
-        </view>
-        <view class="option-item" bindtap="selectCreateType" data-type="upload">
-          <text class="option-icon">📤</text>
-          <view class="option-info">
-            <text class="option-title">上传报告</text>
-            <text class="option-desc">上传检查报告自动生成摘要</text>
-          </view>
-          <text class="option-arrow">></text>
-        </view>
-        <view class="option-item" bindtap="selectCreateType" data-type="chat">
-          <text class="option-icon">💬</text>
-          <view class="option-info">
-            <text class="option-title">对话生成</text>
-            <text class="option-desc">通过AI对话生成就诊摘要</text>
-          </view>
-          <text class="option-arrow">></text>
-        </view>
-      </view>
-    </view>
-  </view>
-</view>
-
-<!-- 手动输入摘要弹窗 -->
-<view wx:if="{{showManualModal}}" class="modal" bindtap="closeManualModal">
-  <view class="modal-content large" catchtap="true">
-    <view class="modal-header">
-      <text class="modal-title">手动输入摘要</text>
-      <text class="modal-close" bindtap="closeManualModal">×</text>
-    </view>
-    <view class="modal-body">
-      <view class="form-group">
-        <text class="form-label">就诊类型</text>
-        <picker class="form-picker" range="{{visitTypes}}" value="{{newSummary.typeIndex}}" bindchange="onTypeChange">
-          <view class="picker-text">{{visitTypes[newSummary.typeIndex] || '请选择就诊类型'}}</view>
-        </picker>
-      </view>
-      <view class="form-group">
-        <text class="form-label">就诊日期</text>
-        <picker class="form-picker" mode="date" value="{{newSummary.date}}" bindchange="onDateChange">
-          <view class="picker-text">{{newSummary.date || '选择就诊日期'}}</view>
-        </picker>
-      </view>
-      <view class="form-group">
-        <text class="form-label">医院名称</text>
-        <input class="form-input" placeholder="请输入医院名称" value="{{newSummary.hospital}}" bindinput="onInputChange" data-field="hospital"/>
-      </view>
-      <view class="form-group">
-        <text class="form-label">科室</text>
-        <input class="form-input" placeholder="请输入科室" value="{{newSummary.department}}" bindinput="onInputChange" data-field="department"/>
-      </view>
-      <view class="form-group">
-        <text class="form-label">医生姓名</text>
-        <input class="form-input" placeholder="请输入医生姓名" value="{{newSummary.doctor}}" bindinput="onInputChange" data-field="doctor"/>
-      </view>
-      <view class="form-group">
-        <text class="form-label">主要症状</text>
-        <textarea class="form-textarea" placeholder="请描述主要症状" value="{{newSummary.symptoms}}" bindinput="onInputChange" data-field="symptoms"></textarea>
-      </view>
-      <view class="form-group">
-        <text class="form-label">诊断结果</text>
-        <textarea class="form-textarea" placeholder="请输入诊断结果" value="{{newSummary.diagnosis}}" bindinput="onInputChange" data-field="diagnosis"></textarea>
-      </view>
-      <view class="form-group">
-        <text class="form-label">治疗方案</text>
-        <textarea class="form-textarea" placeholder="请输入治疗方案" value="{{newSummary.treatment}}" bindinput="onInputChange" data-field="treatment"></textarea>
-      </view>
-      <view class="form-group">
-        <text class="form-label">用药建议</text>
-        <textarea class="form-textarea" placeholder="请输入用药建议" value="{{newSummary.medication}}" bindinput="onInputChange" data-field="medication"></textarea>
-      </view>
-      <view class="form-group">
-        <text class="form-label">复诊安排</text>
-        <textarea class="form-textarea" placeholder="请输入复诊安排" value="{{newSummary.followUp}}" bindinput="onInputChange" data-field="followUp"></textarea>
-      </view>
-    </view>
-    <view class="modal-footer">
-      <button class="btn btn-cancel" bindtap="closeManualModal">取消</button>
-      <button class="btn btn-primary" bindtap="generateSummary" loading="{{generating}}">{{generating ? '生成中...' : '生成摘要'}}</button>
-    </view>
-  </view>
-</view>
-
-<!-- 上传报告弹窗 -->
-<view wx:if="{{showUploadModal}}" class="modal" bindtap="closeUploadModal">
-  <view class="modal-content" catchtap="true">
-    <view class="modal-header">
-      <text class="modal-title">上传检查报告</text>
-      <text class="modal-close" bindtap="closeUploadModal">×</text>
-    </view>
-    <view class="modal-body">
-      <view class="upload-area" bindtap="chooseImage">
-        <view wx:if="{{uploadedImages.length === 0}}" class="upload-placeholder">
-          <text class="upload-icon">📷</text>
-          <text class="upload-text">点击上传检查报告</text>
-          <text class="upload-desc">支持图片格式，最多上传5张</text>
-        </view>
-        <view wx:else class="uploaded-images">
-          <view wx:for="{{uploadedImages}}" wx:key="index" class="image-item">
-            <image class="uploaded-image" src="{{item}}" mode="aspectFill"/>
-            <text class="image-delete" bindtap="deleteImage" data-index="{{index}}" catchtap="true">×</text>
-          </view>
-          <view wx:if="{{uploadedImages.length < 5}}" class="add-image" bindtap="chooseImage">
-            <text class="add-icon">+</text>
-          </view>
-        </view>
-      </view>
-      <view class="form-group">
-        <text class="form-label">报告类型</text>
-        <picker class="form-picker" range="{{reportTypes}}" value="{{uploadForm.typeIndex}}" bindchange="onReportTypeChange">
-          <view class="picker-text">{{reportTypes[uploadForm.typeIndex] || '请选择报告类型'}}</view>
-        </picker>
-      </view>
-      <view class="form-group">
-        <text class="form-label">检查日期</text>
-        <picker class="form-picker" mode="date" value="{{uploadForm.date}}" bindchange="onReportDateChange">
-          <view class="picker-text">{{uploadForm.date || '选择检查日期'}}</view>
-        </picker>
-      </view>
-      <view class="form-group">
-        <text class="form-label">备注</text>
-        <textarea class="form-textarea" placeholder="请输入备注信息（可选）" value="{{uploadForm.notes}}" bindinput="onUploadInputChange" data-field="notes"></textarea>
-      </view>
-    </view>
-    <view class="modal-footer">
-      <button class="btn btn-cancel" bindtap="closeUploadModal">取消</button>
-      <button class="btn btn-primary" bindtap="uploadAndGenerate" loading="{{uploading}}" disabled="{{uploadedImages.length === 0}}">{{uploading ? '上传中...' : '上传并生成'}}</button>
-    </view>
-  </view>
-</view>
+<!-- AI助手小窗 -->
+<floating-ai-btn agent-type="summary" />

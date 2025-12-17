@@ -3,8 +3,9 @@
     "pages/login/login",
     "pages/register/register",
     "pages/index/index",
-    "pages/agent_chat/agent_chat",
     "pages/health-records/health-records",
+    "pages/profile/profile",
+    "pages/agent_chat/agent_chat",
     "pages/consultation/consultation",
     "pages/medication/medication",
     "pages/visit-summary/visit-summary"
@@ -16,11 +17,33 @@
     "list": [
       {
         "pagePath": "pages/index/index",
-        "text": "首页"
+        "text": "首页",
+        "iconPath": "images/home.png",
+        "selectedIconPath": "images/home-active.png"
       },
       {
-        "pagePath": "pages/agent_chat/agent_chat",
-        "text": "AI诊室"
+        "pagePath": "pages/health-records/health-records",
+        "text": "健康档案",
+        "iconPath": "images/records.png",
+        "selectedIconPath": "images/records-active.png"
+      },
+      {
+        "pagePath": "pages/medication/medication",
+        "text": "用药管理",
+        "iconPath": "images/medication.png",
+        "selectedIconPath": "images/medication-active.png"
+      },
+      {
+        "pagePath": "pages/visit-summary/visit-summary",
+        "text": "就诊摘要",
+        "iconPath": "images/summary.png",
+        "selectedIconPath": "images/summary-active.png"
+      },
+      {
+        "pagePath": "pages/profile/profile",
+        "text": "个人中心",
+        "iconPath": "images/profile.png",
+        "selectedIconPath": "images/profile-active.png"
       }
     ]
   },

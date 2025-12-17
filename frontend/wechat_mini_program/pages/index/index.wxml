@@ -1,45 +1,15 @@
 <!--index.wxml-->
 <view class="container">
-  <!-- 快速操作 -->
+  <!-- 快速操作：只保留健康咨询 -->
   <view class="section">
-    <view class="section-title">快速操作</view>
+    <view class="section-title">健康服务</view>
     <view class="quick-actions">
-      <view class="action-item" bindtap="goToHealthRecords">
-        <view class="action-icon">📋</view>
-        <view class="action-title">健康档案</view>
-        <view class="action-desc">管理您的健康档案信息</view>
-        <view class="action-count">{{healthRecordsCount}}</view>
-      </view>
-      <view class="action-item" bindtap="goToConsultation">
+      <view class="action-item consultation-item" bindtap="goToConsultation">
         <view class="action-icon">🩺</view>
         <view class="action-title">健康咨询</view>
         <view class="action-desc">AI智能健康咨询服务</view>
         <view class="action-count">新</view>
       </view>
-      <view class="action-item" bindtap="goToMedication">
-        <view class="action-icon">💊</view>
-        <view class="action-title">用药管理</view>
-        <view class="action-desc">管理您的用药计划提醒</view>
-        <view class="action-count">{{medicationCount}}</view>
-      </view>
-      <view class="action-item" bindtap="goToSummary">
-        <view class="action-icon">📝</view>
-        <view class="action-title">就诊摘要</view>
-        <view class="action-desc">查看您的就诊记录摘要</view>
-        <view class="action-count">{{summaryCount}}</view>
-      </view>
-    </view>
-  </view>
-
-  <!-- 智能助手 -->
-  <view class="section">
-    <view class="ai-assistant" bindtap="goToAIAssistant">
-      <view class="ai-icon">🤖</view>
-      <view class="ai-content">
-        <view class="ai-title">智能助手</view>
-        <view class="ai-desc">一站式健康咨询智能服务</view>
-      </view>
-      <view class="ai-status">在线</view>
     </view>
   </view>
 
@@ -96,4 +66,7 @@
       <view class="status-value status-info">{{loginUserInfo.username || '已登录'}}</view>
     </view>
   </view>
+
+  <!-- 悬浮AI助手按钮 (默认/分诊) -->
+  <floating-ai-btn agent-type="default" />
 </view>

@@ -1,11 +1,11 @@
-import {
+const {
   getMedications,
   createMedication,
   getMedicationReminders,
   markMedicationTaken,
   createMedicationReminder,
   uploadMedicationImage,
-} from "../../utils/api";
+} = require("../../utils/api");
 
 const app = getApp();
 
@@ -95,6 +95,9 @@ Page({
   onShow() {
     this.loadData();
   },
+
+  // 空函数，用于阻止冒泡
+  noop() {},
 
   // 初始化页面
   initPage() {

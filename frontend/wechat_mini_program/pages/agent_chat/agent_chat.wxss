@@ -85,6 +85,52 @@
   word-break: break-word;
 }
 
+/* 图片消息 */
+.message-image {
+  max-width: 100%;
+  border-radius: 12rpx;
+  margin-top: 10rpx;
+  display: block;
+}
+
+/* 文件消息 */
+.message-file {
+  display: flex;
+  align-items: center;
+  background-color: rgba(0, 0, 0, 0.05);
+  padding: 16rpx;
+  border-radius: 12rpx;
+  margin-top: 10rpx;
+}
+
+.message-bubble-container.user .message-file {
+  background-color: rgba(255, 255, 255, 0.2);
+}
+
+.file-icon {
+  font-size: 40rpx;
+  margin-right: 16rpx;
+}
+
+.file-info {
+  flex: 1;
+  overflow: hidden;
+}
+
+.file-name {
+  font-size: 28rpx;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.file-type {
+  font-size: 22rpx;
+  opacity: 0.7;
+  margin-top: 4rpx;
+}
+
 /* AI回答滚动窗口 */
 .message-bubble-container.assistant .message-content-scroll-wrapper {
   max-height: 600rpx;

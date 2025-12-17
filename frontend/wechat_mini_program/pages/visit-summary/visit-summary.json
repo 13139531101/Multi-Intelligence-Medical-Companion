@@ -1,7 +1,6 @@
 {
-  "navigationBarTitleText": "就诊摘要",
-  "navigationBarBackgroundColor": "#fa8c16",
-  "navigationBarTextStyle": "white",
-  "enablePullDownRefresh": true,
-  "backgroundTextStyle": "dark"
+  "usingComponents": {
+    "floating-ai-btn": "/components/floating-ai-btn/floating-ai-btn"
+  },
+  "navigationBarTitleText": "就诊摘要"
 }

@@ -3,5 +3,8 @@
   "navigationBarBackgroundColor": "#1890ff",
   "navigationBarTextStyle": "white",
   "enablePullDownRefresh": true,
-  "backgroundTextStyle": "dark"
+  "backgroundTextStyle": "dark",
+  "usingComponents": {
+    "floating-ai-btn": "/components/floating-ai-btn/floating-ai-btn"
+  }
 }

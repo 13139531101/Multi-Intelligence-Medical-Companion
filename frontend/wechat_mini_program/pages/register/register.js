@@ -1,5 +1,5 @@
 // register.js
-import { checkApiStatus, register } from "../../utils/api";
+const { checkApiStatus, register } = require("../../utils/api");
 
 Page({
   data: {
