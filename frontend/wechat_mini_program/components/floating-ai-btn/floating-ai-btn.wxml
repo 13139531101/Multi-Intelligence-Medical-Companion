@@ -1,0 +1,4 @@
+<view class="floating-ai-btn" bindtap="goToAIAssistant">
+  <image class="floating-icon" src="/images/chat.png" mode="aspectFit"></image>
+  <text class="floating-text">AI助手</text>
+</view>

@@ -1,0 +1,6 @@
+{
+  "usingComponents": {
+    "floating-ai-btn": "/components/floating-ai-btn/floating-ai-btn"
+  },
+  "enablePullDownRefresh": true
+}

@@ -1,0 +1,30 @@
+<view class="container">
+  <view class="user-card">
+    <view class="avatar-container">
+      <!-- 使用现有的图标作为头像占位 -->
+      <image class="avatar" src="/images/home-active.svg" mode="aspectFit"></image>
+    </view>
+    <view class="user-info" wx:if="{{userInfo}}">
+      <view class="username">{{userInfo.username || '用户'}}</view>
+      <view class="userid">ID: {{userInfo.user_id || userInfo.id || '未知'}}</view>
+    </view>
+    <view class="user-info" wx:else bindtap="goToLogin">
+      <view class="username">点击登录</view>
+      <view class="userid">登录后享受更多服务</view>
+    </view>
+  </view>
+
+  <view class="menu-list">
+    <view class="menu-item" bindtap="goToHistory">
+      <view class="menu-title">咨询历史</view>
+      <view class="menu-arrow">></view>
+    </view>
+    <view class="menu-item">
+      <view class="menu-title">设置</view>
+      <view class="menu-arrow">></view>
+    </view>
+    <view class="menu-item" bindtap="logout" wx:if="{{userInfo}}">
+      <view class="menu-title" style="color: #ff4d4f;">退出登录</view>
+    </view>
+  </view>
+</view>
