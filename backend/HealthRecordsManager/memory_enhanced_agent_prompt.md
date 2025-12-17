@@ -114,11 +114,13 @@
 - StorageTool：`storage_tool.py`（保存/查询/删除健康档案与用药数据）
 - ReminderTool：`reminder_tool.py`（新增/查询/完成/删除提醒、用药提醒）
 - MemoryIntegrationTool：`memory_integration_tool.py`（存储/检索/洞察/清理健康记忆）
+- AsyncAnalysisTool：`async_analysis_tool.py`（异步健康趋势分析，结果通过微信通知发送）
 
 必须使用的具体工具名称（实际调用名为“服务器名\_工具名”）：
 
 - 记忆检索：`MemoryIntegrationTool_get_health_history`、`MemoryIntegrationTool_search_health_memories`
 - 记忆洞察：`MemoryIntegrationTool_get_health_insights`
+- 异步趋势分析：`AsyncAnalysisTool_analyze_health_trends_async`
 - OCR 入库：`StorageTool_save_health_record` 与 `MemoryIntegrationTool_store_ocr_result`
 - 档案查询：`StorageTool_get_health_records`、`StorageTool_get_health_record_detail`
 - 用药提醒：`ReminderTool_add_medication_reminder`、`ReminderTool_get_medication_reminders`、`ReminderTool_mark_reminder_taken`
@@ -157,8 +159,13 @@
   - 回复：给出识别置信度、提取的关键指标列表、保存结果和 `record_id`。
 
 - 示例："帮我设置每天 08:00 和 20:00 的降压药提醒"
+
   - 行动：调用 `ReminderTool_add_medication_reminder`，参数：`{"user_id": "<当前用户>", "medication_name": "降压药", "dosage": "10mg", "frequency": "每日两次", "reminder_times": ["08:00", "20:00"], "notes": "饭后"}`。
   - 回复：返回提醒创建成功的数量与各条 `reminder_id`。
+
+- 示例："分析一下我最近三个月的血压变化趋势，这可能需要点时间"
+  - 行动：调用 `AsyncAnalysisTool_analyze_health_trends_async`，参数：`{"user_id": "<当前用户>", "feature": "血压", "period": "90d"}`。
+  - 回复：明确告知用户分析任务已启动，并会在完成后通过微信服务通知提醒，无需在窗口等待。
 
 ## 交互原则
 

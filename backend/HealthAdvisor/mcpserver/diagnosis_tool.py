@@ -131,7 +131,12 @@ def analyze_symptoms(symptoms: List[str], patient_age: Optional[int] = None, pat
     基于真实数据的症状关联检索与证据汇总
     """
     if not symptoms:
-        return {"status": "error", "message": "请提供至少一个症状"}
+        return {
+            "status": "success",
+            "message": "请提供至少一个症状(symptoms参数)以便进行分析。",
+            "evidence": [],
+            "evidence_count": 0
+        }
     try:
         _get_db = _resolve_db_manager()
         if _get_db is None:
@@ -322,18 +327,28 @@ def generate_health_assessment(symptoms: List[str], vital_signs: Optional[Dict[s
     }
 
 @mcp.tool()
-def ai_medical_diagnosis(symptoms: List[str], patient_info: Dict[str, Any], medical_history: List[str] = None) -> Dict[str, Any]:
+def ai_medical_diagnosis(symptoms: List[str] = None, patient_info: Dict[str, Any] = None, medical_history: List[str] = None) -> Dict[str, Any]:
     """
     使用讯飞医疗大模型进行智能诊断分析
     
     Args:
-        symptoms: 症状列表
-        patient_info: 患者信息（年龄、性别等）
+        symptoms: 症状列表 (可选)
+        patient_info: 患者信息（年龄、性别等）(可选)
         medical_history: 既往病史（可选）
     
     Returns:
         AI诊断分析结果
     """
+    if not symptoms:
+        return {
+            "status": "input_required",
+            "message": "请详细描述您的症状，以便我进行分析。",
+            "next_step": "ask_user_for_symptoms"
+        }
+
+    if patient_info is None:
+        patient_info = {"age": "未知", "gender": "未知"}
+
     try:
         # 构建提示词
         prompt = f"""
@@ -355,7 +370,27 @@ def ai_medical_diagnosis(symptoms: List[str], patient_info: Dict[str, Any], medi
         """
         
         # 调用讯飞医疗大模型
-        ai_response = call_spark_medical_llm(prompt)
+        app_id = os.getenv('SPARK_APP_ID')
+        api_key = os.getenv('SPARK_API_KEY')
+        api_secret = os.getenv('SPARK_API_SECRET')
+        spark_url = os.getenv('SPARK_API_URL', 'wss://spark-api.xf-yun.com/v1.1/chat')
+        domain = os.getenv('SPARK_API_DOMAIN', 'general')
+
+        if all([app_id, api_key, api_secret]):
+             try:
+                 from .spark_client import call_spark
+                 ai_response = call_spark(prompt, app_id, api_key, api_secret, spark_url, domain)
+             except ImportError:
+                 # Try relative import if running as script
+                 try:
+                     from spark_client import call_spark
+                     ai_response = call_spark(prompt, app_id, api_key, api_secret, spark_url, domain)
+                 except Exception as e:
+                     return f"导入 Spark 客户端失败: {e}"
+             except Exception as e:
+                 return f"讯飞医疗大模型调用失败: {str(e)}"
+        else:
+             return "讯飞医疗大模型配置缺失，请检查环境变量"
         
         return {
             "status": "success",

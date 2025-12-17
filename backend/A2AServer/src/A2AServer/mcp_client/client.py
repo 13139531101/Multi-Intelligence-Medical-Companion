@@ -330,8 +330,13 @@ class MCPClient:
                     logger.info(f"Retrying in {delay} seconds...")
                     await asyncio.sleep(delay)
                 else:
-                    logger.error(f"Max retries reached for tool '{tool_name}'. Error: {e}. Traceback: {traceback.format_exc()}")
-                    raise
+                    logger.error(
+                        f"Max retries reached for tool '{tool_name}'. Error: {e}. Traceback: {traceback.format_exc()}"
+                    )
+                    return {
+                        "isError": True,
+                        "error": f"Tool '{tool_name}' execution failed: {str(e)}",
+                    }
 
     async def stop(self):
         await self.cleanup()

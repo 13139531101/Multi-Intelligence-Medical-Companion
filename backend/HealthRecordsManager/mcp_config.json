@@ -65,6 +65,19 @@
         "MEMORY_EMBEDDING_MODEL": "all-MiniLM-L6-v2",
         "MEMORY_LOG_LEVEL": "INFO"
       }
+    },
+    "AsyncAnalysisTool": {
+      "command": "python",
+      "args": [
+        "mcpserver/async_analysis_tool.py"
+      ],
+      "cwd": "/app/HealthRecordsManager",
+      "env": {
+        "DATABASE_URL": "postgresql://pha:pha_pass@localhost:5432/personal_health_assistant",
+        "WECHAT_APP_ID": "${WECHAT_APP_ID}",
+        "WECHAT_APP_SECRET": "${WECHAT_APP_SECRET}",
+        "WECHAT_TEMPLATE_TASK_COMPLETE": "${WECHAT_TEMPLATE_TASK_COMPLETE}"
+      }
     }
   }
 }
