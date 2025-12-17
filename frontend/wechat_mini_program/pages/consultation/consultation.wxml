@@ -1,14 +1,25 @@
 <!--consultation.wxml-->
-<view class="container">
-  <!-- 页面标题 -->
+<view class="container {{showSidebar ? 'sidebar-open' : ''}}">
+  <!-- 页面头部 -->
   <view class="page-header">
-    <view class="page-title">健康咨询</view>
-    <view class="page-desc">AI智能健康咨询服务</view>
+    <view class="header-left" bindtap="toggleSidebar">
+      <view class="menu-icon">☰</view>
+      <view class="header-title-group">
+        <view class="page-title">健康咨询</view>
+        <view class="page-desc">AI智能健康咨询服务</view>
+      </view>
+    </view>
+  </view>
+
+  <!-- 新建对话按钮 -->
+  <view class="new-consult-btn" bindtap="startGeneralConsultation">
+    <view class="plus-icon">+</view>
+    <view class="btn-text">新建对话</view>
   </view>
 
   <!-- 快速咨询入口 -->
   <view class="quick-consult-section">
-    <view class="section-title">快速咨询</view>
+    <view class="section-title">咨询场景</view>
     <view class="quick-consult-grid">
       <view class="consult-item" bindtap="startConsultation" data-type="symptom">
         <view class="consult-icon">🤒</view>
@@ -33,35 +44,6 @@
     </view>
   </view>
 
-  <!-- 咨询历史 -->
-  <view class="history-section">
-    <view class="section-header">
-      <view class="section-title">咨询历史</view>
-      <view class="section-more" bindtap="viewAllHistory">查看全部</view>
-    </view>
-    
-    <view class="history-list" wx:if="{{consultationHistory.length > 0}}">
-      <view class="history-item" wx:for="{{consultationHistory}}" wx:key="id" bindtap="viewConsultation" data-id="{{item.id}}">
-        <view class="history-header">
-          <view class="history-type">{{item.type_name}}</view>
-          <view class="history-date">{{item.formatted_date}}</view>
-        </view>
-        <view class="history-title">{{item.title}}</view>
-        <view class="history-preview">{{item.preview}}</view>
-        <view class="history-footer">
-          <view class="history-status {{item.status}}">{{item.status_name}}</view>
-          <view class="history-messages">{{item.message_count}}条对话</view>
-        </view>
-      </view>
-    </view>
-
-    <view class="empty-state" wx:else>
-      <view class="empty-icon">💬</view>
-      <view class="empty-title">暂无咨询记录</view>
-      <view class="empty-desc">开始您的第一次健康咨询吧</view>
-    </view>
-  </view>
-
   <!-- 专家推荐 -->
   <view class="expert-section">
     <view class="section-title">AI健康顾问</view>
@@ -80,7 +62,7 @@
     </view>
   </view>
 
-  <!-- 温馨提示 */
+  <!-- 温馨提示 -->
   <view class="tips-section">
     <view class="tips-title">⚠️ 温馨提示</view>
     <view class="tips-content">
@@ -89,11 +71,57 @@
       <view class="tip-item">• 用药请遵医嘱，不要自行调整剂量</view>
     </view>
   </view>
+
+</view>
+
+<!-- 侧边栏（咨询历史） -->
+<view class="sidebar {{showSidebar ? 'open' : ''}}">
+  <view class="sidebar-header">
+    <text class="sidebar-title">咨询历史</text>
+    <view class="close-icon" bindtap="closeSidebar">×</view>
+  </view>
+  <scroll-view scroll-y class="sidebar-content">
+    <block wx:if="{{consultationHistory.length > 0}}">
+      <view class="history-item-sidebar" wx:for="{{consultationHistory}}" wx:key="id" bindtap="viewConsultation" data-id="{{item.consultation_id}}" data-type="{{item.consultation_type}}" data-mode="{{item.agent_mode}}">
+        <view class="sidebar-item-header">
+          <view class="history-type-tag">{{item.type_name}}</view>
+          <view class="sidebar-item-right">
+            <view class="history-date-small">{{item.formatted_date}}</view>
+            <view class="history-delete-btn" catchtap="deleteHistoryConsultation" data-id="{{item.consultation_id}}">删除</view>
+          </view>
+        </view>
+        <view class="history-preview-small">{{item.preview}}</view>
+      </view>
+    </block>
+    <view class="empty-sidebar" wx:else>
+      <view class="empty-text">暂无历史记录</view>
+    </view>
+  </scroll-view>
+</view>
+
+<!-- 遮罩层 -->
+<view class="mask" wx:if="{{showSidebar}}" bindtap="closeSidebar"></view>
+
+<!-- 咨询内容输入弹窗 -->
+<view class="modal" wx:if="{{showInputModal}}" bindtap="closeInputModal">
+  <view class="modal-content" catchtap="noop">
+    <view class="modal-header">
+      <view class="modal-title">描述您的问题</view>
+      <view class="modal-close" bindtap="closeInputModal">×</view>
+    </view>
+    <view class="modal-body">
+      <textarea class="consult-input" placeholder="请详细描述您的症状或问题，以便AI助手更好地为您服务..." bindinput="handleInput" value="{{inputContent}}" maxlength="500"></textarea>
+    </view>
+    <view class="modal-footer">
+      <button class="btn-cancel" bindtap="closeInputModal">取消</button>
+      <button class="btn-confirm" bindtap="submitConsultation">开始咨询</button>
+    </view>
+  </view>
 </view>
 
 <!-- 咨询类型选择弹窗 -->
 <view class="modal" wx:if="{{showTypeModal}}" bindtap="closeTypeModal">
-  <view class="modal-content" catchtap="true">
+  <view class="modal-content" catchtap="noop">
     <view class="modal-header">
       <view class="modal-title">选择咨询类型</view>
       <view class="modal-close" bindtap="closeTypeModal">×</view>

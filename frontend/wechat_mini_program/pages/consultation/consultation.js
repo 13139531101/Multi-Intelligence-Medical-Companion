@@ -1,11 +1,18 @@
 // consultation.js
-import { request, getConsultationHistory } from "../../utils/api";
+const {
+  request,
+  getConsultationHistory,
+  deleteConsultation,
+} = require("../../utils/api");
 
 Page({
   data: {
     consultationHistory: [],
     loading: false,
     showTypeModal: false,
+    showInputModal: false,
+    showSidebar: false,
+    inputContent: "",
     selectedType: "",
 
     consultationTypes: [
@@ -65,19 +72,82 @@ Page({
 
     try {
       // 使用新的API helper
+      console.log("Fetching consultation history...");
       const response = await getConsultationHistory(0, 10);
+      console.log("Consultation history response:", response);
 
       if (response && Array.isArray(response)) {
-        const formattedHistory = response.map((item) => ({
-          ...item,
-          formatted_date: this.formatDate(item.created_at),
-          type_name: this.getTypeName(item.consultation_type || "health"), // 默认为健康咨询
-          status_name: this.getStatusName(item.status || "completed"), // 默认为已完成
-          preview:
-            item.question ||
-            (item.answer ? item.answer.substring(0, 50) : "无内容"),
-          message_count: 2, // 问答对默认为2条消息
-        }));
+        const formattedHistory = response.map((item) => {
+          let tags = [];
+          if (Array.isArray(item.tags)) {
+            tags = item.tags;
+          } else if (typeof item.tags === "string" && item.tags.trim()) {
+            try {
+              const parsed = JSON.parse(item.tags);
+              tags = Array.isArray(parsed) ? parsed : [];
+            } catch (e) {
+              tags = [];
+            }
+          }
+
+          const inferModeFromTags = (t) => {
+            if (!Array.isArray(t) || t.length === 0) return "";
+            if (t.includes("consultation")) return "consultation";
+            if (t.includes("medication")) return "medication";
+            if (t.includes("summary")) return "summary";
+            if (t.includes("health_records")) return "health_records";
+            return "";
+          };
+
+          const inferredMode =
+            inferModeFromTags(tags) ||
+            ([
+              "consultation",
+              "medication",
+              "summary",
+              "health_records",
+            ].includes(item.consultation_type)
+              ? item.consultation_type
+              : "");
+
+          // 解析类型
+          let type = "health";
+          if (tags.length > 0) {
+            const tag = tags[0];
+            if (tag === "consultation") type = "symptom";
+            else if (tag === "summary") type = "report";
+            else if (tag === "health_records") type = "health";
+            else type = tag;
+          } else if (item.consultation_type) {
+            type = item.consultation_type;
+          }
+
+          const agentMode =
+            inferredMode ||
+            (type === "symptom"
+              ? "consultation"
+              : type === "report"
+              ? "summary"
+              : type === "medication"
+              ? "medication"
+              : type === "health"
+              ? "default"
+              : "consultation");
+
+          return {
+            ...item,
+            tags,
+            consultation_type: type, // Ensure it's available for navigation
+            agent_mode: agentMode,
+            formatted_date: this.formatDate(item.created_at),
+            type_name: this.getTypeName(type),
+            status_name: this.getStatusName(item.status || "completed"), // 默认为已完成
+            preview:
+              item.question ||
+              (item.answer ? item.answer.substring(0, 50) : "无内容"),
+            message_count: 2, // 问答对默认为2条消息
+          };
+        });
 
         this.setData({
           consultationHistory: formattedHistory,
@@ -97,63 +167,161 @@ Page({
   // 开始咨询
   startConsultation(e) {
     const type = e.currentTarget.dataset.type;
-    this.createNewConsultation(type);
+    this.setData({
+      selectedType: type,
+      showInputModal: true,
+      inputContent: "",
+    });
   },
 
-  // 创建新的咨询会话
-  async createNewConsultation(type) {
-    try {
-      // 直接跳转到聊天页面，模式为 consultation
-      // 我们不需要先创建记录，记录会在对话过程中由智能体自动保存
-      wx.navigateTo({
-        url: `/pages/agent_chat/agent_chat?mode=consultation&type=${type}`,
-      });
-    } catch (error) {
-      console.error("进入咨询失败:", error);
+  // 处理输入
+  handleInput(e) {
+    this.setData({
+      inputContent: e.detail.value,
+    });
+  },
+
+  // 关闭输入弹窗
+  closeInputModal() {
+    this.setData({
+      showInputModal: false,
+      inputContent: "",
+    });
+  },
+
+  // 提交咨询
+  submitConsultation() {
+    const { selectedType, inputContent } = this.data;
+    if (!inputContent.trim()) {
       wx.showToast({
-        title: "无法开始咨询",
-        icon: "error",
+        title: "请输入咨询内容",
+        icon: "none",
       });
+      return;
     }
+
+    this.navigateToChat(selectedType, inputContent);
+    this.setData({
+      showInputModal: false,
+      inputContent: "",
+    });
+  },
+
+  // 跳转到聊天页面
+  navigateToChat(type, query) {
+    // 根据类型选择对应的 agent
+    let agentType = "default";
+    switch (type) {
+      case "symptom":
+        agentType = "consultation";
+        break;
+      case "medication":
+        agentType = "medication";
+        break;
+      case "health":
+        agentType = "default";
+        break;
+      case "report":
+        agentType = "summary";
+        break;
+      default:
+        agentType = "default";
+    }
+
+    wx.navigateTo({
+      url: `/pages/agent_chat/agent_chat?mode=${agentType}&type=${type}&query=${encodeURIComponent(
+        query
+      )}`,
+    });
   },
 
   // 查看咨询详情
   viewConsultation(e) {
     const id = e.currentTarget.dataset.id;
-    // 目前暂时无法查看详情，或者跳转到聊天页面但不加载上下文
-    wx.navigateTo({
-      url: `/pages/agent_chat/agent_chat?consultationId=${id}`,
-    });
-  },
-
-  // 查看全部历史
-  viewAllHistory() {
-    // 暂时提示
-    wx.showToast({
-      title: "更多历史记录开发中",
-      icon: "none",
-    });
-  },
-
-  // 显示类型选择弹窗
-  showTypeSelection() {
-    this.setData({
-      showTypeModal: true,
-    });
-  },
-
-  // 关闭类型选择弹窗
-  closeTypeModal() {
-    this.setData({
-      showTypeModal: false,
-    });
-  },
-
-  // 选择咨询类型
-  selectType(e) {
     const type = e.currentTarget.dataset.type;
-    this.closeTypeModal();
-    this.createNewConsultation(type);
+    const mode = e.currentTarget.dataset.mode;
+
+    let agentType = mode || "default";
+    if (!mode) {
+      switch (type) {
+        case "symptom":
+          agentType = "consultation";
+          break;
+        case "medication":
+          agentType = "medication";
+          break;
+        case "health":
+          agentType = "default";
+          break;
+        case "report":
+          agentType = "summary";
+          break;
+        default:
+          agentType = "consultation";
+      }
+    }
+
+    wx.navigateTo({
+      url: `/pages/agent_chat/agent_chat?id=${id}&mode=${agentType}`,
+    });
+  },
+
+  deleteHistoryConsultation(e) {
+    const id = e.currentTarget.dataset.id;
+    if (!id) return;
+
+    wx.showModal({
+      title: "删除咨询",
+      content: "确定要删除这条咨询历史吗？",
+      confirmText: "删除",
+      confirmColor: "#ff3b30",
+      cancelText: "取消",
+      success: async (res) => {
+        if (!res.confirm) return;
+
+        wx.showLoading({ title: "删除中..." });
+        try {
+          const result = await deleteConsultation(id);
+          if (result && result.success === false) {
+            throw new Error(result.message || "删除失败");
+          }
+
+          const next = (this.data.consultationHistory || []).filter(
+            (item) =>
+              item &&
+              item.consultation_id !== id &&
+              item.id !== id &&
+              item.consultationId !== id
+          );
+          this.setData({ consultationHistory: next });
+
+          wx.showToast({ title: "已删除", icon: "success" });
+        } catch (err) {
+          wx.showToast({
+            title: err && err.message ? err.message : "删除失败",
+            icon: "none",
+          });
+        } finally {
+          wx.hideLoading();
+        }
+      },
+    });
+  },
+
+  // 查看所有历史
+  viewAllHistory() {
+    // 可以跳转到专门的历史列表页，这里暂时只刷新
+    this.loadConsultationHistory();
+  },
+
+  // 格式化日期
+  formatDate(dateStr) {
+    if (!dateStr) return "";
+    const date = new Date(dateStr);
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(
+      2,
+      "0"
+    )}-${String(date.getDate()).padStart(2, "0")}`;
   },
 
   // 获取类型名称
@@ -172,71 +340,84 @@ Page({
   // 获取状态名称
   getStatusName(status) {
     const statusMap = {
-      active: "进行中",
       completed: "已完成",
-      pending: "待回复",
+      pending: "进行中",
+      failed: "失败",
     };
-    return statusMap[status] || "未知";
+    return statusMap[status] || status;
   },
 
-  // 获取预览内容
-  getPreview(messages) {
-    if (!messages || messages.length === 0) {
-      return "暂无对话内容";
+  // 打开/关闭侧边栏
+  toggleSidebar() {
+    this.setData({ showSidebar: !this.data.showSidebar });
+  },
+
+  // 关闭侧边栏
+  closeSidebar() {
+    this.setData({ showSidebar: false });
+  },
+
+  // 跳转到咨询详情（历史记录）
+  goToHistoryDetail(e) {
+    const id = e.currentTarget.dataset.id;
+    const type = e.currentTarget.dataset.type;
+    const mode = e.currentTarget.dataset.mode;
+
+    let agentType = mode || "default";
+    if (!mode) {
+      switch (type) {
+        case "symptom":
+          agentType = "consultation";
+          break;
+        case "medication":
+          agentType = "medication";
+          break;
+        case "health":
+          agentType = "default";
+          break;
+        case "report":
+          agentType = "summary";
+          break;
+        default:
+          agentType = "consultation";
+      }
     }
 
-    const lastMessage = messages[messages.length - 1];
-    const content = lastMessage.content || "";
-
-    // 截取前50个字符作为预览
-    return content.length > 50 ? content.substring(0, 50) + "..." : content;
+    wx.navigateTo({
+      url: `/pages/agent_chat/agent_chat?id=${id}&mode=${agentType}`,
+    });
   },
 
-  // 格式化日期
-  formatDate(dateString) {
-    if (!dateString) return "";
-
-    const date = new Date(dateString);
-    const now = new Date();
-    const diff = now - date;
-
-    // 如果是今天
-    if (diff < 86400000 && date.getDate() === now.getDate()) {
-      const hours = String(date.getHours()).padStart(2, "0");
-      const minutes = String(date.getMinutes()).padStart(2, "0");
-      return `今天 ${hours}:${minutes}`;
-    }
-
-    // 如果是昨天
-    const yesterday = new Date(now);
-    yesterday.setDate(yesterday.getDate() - 1);
-    if (
-      date.getDate() === yesterday.getDate() &&
-      date.getMonth() === yesterday.getMonth() &&
-      date.getFullYear() === yesterday.getFullYear()
-    ) {
-      const hours = String(date.getHours()).padStart(2, "0");
-      const minutes = String(date.getMinutes()).padStart(2, "0");
-      return `昨天 ${hours}:${minutes}`;
-    }
-
-    // 其他日期
-    const month = String(date.getMonth() + 1).padStart(2, "0");
-    const day = String(date.getDate()).padStart(2, "0");
-    return `${month}-${day}`;
+  // 通用新建对话（默认健康咨询）
+  startGeneralConsultation() {
+    this.setData({
+      selectedType: "health",
+      showInputModal: true,
+      inputContent: "",
+    });
   },
 
-  // 下拉刷新
-  onPullDownRefresh() {
-    this.loadConsultationHistory();
-    wx.stopPullDownRefresh();
+  // 打开类型选择弹窗
+  openTypeModal() {
+    this.setData({ showTypeModal: true });
   },
 
-  // 分享功能
-  onShareAppMessage() {
-    return {
-      title: "智能健康咨询",
-      path: "/pages/consultation/consultation",
-    };
+  // 关闭类型选择弹窗
+  closeTypeModal() {
+    this.setData({ showTypeModal: false });
   },
+
+  // 选择类型
+  selectType(e) {
+    const type = e.currentTarget.dataset.type;
+    this.setData({
+      selectedType: type,
+      showTypeModal: false,
+      showInputModal: true,
+      inputContent: "",
+    });
+  },
+
+  // 空函数，用于阻止冒泡
+  noop() {},
 });
