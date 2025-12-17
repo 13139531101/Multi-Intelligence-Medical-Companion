@@ -768,27 +768,27 @@ async def upload_file(
         ocr_text = ""
         ocr_info = {}
         if extract_text_from_image:
-             try:
-                 b64 = base64.b64encode(content).decode('utf-8')
-                 # extract_text_from_image might be a Tool object or function
-                 if hasattr(extract_text_from_image, "fn"):
-                     ocr_text = extract_text_from_image.fn(b64)
-                 else:
-                     ocr_text = extract_text_from_image(b64)
+            try:
+                b64 = base64.b64encode(content).decode("utf-8")
+                # extract_text_from_image might be a Tool object or function
+                if hasattr(extract_text_from_image, "fn"):
+                    ocr_text = extract_text_from_image.fn(b64)
+                else:
+                    ocr_text = extract_text_from_image(b64)
             except Exception as e:
                 logger.warning(f"OCR失败: {e}")
 
         # 尝试结构化提取
         if extract_medical_info and ocr_text:
             try:
-                 if hasattr(extract_medical_info, "fn"):
-                     ocr_info = extract_medical_info.fn(ocr_text)
-                 else:
-                     ocr_info = extract_medical_info(ocr_text)
-                 if isinstance(ocr_info, str):
-                     try:
+                if hasattr(extract_medical_info, "fn"):
+                    ocr_info = extract_medical_info.fn(ocr_text)
+                else:
+                    ocr_info = extract_medical_info(ocr_text)
+                if isinstance(ocr_info, str):
+                    try:
                         ocr_info = json.loads(ocr_info)
-                     except:
+                    except Exception:
                         pass
             except Exception as e:
                 logger.warning(f"结构化提取失败: {e}")
