@@ -5,7 +5,7 @@ from ServiceTypes import Conversation, Event
 class ApplicationManager(ABC):
 
   @abstractmethod
-  def create_conversation(self) -> Conversation:
+  def create_conversation(self, user_id: str | None = None) -> Conversation:
     pass
 
   @abstractmethod

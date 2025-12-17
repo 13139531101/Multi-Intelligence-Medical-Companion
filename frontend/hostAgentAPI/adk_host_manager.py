@@ -19,6 +19,7 @@ from A2AServer.common.A2Atypes import (
     FilePart,
     FileContent,
     Part,
+    TaskSendParams,
 )
 from hosts.multiagent.host_agent import HostAgent
 from hosts.multiagent.remote_agent_connection import (
@@ -110,12 +111,15 @@ class ADKHostManager(ApplicationManager):
             memory_service=self._memory_service,
         )
 
-    def create_conversation(self) -> Conversation:
+    def create_conversation(self, user_id: str | None = None) -> Conversation:
+        uid = user_id if user_id else self.user_id
         session = self._session_service.create_session(
-            app_name=self.app_name, user_id=self.user_id
+            app_name=self.app_name, user_id=uid
         )
         conversation_id = session.id
         c = Conversation(conversation_id=conversation_id, is_active=True)
+        # Ensure metadata is initialized and user_id is set
+        c.metadata = {'user_id': uid}
         self._conversations.append(c)
         return c
 
@@ -139,6 +143,7 @@ class ADKHostManager(ApplicationManager):
         return message
 
     async def process_message(self, message: Message):
+        logging.info(f"Processing message: {message}")
         self._messages.append(message)
         # 优先从消息元数据获取当前账户的 user_id
         try:
@@ -178,6 +183,7 @@ class ADKHostManager(ApplicationManager):
             'input_message_metadata': message.metadata,
             'session_id': conversation_id,
         }
+        target_agent_name = None
         try:
             incoming_md = message.metadata or {}
             incoming_agent = incoming_md.get('selected_agent')
@@ -186,16 +192,56 @@ class ADKHostManager(ApplicationManager):
                 alias = {
                     '就诊摘要生成器': '就诊摘要生成',
                     '就诊摘要': '就诊摘要生成',
+                    '就诊摘要助手': '就诊摘要生成',
                     '健康档案': '健康档案管理员',
                     '健康档案管理': '健康档案管理员',
                     '档案管理员': '健康档案管理员'
                 }
                 if name in alias:
                     name = alias[name]
-                if any(a.name == name for a in self._agents):
+
+                # Check if agent is known (in _agents) or connected (in remote_agent_connections)
+                is_known_agent = any(a.name == name for a in self._agents)
+                connected_agents = list(self._host_agent.remote_agent_connections.keys()) if self._host_agent else []
+                is_connected_agent = self._host_agent and name in self._host_agent.remote_agent_connections
+
+                logging.info(f"Resolving agent '{name}'. Connected: {connected_agents}")
+
+                if is_known_agent or is_connected_agent:
                     state_update['agent'] = name
-        except Exception:
+                    target_agent_name = name
+                else:
+                    logging.warning(f"Agent '{name}' not found in known agents or connected agents. Known: {[a.name for a in self._agents]}, Connected: {list(self._host_agent.remote_agent_connections.keys()) if self._host_agent else []}")
+        except Exception as e:
+            logging.error(f"Error resolving target agent: {e}")
             pass
+
+        # Heuristic Routing (Fallback if no agent selected)
+        if not target_agent_name:
+             try:
+                 text_content = ""
+                 if message.parts:
+                     for p in message.parts:
+                         if hasattr(p, 'text') and p.text:
+                             text_content += p.text
+
+                 if text_content:
+                     text_content = text_content.lower()
+                     if any(k in text_content for k in ["头疼", "发烧", "痛", "病", "医生", "建议", "咨询", "症状", "不舒服", "难受", "health", "symptom"]):
+                         target_agent_name = "健康顾问"
+                     elif any(k in text_content for k in ["药", "吃药", "提醒", "medication"]):
+                         target_agent_name = "用药提醒助手"
+                     elif any(k in text_content for k in ["档案", "记录", "体检", "报告", "record"]):
+                         target_agent_name = "健康档案管理员"
+                     elif any(k in text_content for k in ["摘要", "总结", "就诊", "summary"]):
+                         target_agent_name = "就诊摘要生成"
+
+                     if target_agent_name:
+                         logging.info(f"Heuristic routing: mapped '{text_content[:20]}...' to {target_agent_name}")
+                         state_update['agent'] = target_agent_name
+             except Exception as e:
+                 logging.error(f"Heuristic routing error: {e}")
+
         last_message_id = get_last_message_id(message)
         if (
             last_message_id
@@ -223,12 +269,70 @@ class ADKHostManager(ApplicationManager):
                     actions=ADKEventActions(state_delta=state_update),
                 ),
             )
+
+        # Direct routing if target agent is specified
+        if target_agent_name and self._host_agent and target_agent_name in self._host_agent.remote_agent_connections:
+            try:
+                logging.info(f"Directly routing message to {target_agent_name}")
+                connection = self._host_agent.remote_agent_connections[target_agent_name]
+                task_id = str(uuid.uuid4())
+
+                params = TaskSendParams(
+                    id=task_id,
+                    sessionId=conversation_id,
+                    message=message,
+                    acceptedOutputModes=["text", "text/plain", "image/png"],
+                    metadata={'conversation_id': conversation_id}
+                )
+
+                logging.info(f"Sending task to connection: {target_agent_name}")
+                final_task = await connection.send_task(params, self.task_callback)
+                logging.info(f"Task finished. Final task: {final_task}")
+
+                if final_task:
+                    response_msg = None
+                    if final_task.status and final_task.status.message:
+                        response_msg = final_task.status.message
+                    elif final_task.artifacts:
+                         # Construct message from artifacts if no status message
+                        parts = []
+                        for a in final_task.artifacts:
+                            parts.extend(a.parts)
+                        if parts:
+                            response_msg = Message(
+                                role='model',
+                                parts=parts,
+                                metadata=final_task.metadata or {}
+                            )
+
+                    if response_msg:
+                        response_msg.metadata = response_msg.metadata or {}
+                        response_msg.metadata['conversation_id'] = conversation_id
+                        if 'message_id' not in response_msg.metadata:
+                            response_msg.metadata['message_id'] = str(uuid.uuid4())
+                        response_msg.role = 'model'
+
+                        logging.info(f"Appending response message: {response_msg}")
+                        self._messages.append(response_msg)
+                        if conversation:
+                            conversation.messages.append(response_msg)
+                    else:
+                        logging.warning("Final task has no message or artifacts")
+
+                if message_id in self._pending_message_ids:
+                    self._pending_message_ids.remove(message_id)
+                return
+            except Exception as e:
+                logging.error(f"Direct routing failed: {e}", exc_info=True)
+                # Fall through to host runner if direct routing fails
+
         try:
             async for event in self._host_runner.run_async(
                 user_id=self.user_id,
                 session_id=conversation_id,
                 new_message=self.adk_content_from_message(message),
             ):
+                logging.info(f"Runner yielded event: {event}")
                 self.add_event(
                     Event(
                         id=event.id,
@@ -265,10 +369,12 @@ class ADKHostManager(ApplicationManager):
             return
         response: Message | None = None
         if final_event:
+            logging.info(f"Final event received: {final_event}")
             final_event.content.role = 'model'
             response = self.adk_content_to_message(
                 final_event.content, conversation_id
             )
+            logging.info(f"Generated response message: {response}")
             last_message_id = get_message_id(message)
             new_message_id = ''
             if last_message_id and last_message_id in self._next_id:
@@ -284,14 +390,17 @@ class ADKHostManager(ApplicationManager):
             self._messages.append(response)
             
             if conversation:
+                logging.info(f"Appending response to conversation {conversation_id}. Current message count: {len(conversation.messages)}")
                 conversation.messages.append(response)
+                logging.info(f"Appended response. New message count: {len(conversation.messages)}")
+            else:
+                logging.error(f"Conversation {conversation_id} not found when appending response!")
             
             # Only remove from pending messages if we have a response
             if message_id in self._pending_message_ids:
                 self._pending_message_ids.remove(message_id)
         else:
             # If no final_event, log the issue but still remove from pending to avoid hanging
-            import logging
             logging.warning(f"No final_event received for message {message_id}, removing from pending anyway")
             if message_id in self._pending_message_ids:
                 self._pending_message_ids.remove(message_id)

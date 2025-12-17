@@ -172,7 +172,10 @@ class ConversationServer:
       self.manager.update_api_key(api_key)
 
   async def _create_conversation(self, request: Request, current_user: Optional[Dict[str, Any]] = Depends(get_current_user_optional)):
-    c = self.manager.create_conversation()
+    uid = current_user['user_id'] if current_user else None
+    logging.info(f"Creating conversation. Current user: {uid}")
+    c = self.manager.create_conversation(user_id=uid)
+    logging.info(f"Created conversation: {c.conversation_id} for user: {uid}")
     # 如果用户已登录，将用户ID添加到会话元数据中
     if current_user:
       c.metadata = c.metadata or {}
@@ -208,9 +211,10 @@ class ConversationServer:
     except Exception:
       pass
     try:
+      from urllib.parse import unquote
       tgt = request.headers.get('X-Target-Agent') or request.headers.get('x-target-agent') or ''
       if isinstance(tgt, str) and tgt.strip():
-        name = tgt.strip()
+        name = unquote(tgt.strip())
         alias = {
           '就诊摘要生成器': '就诊摘要生成',
           '就诊摘要': '就诊摘要生成',
@@ -318,10 +322,13 @@ class ConversationServer:
 
   async def _list_messages(self, request: Request, current_user: Optional[Dict[str, Any]] = Depends(get_current_user_optional)):
     message_data = await request.json()
-    conversation_id = message_data['params']
-    conversation = self.manager.get_conversation(conversation_id)
+    logging.info(f"Request to /message/list with body: {message_data}")
+    params = message_data['params']
+    conversation_id = params.get('conversation_id') if isinstance(params, dict) else params
     
+    conversation = self.manager.get_conversation(conversation_id)
     if conversation:
+      logging.info(f"Found conversation {conversation_id} with {len(conversation.messages)} messages")
       # 如果用户已登录，验证会话权限
       if current_user and conversation.metadata:
         conv_user_id = conversation.metadata.get('user_id')

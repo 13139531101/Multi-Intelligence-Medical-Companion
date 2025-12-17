@@ -202,6 +202,9 @@ try:
         return await health_api.get_api_status()
 
     # ====== 辅助：前端->后端字段映射与类型转换 ======
+    def _get_user_id(user: dict) -> str:
+        return str(user.get("id") or user.get("user_id") or user.get("uid"))
+
     def _map_record_type(front_type: str | None) -> health_api.RecordType | None:
         if not front_type:
             return None
@@ -565,6 +568,76 @@ try:
     @health_router.get("/api/health-records/ocr/status")
     async def ocr_status_proxy():
         return {"status": "ok"}
+
+    # === 新增：就诊摘要与咨询历史代理 ===
+    @health_router.get("/api/visit-summaries/history")
+    async def get_visit_summaries_proxy(
+        skip: int = 0,
+        limit: int = 20,
+        user: dict = Depends(get_current_user),
+        request: Request = None
+    ):
+        user_id = _get_user_id(user)
+        return await health_api.get_visit_summaries(skip=skip, limit=limit, user_id=user_id, request=request)
+
+    @health_router.post("/api/visit-summaries/create")
+    async def create_visit_summary_proxy(
+        request: Request,
+        user: dict = Depends(get_current_user)
+    ):
+        payload = await request.json()
+        # 转换 payload 为后端模型
+        summary_data = health_api.VisitSummaryCreate(**payload)
+        user_id = _get_user_id(user)
+        return await health_api.create_visit_summary(summary=summary_data, user_id=user_id, request=request)
+
+    @health_router.get("/api/consultations/history")
+    async def get_consultation_history_proxy(
+        skip: int = 0,
+        limit: int = 20,
+        user: dict = Depends(get_current_user),
+        request: Request = None
+    ):
+        user_id = _get_user_id(user)
+        return await health_api.get_consultation_history(skip=skip, limit=limit, user_id=user_id, request=request)
+
+    @health_router.post("/api/visit-summaries/analyze-image")
+    async def analyze_visit_summary_image(
+        file: UploadFile = File(...),
+        user: dict = Depends(get_current_user)
+    ):
+        user_id = _get_user_id(user)
+        content = await file.read()
+        import base64
+        b64_content = base64.b64encode(content).decode("utf-8")
+
+        # OCR
+        text = ""
+        ocr_tool = getattr(health_api, "extract_text_from_image", None)
+        if ocr_tool:
+            try:
+                # The tool might expect specific arguments, assuming single string argument for base64 image
+                text = ocr_tool.fn(b64_content) if hasattr(ocr_tool, "fn") else ocr_tool(b64_content)
+            except Exception as e:
+                logging.warning(f"OCR failed: {e}")
+                text = f"OCR Processing Failed: {e}"
+        else:
+             text = "OCR Tool Not Available"
+
+        # Create Record
+        from datetime import date
+        # Simple parsing or just dumping text
+        summary = health_api.VisitSummaryCreate(
+            title=f"OCR Record {date.today()}",
+            visit_date=date.today(),
+            summary_content=str(text),
+            notes="Generated from image upload via HostAgentAPI"
+        )
+
+        # Use request=None or mock request if needed, health_api checks request for user_id if provided via params?
+        # health_api.create_visit_summary signature: (summary, user_id, request)
+        # We pass user_id explicitly.
+        return await health_api.create_visit_summary(summary=summary, user_id=user_id, request=None)
 
     app.include_router(health_router)
 except Exception as e:
@@ -1061,128 +1134,64 @@ async def create_medication_reminder(request: Request, user: dict = Depends(get_
             logging.error(f"创建用药提醒失败: {e}")
             return {"success": False, "message": f"创建用药提醒失败: {str(e)}"}
 
+
+# (Removes conflicting endpoints that are now handled by health_records_api via health_router)
+
 @meds_router.get("/api/consultations/history")
-async def get_consultation_history_api(limit: int = 10, user: dict = Depends(get_current_user)):
+async def get_consultation_history(skip: int = 0, limit: int = 20, user: dict = Depends(get_current_user)):
     try:
         user_id = str(user.get("id") or user.get("user_id") or user.get("uid"))
+        db_manager = get_db_manager()
+        if not db_manager:
+             return []
 
-        # 尝试动态加载 HealthAdvisor 的 database_tool
-        # 注意：这里需要确保路径正确，或者直接连接数据库查询
-        # 为了简单起见，我们这里直接使用 SQL 查询，复用已有的 DB 连接机制（如果有的话）
-        # 或者加载 database_tool.py
-
-        # 方案：直接查询 PostgreSQL 数据库
-        # 我们假设数据库配置与 HRM 相同或兼容，因为都在同一个 PostgreSQL 实例中
-
-        try:
-            db_manager = get_db_manager()
-            if not db_manager:
-                raise Exception("DB Manager not available")
-
-            query = """
-                SELECT consultation_id, question, answer, tags, created_at
-                FROM consultations
-                WHERE user_id = %s
-                ORDER BY created_at DESC
-                LIMIT %s
-            """
-
-            # 使用 HRM 的 db_manager 执行查询 (它应该能访问同一个库)
-            # 注意：execute_query 返回的是 dict list (因为 row_factory=dict_row)
-            results = db_manager.execute_query(query, (user_id, limit))
-
-            return results
-
-        except Exception as db_err:
-             logging.error(f"直接查询数据库失败: {db_err}, 尝试回退方案...")
-             # 如果直接查询失败，可以尝试其他方式，或者直接返回空
-             return {"success": False, "message": f"查询失败: {str(db_err)}", "history": []}
-
+        rows = db_manager.execute_query(
+            "SELECT * FROM consultations WHERE user_id = %s ORDER BY created_at DESC OFFSET %s LIMIT %s",
+            (user_id, skip, limit)
+        )
+        # Convert datetimes and ensure consistent fields
+        for row in rows:
+             if row.get('created_at'): row['created_at'] = str(row['created_at'])
+             if row.get('updated_at'): row['updated_at'] = str(row['updated_at'])
+             # Ensure frontend compatible fields
+             if not row.get('consultation_type') and row.get('type'):
+                 row['consultation_type'] = row['type']
+        return rows
     except Exception as e:
-        logging.error(f"获取咨询历史失败: {e}")
-        return {"success": False, "message": f"获取咨询历史失败: {str(e)}"}
+        logging.error(f"Get history error: {e}")
+        return []
 
 @meds_router.post("/api/consultations/create")
-async def create_consultation_api(request: Request, user: dict = Depends(get_current_user)):
+async def create_consultation_db(request: Request, user: dict = Depends(get_current_user)):
     try:
-        user_id = str(user.get("id") or user.get("user_id") or user.get("uid"))
         payload = await request.json()
-
-        question = payload.get("question")
-        answer = payload.get("answer")
-        session_id = payload.get("session_id")
+        user_id = str(user.get("id") or user.get("user_id") or user.get("uid"))
+        title = payload.get("title", "New Consultation")
+        c_type = payload.get("type", "general")
+        agent_id = payload.get("agentId", "")
+        question = payload.get("question", "")
+        session_id = payload.get("session_id", "")
         tags = payload.get("tags", [])
 
-        if not question or not answer:
-            return {"success": False, "message": "Missing required fields"}
+        # Use provided consultation_id or generate new one
+        c_id = payload.get("consultation_id") or payload.get("id") or str(uuid.uuid4())
 
-        # Use session_id if provided, otherwise generate new
-        consultation_id = session_id if session_id else str(uuid.uuid4())
+        db_manager = get_db_manager()
+        if not db_manager:
+             return {"success": False, "message": "DB not available"}
 
-        try:
-            db_manager = get_db_manager()
-            if not db_manager:
-                raise Exception("DB Manager not available")
+        # Serialize tags if list
+        import json
+        tags_json = json.dumps(tags) if isinstance(tags, list) else tags
 
-            # Ensure chat_messages table exists (Lazy init)
-            try:
-                create_table_query = """
-                CREATE TABLE IF NOT EXISTS chat_messages (
-                    id VARCHAR(64) PRIMARY KEY,
-                    consultation_id VARCHAR(50) NOT NULL,
-                    role VARCHAR(20) NOT NULL,
-                    content TEXT,
-                    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-                );
-                """
-                db_manager.execute_insert(create_table_query)
-                # Create index separately
-                db_manager.execute_insert("CREATE INDEX IF NOT EXISTS idx_chat_messages_consultation_id ON chat_messages(consultation_id)")
-            except Exception as e:
-                logging.warning(f"Table creation warning: {e}")
+        db_manager.execute_update(
+            "INSERT INTO consultations (consultation_id, user_id, title, consultation_type, agent_id, status, question, session_id, tags) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            (c_id, user_id, title, c_type, agent_id, "active", question, session_id, tags_json)
+        )
 
-            query = """
-                INSERT INTO consultations (user_id, consultation_id, question, answer, tags)
-                VALUES (%s, %s, %s, %s, %s)
-                RETURNING consultation_id
-            """
-
-            import json
-            tags_json = json.dumps(tags, ensure_ascii=False)
-
-            # Insert into consultations
-            db_manager.execute_insert(query, (user_id, consultation_id, question, answer, tags_json))
-
-            # Insert initial messages into chat_messages (explicit IDs)
-            try:
-                msg_id_user = str(uuid.uuid4())
-                db_manager.execute_insert(
-                    "INSERT INTO chat_messages (id, consultation_id, role, content) VALUES (%s, %s, 'user', %s)",
-                    (msg_id_user, consultation_id, question)
-                )
-            except Exception as e:
-                logging.warning(f"Seed user message insert failed: {e}")
-            try:
-                msg_id_ai = str(uuid.uuid4())
-                db_manager.execute_insert(
-                    "INSERT INTO chat_messages (id, consultation_id, role, content) VALUES (%s, %s, 'ai', %s)",
-                    (msg_id_ai, consultation_id, answer)
-                )
-            except Exception as e:
-                logging.warning(f"Seed ai message insert failed: {e}")
-
-            return {
-                "success": True,
-                "consultation_id": consultation_id
-            }
-
-        except Exception as db_err:
-            logging.error(f"创建咨询失败: {db_err}")
-            return {"success": False, "message": f"创建咨询失败: {str(db_err)}"}
-
+        return {"success": True, "consultation_id": c_id}
     except Exception as e:
-        logging.error(f"创建咨询API异常: {e}")
-        return {"success": False, "message": f"创建咨询API异常: {str(e)}"}
+        return {"success": False, "message": str(e)}
 
 @meds_router.post("/api/consultations/message")
 async def save_consultation_message(request: Request, user: dict = Depends(get_current_user)):
@@ -1191,6 +1200,7 @@ async def save_consultation_message(request: Request, user: dict = Depends(get_c
         consultation_id = payload.get("consultation_id")
         role = payload.get("role")
         content = payload.get("content")
+        files = payload.get("files") # Optional files list
 
         if not consultation_id or not role or not content:
             return {"success": False, "message": "Missing required fields"}
@@ -1200,9 +1210,14 @@ async def save_consultation_message(request: Request, user: dict = Depends(get_c
             return {"success": False, "message": "DB Manager not available"}
 
         msg_id = str(uuid.uuid4())
+
+        # Serialize files if present
+        import json
+        files_json = json.dumps(files) if files else None
+
         db_manager.execute_insert(
-            "INSERT INTO chat_messages (id, consultation_id, role, content) VALUES (%s, %s, %s, %s)",
-            (msg_id, consultation_id, role, content)
+            "INSERT INTO chat_messages (id, consultation_id, role, content, files) VALUES (%s, %s, %s, %s, %s)",
+            (msg_id, consultation_id, role, content, files_json)
         )
         return {"success": True}
     except Exception as e:
@@ -1259,36 +1274,8 @@ async def delete_consultation_api(consultation_id: str, user: dict = Depends(get
         logging.error(f"Delete consultation error: {e}")
         return {"success": False, "message": str(e)}
 
-@meds_router.get("/api/visit-summaries/history")
-async def get_visit_summary_history_api(limit: int = 10, user: dict = Depends(get_current_user)):
-    try:
-        user_id = str(user.get("id") or user.get("user_id") or user.get("uid"))
 
-        try:
-            db_manager = get_db_manager()
-            if not db_manager:
-                raise Exception("DB Manager not available")
-
-            query = """
-                SELECT summary_id, visit_date, summary_content, generated_by, diagnosis, created_at
-                FROM visit_summaries
-                WHERE user_id = %s
-                ORDER BY created_at DESC
-                LIMIT %s
-            """
-
-            results = db_manager.execute_query(query, (user_id, limit))
-
-            return results
-
-        except Exception as db_err:
-             logging.error(f"直接查询数据库失败: {db_err}")
-             return {"success": False, "message": f"查询失败: {str(db_err)}", "history": []}
-
-    except Exception as e:
-        logging.error(f"获取就诊摘要历史失败: {e}")
-        return {"success": False, "message": f"获取就诊摘要历史失败: {str(e)}"}
-
+# (Removes conflicting visit summary endpoints handled by health_records_api)
 
 @meds_router.post("/medication-reminders/{reminder_id}/taken")
 @meds_router.post("/api/medication-reminders/{reminder_id}/taken")
@@ -1364,6 +1351,16 @@ async def _debug_reminder_signature_app_level():
         }
     except Exception as e:
         return {"error": str(e)}
+
+# === 挂载就诊摘要与健康趋势 API ===
+try:
+    import visit_summary_api
+    app.include_router(visit_summary_api.router)
+    logger.info("Visit Summary API router mounted.")
+except ImportError as e:
+    logger.warning(f"Failed to mount Visit Summary API: {e}")
+except Exception as e:
+    logger.error(f"Error mounting Visit Summary API: {e}")
 
 # === 本地提醒回退存储（当远端提醒模块不可用时） ===
 _REM_DB_PATH = os.path.join(os.path.dirname(__file__), "reminders.json")
@@ -1497,6 +1494,27 @@ async def _debug_init_med_tables():
         )
         """,
         """
+        CREATE TABLE IF NOT EXISTS consultations (
+            consultation_id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            title TEXT,
+            consultation_type TEXT,
+            agent_id TEXT,
+            status TEXT,
+            created_at TIMESTAMPTZ DEFAULT now(),
+            updated_at TIMESTAMPTZ DEFAULT now()
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS chat_messages (
+            id TEXT PRIMARY KEY,
+            consultation_id TEXT NOT NULL,
+            role TEXT NOT NULL,
+            content TEXT NOT NULL,
+            created_at TIMESTAMPTZ DEFAULT now()
+        )
+        """,
+        """
         CREATE TABLE IF NOT EXISTS visit_summaries (
             id TEXT PRIMARY KEY,
             user_id TEXT NOT NULL,
@@ -1527,120 +1545,264 @@ async def _debug_init_med_tables():
         "ALTER TABLE medication_reminders ADD COLUMN IF NOT EXISTS medication_id INTEGER",
         "ALTER TABLE reminder_logs ADD COLUMN IF NOT EXISTS user_id TEXT",
         "ALTER TABLE reminder_logs ADD COLUMN IF NOT EXISTS completion_time TIMESTAMPTZ",
+        "ALTER TABLE consultations ADD COLUMN IF NOT EXISTS question TEXT",
+        "ALTER TABLE consultations ADD COLUMN IF NOT EXISTS session_id TEXT",
+        "ALTER TABLE consultations ADD COLUMN IF NOT EXISTS tags JSONB",
     ]
     for s in stmts:
         dbm.execute_update(s)
     return {"ok": True}
 
-# === 新增：健康咨询简易端点（供前端 /consultations 使用） ===
-CONSULT_DB_PATH = os.path.join(os.path.dirname(__file__), "consultations.json")
+# === 新增：健康咨询 DB 端点 ===
 
-def _load_consultations() -> dict:
-    try:
-        if not os.path.exists(CONSULT_DB_PATH):
-            return {"consultations": []}
-        with open(CONSULT_DB_PATH, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return {"consultations": []}
+def _ensure_consultation_tables(dbm):
+    stmts = [
+        """
+        CREATE TABLE IF NOT EXISTS consultations (
+            consultation_id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            title TEXT,
+            consultation_type TEXT,
+            agent_id TEXT,
+            status TEXT,
+            created_at TIMESTAMPTZ DEFAULT now(),
+            updated_at TIMESTAMPTZ DEFAULT now(),
+            question TEXT,
+            session_id TEXT,
+            tags JSONB
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS chat_messages (
+            id TEXT PRIMARY KEY,
+            consultation_id TEXT NOT NULL,
+            role TEXT NOT NULL,
+            content TEXT NOT NULL,
+            files JSONB,
+            created_at TIMESTAMPTZ DEFAULT now()
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_consultations_user ON consultations(user_id, created_at DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_chat_messages_cid ON chat_messages(consultation_id, created_at ASC)",
+        "ALTER TABLE consultations ADD COLUMN IF NOT EXISTS question TEXT",
+        "ALTER TABLE consultations ADD COLUMN IF NOT EXISTS session_id TEXT",
+        "ALTER TABLE consultations ADD COLUMN IF NOT EXISTS tags JSONB",
+        "ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS files JSONB"
+    ]
+    for s in stmts:
+        try:
+            dbm.execute_update(s)
+        except Exception as e:
+            logging.warning(f"DB init warning: {e}")
 
-def _save_consultations(data: dict) -> None:
-    try:
-        with open(CONSULT_DB_PATH, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        logging.error(f"保存咨询数据失败: {e}")
-
+@app.get("/api/consultations")
 @app.get("/consultations")
 async def list_consultations(user: dict = Depends(get_current_user)):
     uid = _get_user_id(user)
-    data = _load_consultations()
-    all_items = data.get("consultations", [])
-    items = [it for it in all_items if str(it.get("userId") or "") == uid]
-    items.sort(key=lambda x: x.get("createdAt", ""), reverse=True)
-    return items
+    try:
+        dbm = get_db_manager()
+        _ensure_consultation_tables(dbm)
+        rows = dbm.execute_query(
+            """
+            SELECT consultation_id, title, consultation_type, created_at, question, session_id, tags
+            FROM consultations
+            WHERE user_id = %s
+            ORDER BY created_at DESC
+            """,
+            (uid,)
+        )
+        items = []
+        for r in rows:
+            # 兼容前端字段 naming
+            items.append({
+                "id": r.get("consultation_id"),
+                "title": r.get("title") or "未命名咨询",
+                "type": r.get("consultation_type") or "general",
+                "userId": uid,
+                "createdAt": str(r.get("created_at")),
+                "question": r.get("question"),
+                "sessionId": r.get("session_id"),
+                "tags": r.get("tags") if isinstance(r.get("tags"), list) else [],
+                # 列表接口通常不需要返回所有消息
+                "messages": []
+            })
+        return items
+    except Exception as e:
+        logging.error(f"List consultations failed: {e}")
+        return []
 
+@app.post("/api/consultations")
 @app.post("/consultations")
 async def create_consultation(request: Request, user: dict = Depends(get_current_user)):
     payload = await request.json()
     uid = _get_user_id(user)
-    title = payload.get("title", "新咨询")
+    title = payload.get("title")
     ctype = payload.get("type", "general")
-    now = datetime.utcnow().isoformat()
-    item = {
-        "id": uuid.uuid4().hex,
-        "title": title,
-        "type": ctype,
-        "userId": uid,
-        "createdAt": now,
-        "messages": []
-    }
-    data = _load_consultations()
-    data.setdefault("consultations", []).insert(0, item)
-    _save_consultations(data)
-    return item
+    question = payload.get("question", "")
+    session_id = payload.get("session_id", "")
+    tags = payload.get("tags", [])
 
-@app.get("/consultations/{cid}/messages")
-async def get_consultation_messages(cid: str, user: dict = Depends(get_current_user)):
-    uid = _get_user_id(user)
-    data = _load_consultations()
-    for c in data.get("consultations", []):
-        if c.get("id") == cid and str(c.get("userId") or "") == uid:
-            return c.get("messages", [])
-    return []
+    # 如果没有提供 title，用 question 截取
+    if not title and question:
+        title = question[:20] + "..." if len(question) > 20 else question
+    if not title:
+        title = "新咨询"
 
-@app.post("/consultations/{cid}/messages")
-async def send_consultation_message(cid: str, request: Request, user: dict = Depends(get_current_user)):
-    body = await request.json()
-    uid = _get_user_id(user)
-    content = body.get("content", "")
-    files = body.get("files", [])
+    cid = payload.get("consultation_id") or payload.get("id") or uuid.uuid4().hex
     now = datetime.utcnow().isoformat()
-    data = _load_consultations()
-    # 查找咨询
-    target = None
-    for c in data.get("consultations", []):
-        if c.get("id") == cid and str(c.get("userId") or "") == uid:
-            target = c
-            break
-    if target is None:
-        # 若不存在，则自动创建一个
-        target = {
+
+    try:
+        dbm = get_db_manager()
+        _ensure_consultation_tables(dbm)
+
+        # 检查是否存在
+        exists = dbm.execute_query("SELECT consultation_id FROM consultations WHERE consultation_id=%s", (cid,))
+        if not exists:
+            dbm.execute_update(
+                """
+                INSERT INTO consultations (consultation_id, user_id, title, consultation_type, created_at, updated_at, question, session_id, tags)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+                """,
+                (cid, uid, title, ctype, now, now, question, session_id, json.dumps(tags))
+            )
+
+        return {
             "id": cid,
-            "title": "快速咨询",
-            "type": "general",
+            "title": title,
+            "type": ctype,
             "userId": uid,
             "createdAt": now,
             "messages": []
         }
-        data.setdefault("consultations", []).insert(0, target)
-    # 记录用户消息
-    user_msg = {
-        "id": uuid.uuid4().hex,
-        "type": "user",
-        "content": content,
-        "files": files,
-        "timestamp": now
-    }
-    target.setdefault("messages", []).append(user_msg)
-    # 生成简单AI回复（占位实现）
-    ai_text = f"我已收到您的信息：{content[:100]}。基于健康咨询，我可以提供一般性的建议和引导，如需就诊请及时联系专业医生。"
-    ai_msg = {
-        "id": uuid.uuid4().hex,
-        "type": "ai",
-        "content": ai_text,
-        "timestamp": datetime.utcnow().isoformat()
-    }
-    target["messages"].append(ai_msg)
-    _save_consultations(data)
-    # 前端期望的返回格式
-    return {
-        "content": ai_text,
-        "suggestions": [
-            "需要我为您整理成就诊摘要吗？",
-            "是否要为此问题创建健康档案记录？"
-        ]
-    }
+    except Exception as e:
+        logging.error(f"Create consultation failed: {e}")
+        return {"error": str(e)}
+
+@app.get("/api/consultations/{cid}/messages")
+@app.get("/consultations/{cid}/messages")
+async def get_consultation_messages(cid: str, user: dict = Depends(get_current_user)):
+    uid = _get_user_id(user)
+    try:
+        dbm = get_db_manager()
+        _ensure_consultation_tables(dbm)
+
+        # 验证归属
+        c_rows = dbm.execute_query("SELECT consultation_id FROM consultations WHERE consultation_id=%s AND user_id=%s", (cid, uid))
+        if not c_rows:
+            # 也许是刚创建还没同步？或者无权访问
+            return {"messages": []}
+
+        rows = dbm.execute_query(
+            "SELECT id, role, content, files, created_at FROM chat_messages WHERE consultation_id=%s ORDER BY created_at ASC",
+            (cid,)
+        )
+        messages = []
+        for r in rows:
+            files = r.get("files")
+            if isinstance(files, str):
+                try:
+                    files = json.loads(files)
+                except:
+                    files = []
+
+            messages.append({
+                "id": r.get("id"),
+                "role": r.get("role"),
+                "content": r.get("content"),
+                "files": files or [],
+                "created_at": str(r.get("created_at"))
+            })
+        return {"success": True, "messages": messages}
+    except Exception as e:
+        logging.error(f"Get messages failed: {e}")
+        return {"success": False, "messages": [], "error": str(e)}
+
+@app.post("/api/consultations/message")
+async def save_consultation_message_endpoint(request: Request, user: dict = Depends(get_current_user)):
+    """保存单条消息 (兼容 api.js saveConsultationMessage)"""
+    body = await request.json()
+    uid = _get_user_id(user)
+    cid = body.get("consultation_id")
+    role = body.get("role", "user")
+    content = body.get("content", "")
+    files = body.get("files", [])
+
+    if not cid:
+        return {"error": "consultation_id required"}
+
+    try:
+        dbm = get_db_manager()
+        _ensure_consultation_tables(dbm)
+
+        # 自动创建会话如果不存在 (容错)
+        exists = dbm.execute_query("SELECT consultation_id FROM consultations WHERE consultation_id=%s", (cid,))
+        if not exists:
+             # 尝试恢复/创建
+             now = datetime.utcnow().isoformat()
+             dbm.execute_update(
+                "INSERT INTO consultations (consultation_id, user_id, title, consultation_type, created_at, updated_at) VALUES (%s, %s, %s, %s, %s, %s)",
+                (cid, uid, "自动保存会话", "general", now, now)
+             )
+
+        msg_id = uuid.uuid4().hex
+        dbm.execute_update(
+            """
+            INSERT INTO chat_messages (id, consultation_id, role, content, files, created_at)
+            VALUES (%s, %s, %s, %s, %s::jsonb, now())
+            """,
+            (msg_id, cid, role, content, json.dumps(files))
+        )
+        return {"success": True, "id": msg_id}
+    except Exception as e:
+        logging.error(f"Save message failed: {e}")
+        return {"error": str(e)}
+
+@app.post("/consultations/{cid}/messages")
+async def send_consultation_message_legacy(cid: str, request: Request, user: dict = Depends(get_current_user)):
+    """兼容旧接口"""
+    body = await request.json()
+    body["consultation_id"] = cid
+    # 复用逻辑
+    # ... 这里为了简单直接调用上面的逻辑比较麻烦，重新写一下
+    uid = _get_user_id(user)
+    content = body.get("content", "")
+    files = body.get("files", [])
+
+    try:
+        dbm = get_db_manager()
+        _ensure_consultation_tables(dbm)
+
+        # 确保会话存在
+        exists = dbm.execute_query("SELECT consultation_id FROM consultations WHERE consultation_id=%s", (cid,))
+        if not exists:
+             now = datetime.utcnow().isoformat()
+             dbm.execute_update(
+                "INSERT INTO consultations (consultation_id, user_id, title, consultation_type, created_at, updated_at) VALUES (%s, %s, %s, %s, %s, %s)",
+                (cid, uid, "快速咨询", "general", now, now)
+             )
+
+        # User message
+        user_msg_id = uuid.uuid4().hex
+        dbm.execute_update(
+            "INSERT INTO chat_messages (id, consultation_id, role, content, files, created_at) VALUES (%s, %s, 'user', %s, %s::jsonb, now())",
+            (user_msg_id, cid, content, json.dumps(files))
+        )
+
+        # AI reply (placeholder)
+        ai_text = f"收到: {content[:20]}... (请使用流式接口获取完整回复)"
+        ai_msg_id = uuid.uuid4().hex
+        dbm.execute_update(
+            "INSERT INTO chat_messages (id, consultation_id, role, content, created_at) VALUES (%s, %s, 'ai', %s, now())",
+            (ai_msg_id, cid, ai_text)
+        )
+
+        return {
+            "content": ai_text,
+            "suggestions": []
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
 
 SUMMARIES_DB_PATH = os.path.join(os.path.dirname(__file__), "visit_summaries.json")
 def _get_user_id(user: dict) -> str:
