@@ -184,7 +184,7 @@ class VisitSummaryCreate(BaseModel):
     generated_by: Optional[str] = None
 
 class Consultation(BaseModel):
-    id: int
+    id: Optional[int] = None
     user_id: str
     consultation_id: Optional[str]
     session_id: Optional[str]
@@ -198,7 +198,7 @@ UPLOAD_DIR = MODULE_DIR / "uploads"
 UPLOAD_DIR.mkdir(exist_ok=True)
 
 DB_CONFIG = {
-    "host": os.getenv("DB_HOST", "postgres"),
+    "host": os.getenv("DB_HOST", "localhost"),
     "port": int(os.getenv("DB_PORT", 5432)),
     "user": os.getenv("DB_USER", "pha"),
     "password": os.getenv("DB_PASSWORD", "pha_pass"),
@@ -311,6 +311,17 @@ def init_database():
                     question TEXT,
                     answer TEXT,
                     tags JSONB,
+                    created_at TIMESTAMPTZ DEFAULT now()
+                )
+                """
+            )
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS chat_messages (
+                    id VARCHAR(64) PRIMARY KEY,
+                    consultation_id VARCHAR(64) NOT NULL,
+                    role VARCHAR(20) NOT NULL,
+                    content TEXT,
                     created_at TIMESTAMPTZ DEFAULT now()
                 )
                 """
@@ -725,6 +736,90 @@ async def startup_event():
     except Exception as e:
         logger.warning(f"工具预热过程出现异常（忽略，继续启动）: {e}")
 
+def _resolve_user_id(request: Request | None, user_id: str | None) -> str | None:
+    if user_id:
+        return str(user_id)
+    if request and hasattr(request, "state") and hasattr(request.state, "user"):
+        u = request.state.user
+        if isinstance(u, dict):
+            return str(u.get("id") or u.get("user_id") or u.get("uid") or "")
+    return None
+
+@app.post("/api/health-records/upload")
+async def upload_file(
+    file: UploadFile = File(...),
+    user_id: Optional[str] = Query(None),
+    request: Request = None
+):
+    """上传健康档案文件并进行OCR识别"""
+    try:
+        uid = _resolve_user_id(request, user_id)
+        # 允许匿名上传用于OCR预览，但最好还是要求登录
+
+        file_ext = os.path.splitext(file.filename)[1]
+        new_filename = f"{uuid.uuid4()}{file_ext}"
+        file_path = UPLOAD_DIR / new_filename
+
+        content = await file.read()
+        with open(file_path, "wb") as buffer:
+            buffer.write(content)
+
+        # OCR处理
+        ocr_text = ""
+        ocr_info = {}
+        if extract_text_from_image:
+             try:
+                 b64 = base64.b64encode(content).decode('utf-8')
+                 # extract_text_from_image might be a Tool object or function
+                 if hasattr(extract_text_from_image, "fn"):
+                     ocr_text = extract_text_from_image.fn(b64)
+                 else:
+                     ocr_text = extract_text_from_image(b64)
+            except Exception as e:
+                logger.warning(f"OCR失败: {e}")
+
+        # 尝试结构化提取
+        if extract_medical_info and ocr_text:
+            try:
+                 if hasattr(extract_medical_info, "fn"):
+                     ocr_info = extract_medical_info.fn(ocr_text)
+                 else:
+                     ocr_info = extract_medical_info(ocr_text)
+                 if isinstance(ocr_info, str):
+                     try:
+                        ocr_info = json.loads(ocr_info)
+                     except:
+                        pass
+            except Exception as e:
+                logger.warning(f"结构化提取失败: {e}")
+
+        # 保存文件记录
+        file_id = str(uuid.uuid4())
+        file_size = len(content)
+        mime_type = file.content_type
+
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO file_attachments (id, record_id, filename, original_filename, file_path, file_size, mime_type)
+                    VALUES (%s, NULL, %s, %s, %s, %s, %s)
+                    """,
+                    (file_id, new_filename, file.filename, str(file_path), file_size, mime_type)
+                )
+                conn.commit()
+
+        return {
+            "file_id": file_id,
+            "filename": new_filename,
+            "ocr_text": ocr_text,
+            "ocr_info": ocr_info,
+            "message": "上传成功"
+        }
+    except Exception as e:
+        logger.error(f"上传失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/api/health-records/status")
 async def get_api_status():
     """检查API状态"""
@@ -1111,6 +1206,66 @@ async def delete_consultation(
         raise
     except Exception as e:
         logger.error(f"删除咨询记录失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+class ChatMessageCreate(BaseModel):
+    consultation_id: str
+    role: str
+    content: str
+
+@app.post("/api/consultations/message")
+async def save_consultation_message(
+    message: ChatMessageCreate,
+    user_id: Optional[str] = Query(None),
+    request: Request = None
+):
+    """保存咨询对话消息"""
+    try:
+        uid = _resolve_user_id(request, user_id)
+        # 消息保存暂不强制鉴权，便于智能体回调，但建议后续加上
+
+        with get_db_connection() as conn:
+            with conn.cursor(row_factory=dict_row) as cursor:
+                msg_id = generate_id()
+                cursor.execute(
+                    """
+                    INSERT INTO chat_messages (id, consultation_id, role, content, created_at)
+                    VALUES (%s, %s, %s, %s, %s)
+                    RETURNING id
+                    """,
+                    (msg_id, message.consultation_id, message.role, message.content, datetime.now())
+                )
+                conn.commit()
+                return {"success": True, "id": msg_id}
+    except Exception as e:
+        logger.error(f"保存消息失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/consultations/{consultation_id}/messages")
+async def get_consultation_messages(
+    consultation_id: str,
+    user_id: Optional[str] = Query(None),
+    request: Request = None
+):
+    """获取咨询对话历史"""
+    try:
+        uid = _resolve_user_id(request, user_id)
+        # 暂不强制鉴权，便于调试
+
+        with get_db_connection() as conn:
+            with conn.cursor(row_factory=dict_row) as cursor:
+                cursor.execute(
+                    """
+                    SELECT * FROM chat_messages
+                    WHERE consultation_id = %s
+                    ORDER BY created_at ASC
+                    """,
+                    (consultation_id,)
+                )
+                rows = cursor.fetchall()
+                return {"success": True, "messages": rows}
+    except Exception as e:
+        logger.error(f"获取消息历史失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/health-records", response_model=List[HealthRecord])
