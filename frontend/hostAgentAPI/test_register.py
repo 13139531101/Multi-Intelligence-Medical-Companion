@@ -18,7 +18,7 @@ def generate_random_user():
 
 def test_register():
     """测试用户注册功能"""
-    url = "http://localhost:13000/auth/register"
+    url = "http://localhost:13002/auth/register"
     
     # 生成随机用户数据
     user_data = generate_random_user()
@@ -44,7 +44,7 @@ def test_register():
 
 def test_duplicate_register():
     """测试重复注册（应该失败）"""
-    url = "http://localhost:13000/auth/register"
+    url = "http://localhost:13002/auth/register"
     
     # 使用已存在的用户数据
     user_data = {

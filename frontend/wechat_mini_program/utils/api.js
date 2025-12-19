@@ -1,4 +1,4 @@
-const SERVER_URL = "http://127.0.0.1:13002"; // The default address of hostAgentAPI is http://127.0.0.1:13001
+const SERVER_URL = "http://127.0.0.1:13002"; // The default address of hostAgentAPI is http://127.0.0.1:13002
 
 // A generic request function
 const request = (endpoint, options = {}) => {
@@ -23,7 +23,7 @@ const request = (endpoint, options = {}) => {
         if (res.statusCode >= 200 && res.statusCode < 300) {
           // The backend may wrap the data in a 'result' field
           resolve(res.data.result !== undefined ? res.data.result : res.data);
-        } else if (res.statusCode === 401) {
+        } else if (res.statusCode === 401 || res.statusCode === 403) {
           // Token expired or invalid
           wx.removeStorageSync("userInfo");
           wx.showToast({
@@ -147,7 +147,7 @@ const uploadFile = (
 
         if (res.statusCode >= 200 && res.statusCode < 300) {
           resolve(data);
-        } else if (res.statusCode === 401) {
+        } else if (res.statusCode === 401 || res.statusCode === 403) {
           wx.removeStorageSync("userInfo");
           wx.showToast({
             title: "登录已过期",

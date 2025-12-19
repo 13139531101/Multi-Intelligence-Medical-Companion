@@ -26,24 +26,32 @@
     </view>
 
     <view class="summary-items" wx:if="{{summaries.length > 0}}">
-      <view class="summary-item" wx:for="{{summaries}}" wx:key="id" bindtap="viewDetail" data-id="{{item.summary_id}}">
+      <view class="summary-item" wx:for="{{summaries}}" wx:key="id">
         <view class="item-header">
-          <text class="hospital-name">{{item.hospital || '未知医院'}}</text>
+          <view class="hospital-name {{item.expanded ? 'expanded' : 'collapsed'}}">{{item.expanded ? (item.hospital || item.hospitalDisplay || '未知医院') : (item.hospitalDisplay || item.hospital || '未知医院')}}</view>
           <text class="visit-date">{{item.visit_date}}</text>
         </view>
         <view class="item-body">
           <view class="diagnosis-row">
             <text class="label">诊断：</text>
-            <text class="value">{{item.diagnosis || '未识别'}}</text>
+            <view class="value diagnosis-value {{item.expanded ? 'expanded' : 'collapsed'}}">{{item.expanded ? (item.diagnosis || item.diagnosisDisplay || '未识别') : (item.diagnosisDisplay || item.diagnosis || '未识别')}}</view>
           </view>
-          <view class="tags-row" wx:if="{{item.prescription && item.prescription.medicines}}">
-            <view class="tag" wx:for="{{item.prescription.medicines}}" wx:key="name" wx:for-item="med">
-              {{med.name}}
+          <view class="tags-row" wx:if="{{item.medTags && item.medTags.length}}">
+            <view class="tag" wx:for="{{item.medTags}}" wx:key="*this" wx:for-item="tag">
+              {{tag}}
             </view>
+          </view>
+          <view class="summary-row" wx:if="{{item.summaryText}}">
+            <text class="label">摘要：</text>
+            <view class="summary-text {{item.expanded ? 'expanded' : 'collapsed'}}">{{item.expanded ? item.summaryText : item.summaryPreview}}</view>
+          </view>
+          <view class="images-row" wx:if="{{item.fileUrls && item.fileUrls.length}}">
+            <image class="thumb" wx:for="{{item.fileUrls}}" wx:key="*this" wx:for-item="url" src="{{url}}" mode="aspectFill" catchtap="previewImage" data-urls="{{item.fileUrls}}" data-current="{{url}}"></image>
           </view>
         </view>
         <view class="item-footer">
-          <text class="view-more">查看详情 ></text>
+          <text class="delete-btn" catchtap="deleteSummary" data-id="{{item.id}}">删除</text>
+          <text class="view-more" wx:if="{{item.canExpand}}" catchtap="toggleExpand" data-id="{{item.id}}">{{item.expanded ? '收起' : '展开'}}</text>
         </view>
       </view>
     </view>

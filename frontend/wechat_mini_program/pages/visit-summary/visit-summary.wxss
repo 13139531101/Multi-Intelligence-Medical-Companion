@@ -88,11 +88,24 @@
   font-size: 30rpx;
   font-weight: 500;
   color: #333;
+  flex: 1;
+  margin-right: 16rpx;
+}
+
+.hospital-name.collapsed {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hospital-name.expanded {
+  white-space: normal;
 }
 
 .visit-date {
   font-size: 26rpx;
   color: #999;
+  flex-shrink: 0;
 }
 
 .item-body {
@@ -100,6 +113,12 @@
 }
 
 .diagnosis-row {
+  margin-bottom: 16rpx;
+  display: flex;
+  align-items: flex-start;
+}
+
+.summary-row {
   margin-bottom: 16rpx;
   display: flex;
   align-items: flex-start;
@@ -118,6 +137,36 @@
   flex: 1;
 }
 
+.diagnosis-value.collapsed {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.diagnosis-value.expanded {
+  white-space: normal;
+}
+
+.summary-text {
+  font-size: 26rpx;
+  color: #444;
+  flex: 1;
+  line-height: 1.5;
+  word-break: break-all;
+}
+
+.summary-text.collapsed {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.summary-text.expanded {
+  display: block;
+}
+
 .tags-row {
   display: flex;
   flex-wrap: wrap;
@@ -127,7 +176,7 @@
 
 .tag {
   font-size: 24rpx;
-  color: #007AFF;
+  color: #007aff;
   background: rgba(0, 122, 255, 0.1);
   padding: 4rpx 16rpx;
   border-radius: 8rpx;
@@ -141,6 +190,27 @@
 .view-more {
   font-size: 26rpx;
   color: #999;
+  margin-left: 24rpx;
+}
+
+.delete-btn {
+  font-size: 26rpx;
+  color: #ff3b30;
+}
+
+.images-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12rpx;
+  margin-left: 100rpx;
+  margin-top: 10rpx;
+}
+
+.thumb {
+  width: 160rpx;
+  height: 160rpx;
+  border-radius: 12rpx;
+  background: #f2f2f2;
 }
 
 .empty-state {

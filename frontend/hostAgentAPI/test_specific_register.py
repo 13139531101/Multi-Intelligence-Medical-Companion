@@ -8,7 +8,7 @@ import requests
 import json
 
 # API基础URL
-BASE_URL = "http://127.0.0.1:13000"
+BASE_URL = "http://127.0.0.1:13002"
 
 def test_specific_register():
     """测试特定的注册请求"""

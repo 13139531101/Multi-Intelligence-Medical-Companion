@@ -195,6 +195,12 @@ try:
             spec.loader.exec_module(mod)
             health_api = mod
 
+    try:
+        if hasattr(health_api, "init_database"):
+            health_api.init_database()
+    except Exception as e:
+        logging.warning(f"健康档案API数据库初始化失败: {e}")
+
     health_router = APIRouter()
 
     @health_router.get("/api/health-records/status")
@@ -591,6 +597,15 @@ try:
         user_id = _get_user_id(user)
         return await health_api.create_visit_summary(summary=summary_data, user_id=user_id, request=request)
 
+    @health_router.delete("/api/visit-summaries/delete/{summary_id}")
+    async def delete_visit_summary_proxy(
+        summary_id: str,
+        request: Request,
+        user: dict = Depends(get_current_user),
+    ):
+        user_id = _get_user_id(user)
+        return await health_api.delete_visit_summary(summary_id, user_id=user_id, request=request)
+
     @health_router.get("/api/consultations/history")
     async def get_consultation_history_proxy(
         skip: int = 0,
@@ -607,37 +622,12 @@ try:
         user: dict = Depends(get_current_user)
     ):
         user_id = _get_user_id(user)
-        content = await file.read()
-        import base64
-        b64_content = base64.b64encode(content).decode("utf-8")
-
-        # OCR
-        text = ""
-        ocr_tool = getattr(health_api, "extract_text_from_image", None)
-        if ocr_tool:
-            try:
-                # The tool might expect specific arguments, assuming single string argument for base64 image
-                text = ocr_tool.fn(b64_content) if hasattr(ocr_tool, "fn") else ocr_tool(b64_content)
-            except Exception as e:
-                logging.warning(f"OCR failed: {e}")
-                text = f"OCR Processing Failed: {e}"
-        else:
-             text = "OCR Tool Not Available"
-
-        # Create Record
-        from datetime import date
-        # Simple parsing or just dumping text
-        summary = health_api.VisitSummaryCreate(
-            title=f"OCR Record {date.today()}",
-            visit_date=date.today(),
-            summary_content=str(text),
-            notes="Generated from image upload via HostAgentAPI"
+        return await health_api.analyze_visit_summary_image(
+            file=file,
+            user_id=user_id,
+            visit_date=None,
+            request=None,
         )
-
-        # Use request=None or mock request if needed, health_api checks request for user_id if provided via params?
-        # health_api.create_visit_summary signature: (summary, user_id, request)
-        # We pass user_id explicitly.
-        return await health_api.create_visit_summary(summary=summary, user_id=user_id, request=None)
 
     app.include_router(health_router)
 except Exception as e:

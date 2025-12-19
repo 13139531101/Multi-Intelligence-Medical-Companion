@@ -18,7 +18,7 @@ class ConversationServerTestCase(unittest.TestCase):
     测试 ConversationServer FastAPI 接口
     """
     host = '127.0.0.1'
-    port = 13000
+    port = 13002
     base_url = f"http://{host}:{port}"
 
     def test_ping(self):

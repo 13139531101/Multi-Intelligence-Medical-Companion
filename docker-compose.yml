@@ -3,16 +3,20 @@ services:
     image: pgvector/pgvector:pg16
     container_name: pha-postgres
     environment:
-      - POSTGRES_USER=${POSTGRES_USER}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-      - POSTGRES_DB=${POSTGRES_DB}
+      - POSTGRES_USER=${POSTGRES_USER:-pha}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-pha_pass}
+      - POSTGRES_DB=${POSTGRES_DB:-personal_health_assistant}
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./database/postgres/init:/docker-entrypoint-initdb.d
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U pha -d personal_health_assistant"]
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-pha} -d ${POSTGRES_DB:-personal_health_assistant}",
+        ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -25,9 +29,9 @@ services:
       - PORT=10011
       - HOST=0.0.0.0
       - PYTHONPATH=/app
-      - DATABASE_URL=${DATABASE_URL}
-      - MEMORY_DATABASE_URL=${MEMORY_DATABASE_URL}
-      - A2A_CURRENT_USER_ID=${A2A_CURRENT_USER_ID}
+      - DATABASE_URL=${DATABASE_URL:-postgresql://pha:pha_pass@postgres:5432/personal_health_assistant}
+      - MEMORY_DATABASE_URL=${MEMORY_DATABASE_URL:-postgresql://pha:pha_pass@postgres:5432/personal_health_assistant}
+      - A2A_CURRENT_USER_ID=${A2A_CURRENT_USER_ID:-111}
     ports:
       - "10011:10011"
     healthcheck:
@@ -48,11 +52,11 @@ services:
       - PORT=10012
       - HOST=0.0.0.0
       - PYTHONPATH=/app
-      - DATABASE_URL=${DATABASE_URL}
+      - DATABASE_URL=${DATABASE_URL:-postgresql://pha:pha_pass@postgres:5432/personal_health_assistant}
       # 显式为提醒工具设置 PostgreSQL 连接（容器内主机名为 postgres）
       - PG_DSN=postgresql://pha:pha_pass@postgres:5432/personal_health_assistant
-      - A2A_CURRENT_USER_ID=${A2A_CURRENT_USER_ID}
-      - MEMORY_DATABASE_URL=${MEMORY_DATABASE_URL}
+      - A2A_CURRENT_USER_ID=${A2A_CURRENT_USER_ID:-111}
+      - MEMORY_DATABASE_URL=${MEMORY_DATABASE_URL:-postgresql://pha:pha_pass@postgres:5432/personal_health_assistant}
     ports:
       - "10012:10012"
     healthcheck:
@@ -73,8 +77,8 @@ services:
       - PORT=10013
       - HOST=0.0.0.0
       - PYTHONPATH=/app
-      - MEMORY_DATABASE_URL=${MEMORY_DATABASE_URL}
-      - A2A_CURRENT_USER_ID=${A2A_CURRENT_USER_ID}
+      - MEMORY_DATABASE_URL=${MEMORY_DATABASE_URL:-postgresql://pha:pha_pass@postgres:5432/personal_health_assistant}
+      - A2A_CURRENT_USER_ID=${A2A_CURRENT_USER_ID:-111}
     ports:
       - "10013:10013"
     healthcheck:
@@ -95,26 +99,26 @@ services:
       - PORT=10010
       - HOST=0.0.0.0
       - PYTHONPATH=/app
-      - DB_NAME=${POSTGRES_DB}
-      - DB_HOST=${DB_HOST}
-      - DB_PORT=${DB_PORT}
-      - DB_USER=${DB_USER}
-      - DB_PASSWORD=${DB_PASSWORD}
-      - MEMORY_DATABASE_URL=${MEMORY_DATABASE_URL}
-      - A2A_CURRENT_USER_ID=${A2A_CURRENT_USER_ID}
-      - JWT_SECRET_KEY=${JWT_SECRET_KEY}
-      - JWT_ALGORITHM=${JWT_ALGORITHM}
+      - DB_NAME=${POSTGRES_DB:-personal_health_assistant}
+      - DB_HOST=${DB_HOST:-postgres}
+      - DB_PORT=${DB_PORT:-5432}
+      - DB_USER=${DB_USER:-pha}
+      - DB_PASSWORD=${DB_PASSWORD:-pha_pass}
+      - MEMORY_DATABASE_URL=${MEMORY_DATABASE_URL:-postgresql://pha:pha_pass@postgres:5432/personal_health_assistant}
+      - A2A_CURRENT_USER_ID=${A2A_CURRENT_USER_ID:-111}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-dev-secret}
+      - JWT_ALGORITHM=${JWT_ALGORITHM:-HS256}
       # OCR 配置：通过项目根环境变量注入
-      - OCR_PROVIDER=${OCR_PROVIDER}
+      - OCR_PROVIDER=${OCR_PROVIDER:-local}
       - ALIYUN_OCR_VERSION=${ALIYUN_OCR_VERSION}
       - ALIYUN_ACCESS_KEY_ID=${ALIYUN_ACCESS_KEY_ID}
       - ALIYUN_ACCESS_KEY_SECRET=${ALIYUN_ACCESS_KEY_SECRET}
       - ALIYUN_REGION_ID=${ALIYUN_REGION_ID}
       - ALIYUN_OCR_ENDPOINT=${ALIYUN_OCR_ENDPOINT}
       - ALIYUN_OCR_TYPE=${ALIYUN_OCR_TYPE}
-      - USE_LLM_SUMMARY=${USE_LLM_SUMMARY}
-      - LLM_BASE_URL=${LLM_BASE_URL}
-      - LLM_MODEL=${LLM_MODEL}
+      - USE_LLM_SUMMARY=${USE_LLM_SUMMARY:-false}
+      - LLM_BASE_URL=${LLM_BASE_URL:-}
+      - LLM_MODEL=${LLM_MODEL:-}
     ports:
       - "10010:10010"
     healthcheck:
@@ -137,21 +141,21 @@ services:
       - PYTHONPATH=/app
       - BACKEND_DIR=/app/backend
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
-      - USE_LLM_SUMMARY=${USE_LLM_SUMMARY}
-      - LLM_BASE_URL=${LLM_BASE_URL}
-      - LLM_MODEL=${LLM_MODEL}
+      - USE_LLM_SUMMARY=${USE_LLM_SUMMARY:-false}
+      - LLM_BASE_URL=${LLM_BASE_URL:-}
+      - LLM_MODEL=${LLM_MODEL:-}
       # 为 Host API 注入数据库 DSN，供提醒工具等使用
-      - DATABASE_URL=${DATABASE_URL}
-      - DB_HOST=${DB_HOST}
-      - DB_PORT=${DB_PORT}
-      - DB_USER=${DB_USER}
-      - DB_PASSWORD=${DB_PASSWORD}
-      - MEMORY_DATABASE_URL=${MEMORY_DATABASE_URL}
-      - A2A_CURRENT_USER_ID=${A2A_CURRENT_USER_ID}
-      - JWT_SECRET_KEY=${JWT_SECRET_KEY}
-      - JWT_ALGORITHM=${JWT_ALGORITHM}
+      - DATABASE_URL=${DATABASE_URL:-postgresql://pha:pha_pass@postgres:5432/personal_health_assistant}
+      - DB_HOST=${DB_HOST:-postgres}
+      - DB_PORT=${DB_PORT:-5432}
+      - DB_USER=${DB_USER:-pha}
+      - DB_PASSWORD=${DB_PASSWORD:-pha_pass}
+      - MEMORY_DATABASE_URL=${MEMORY_DATABASE_URL:-postgresql://pha:pha_pass@postgres:5432/personal_health_assistant}
+      - A2A_CURRENT_USER_ID=${A2A_CURRENT_USER_ID:-111}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-dev-secret}
+      - JWT_ALGORITHM=${JWT_ALGORITHM:-HS256}
       # 为 Host API 注入 OCR 相关环境变量，确保内嵌健康档案 OCR 正常工作
-      - OCR_PROVIDER=${OCR_PROVIDER}
+      - OCR_PROVIDER=${OCR_PROVIDER:-local}
       - ALIYUN_OCR_VERSION=${ALIYUN_OCR_VERSION}
       - ALIYUN_ACCESS_KEY_ID=${ALIYUN_ACCESS_KEY_ID}
       - ALIYUN_ACCESS_KEY_SECRET=${ALIYUN_ACCESS_KEY_SECRET}

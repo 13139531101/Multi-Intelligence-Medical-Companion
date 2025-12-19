@@ -15,6 +15,6 @@ App({
   },
   globalData: {
     userInfo: null,
-    apiBaseUrl: "http://127.0.0.1:13000",
+    apiBaseUrl: "http://127.0.0.1:13002",
   },
 });

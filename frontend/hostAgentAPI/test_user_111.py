@@ -8,7 +8,7 @@ import requests
 import json
 
 # API基础URL
-BASE_URL = "http://127.0.0.1:13000"
+BASE_URL = "http://127.0.0.1:13002"
 
 def test_register_existing_user():
     """测试注册已存在的用户111"""

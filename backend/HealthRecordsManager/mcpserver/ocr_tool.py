@@ -354,6 +354,18 @@ def extract_text_from_image(image_base64: str) -> str:
     :return: 提取的文字内容
     """
     try:
+        def _is_aliyun_error(text: str) -> bool:
+            prefixes = (
+                "阿里云OCR(2021)调用失败",
+                "阿里云OCR(2021)配置缺失",
+                "阿里云OCR(2021) SDK未安装",
+                "阿里云OCR调用失败",
+                "阿里云OCR配置缺失",
+                "阿里云OCR SDK未安装",
+                "图片Base64数据不合法",
+            )
+            return any(text.startswith(p) for p in prefixes)
+
         # 检查OCR服务提供商
         ocr_provider = os.getenv('OCR_PROVIDER', 'aliyun')
         
@@ -363,9 +375,9 @@ def extract_text_from_image(image_base64: str) -> str:
 
             if version == '2021-07-07':
                 ali_text = call_aliyun_ocr_v2021(image_base64)
-                if isinstance(ali_text, str) and ali_text.startswith("阿里云OCR(2021)调用失败"):
+                if isinstance(ali_text, str) and _is_aliyun_error(ali_text):
                     ali2019_text = call_aliyun_ocr(image_base64)
-                    if isinstance(ali2019_text, str) and ali2019_text.startswith("阿里云OCR调用失败"):
+                    if isinstance(ali2019_text, str) and _is_aliyun_error(ali2019_text):
                         local_text = call_local_ocr(image_base64)
                         if isinstance(local_text, str) and (
                             local_text.startswith("本地OCR兜底不可用") or local_text.startswith("本地OCR兜底失败") or local_text.startswith("本地OCR兜底异常")
@@ -376,7 +388,7 @@ def extract_text_from_image(image_base64: str) -> str:
                 return ali_text
             else:
                 ali2019_text = call_aliyun_ocr(image_base64)
-                if isinstance(ali2019_text, str) and ali2019_text.startswith("阿里云OCR调用失败"):
+                if isinstance(ali2019_text, str) and _is_aliyun_error(ali2019_text):
                     local_text = call_local_ocr(image_base64)
                     if isinstance(local_text, str) and (
                         local_text.startswith("本地OCR兜底不可用") or local_text.startswith("本地OCR兜底失败") or local_text.startswith("本地OCR兜底异常")

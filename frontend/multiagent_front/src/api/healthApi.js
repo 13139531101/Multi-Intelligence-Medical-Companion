@@ -10,7 +10,10 @@ const healthApi = axios.create({
 
 // 智能路由API实例
 const smartChatApi = axios.create({
-  baseURL: import.meta.env.VITE_HOSTAGENT_API || "http://127.0.0.1:13002",
+  baseURL:
+    import.meta.env.VITE_SMART_CHAT_API ||
+    import.meta.env.VITE_HOSTAGENT_API ||
+    "http://127.0.0.1:13002",
   timeout: 10000,
   headers: {
     "Content-Type": "application/json",
@@ -330,6 +333,56 @@ export const markReminderTaken = async (reminderId, takenTime = "") => {
 
 // === 就诊摘要API ===
 
+const normalizeVisitSummaryPayload = (data) => {
+  const toDateString = (v) => {
+    if (!v) return undefined;
+    if (typeof v === "string") return v;
+    if (v instanceof Date) return v.toISOString().slice(0, 10);
+    if (typeof v === "object" && typeof v.format === "function") {
+      return v.format("YYYY-MM-DD");
+    }
+    if (typeof v === "object" && typeof v.toDate === "function") {
+      return v.toDate().toISOString().slice(0, 10);
+    }
+    return undefined;
+  };
+
+  const rawFiles = Array.isArray(data?.files) ? data.files : [];
+  const files = rawFiles
+    .map((f) => {
+      if (typeof f === "string") return f;
+      return f?.file_id || f?.id || f?.filename;
+    })
+    .filter(Boolean);
+
+  const rawTests = Array.isArray(data?.tests) ? data.tests : [];
+  const tests = rawTests.map((t) => {
+    if (!t || typeof t !== "object") return t;
+    const d = toDateString(t.date);
+    return d ? { ...t, date: d } : t;
+  });
+
+  return {
+    summary_id: data?.summary_id || data?.summaryId,
+    title: data?.title,
+    visit_date: toDateString(data?.visit_date || data?.visitDate),
+    doctor: data?.doctor,
+    hospital: data?.hospital,
+    department: data?.department,
+    chief_complaint: data?.chief_complaint || data?.chiefComplaint,
+    symptoms: data?.symptoms,
+    examination: data?.examination,
+    diagnosis: data?.diagnosis,
+    treatment: data?.treatment,
+    prescription: data?.prescription,
+    follow_up: data?.follow_up || data?.followUp,
+    notes: data?.notes,
+    files,
+    tests,
+    summary_content: data?.summary_content || data?.summaryContent,
+  };
+};
+
 // 获取就诊摘要
 export const getSummaries = async (params = {}) => {
   try {
@@ -346,9 +399,10 @@ export const getSummaries = async (params = {}) => {
 // 创建就诊摘要
 export const createSummary = async (summaryData) => {
   try {
+    const payload = normalizeVisitSummaryPayload(summaryData);
     const response = await healthApi.post(
       "/api/visit-summaries/create",
-      summaryData
+      payload
     );
     return response.data;
   } catch (error) {
@@ -359,9 +413,10 @@ export const createSummary = async (summaryData) => {
 // 更新就诊摘要
 export const updateSummary = async (id, summaryData) => {
   try {
+    const payload = normalizeVisitSummaryPayload(summaryData);
     const response = await healthApi.put(
       `/api/visit-summaries/update/${id}`,
-      summaryData
+      payload
     );
     return response.data;
   } catch (error) {

@@ -10,7 +10,7 @@ import json
 import time
 
 # API基础URL
-BASE_URL = "http://localhost:13001"
+BASE_URL = "http://localhost:13002"
 
 def test_smart_chat(message):
     """
