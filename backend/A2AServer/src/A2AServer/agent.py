@@ -98,6 +98,11 @@ class BasicAgent:
         if not self.is_ready:
              print("Agent cannot be set up: Model not found.")
              return False
+        if os.getenv("SKIP_MCP_TOOLS", "0") == "1":
+            self.servers = {}
+            self.all_functions = []
+            self.tool_ready = True
+            return True
 
         logger.info("Starting MCP servers...")
         successful_servers = {}
@@ -121,6 +126,9 @@ class BasicAgent:
                      else:
                          logger.warning(f"[MCP] cwd 相对路径未能解析为存在的目录：{_cwd}，将使用配置目录作为工作目录。")
                          _cwd = config_dir
+                 if _cwd and os.path.isabs(_cwd) and not os.path.isdir(_cwd):
+                     logger.warning(f"[MCP] cwd 目录不存在：{_cwd}，将使用配置目录作为工作目录。")
+                     _cwd = config_dir
                  if not _cwd:
                      # 未提供 cwd，则默认使用配置目录，保证相对路径的 mcpserver/* 可被找到
                      _cwd = config_dir
@@ -211,6 +219,14 @@ class BasicAgent:
                   return error_gen()
              return "Agent setup failed."
 
+        try:
+            sid = str(sessionId) if sessionId is not None else ""
+            if sid:
+                os.environ["A2A_CURRENT_SESSION_ID"] = sid
+                os.environ["A2A_CURRENT_CONVERSATION_ID"] = sid
+        except Exception:
+            pass
+
 
         # Build initial conversation (system message + user query)
         self._build_initial_conversation(sessionId, user_query, user_id=user_id) # This helper can be synchronous
@@ -233,17 +249,15 @@ class BasicAgent:
          try:
              with open(self.chosen_model["prompt_file"], "r", encoding="utf-8") as f:
                  agent_prompt = f.read()
-             self.session_conversations[sessionId].append({"role": "system", "content": agent_prompt})
          except Exception as e:
              logger.warning(f"Failed to read Agent prompt file: {e}")
-             self.session_conversations[sessionId].append({"role": "system", "content": agent_prompt})
 
          # 确定用户ID (优先使用传入的user_id，其次环境变量，最后是sessionId)
          final_user_id = str(user_id) if user_id else (os.environ.get("A2A_CURRENT_USER_ID") or os.environ.get("USER_ID") or str(sessionId))
 
          # 加上当前的时间和用户ID信息到System Prompt
          header_info = f"当前用户ID: {final_user_id}。\n当前时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}。"
-         self.session_conversations[sessionId][0]['content'] = header_info + "\n" + self.session_conversations[sessionId][0]['content']
+         system_content = header_info + "\n" + agent_prompt
 
          # 注入记忆上下文（若启用记忆系统）
          try:
@@ -266,11 +280,17 @@ class BasicAgent:
                              summary_lines.append(f"- {text}")
                      if summary_lines:
                          memory_block = "\n".join(["相关历史记忆："] + summary_lines)
-                         self.session_conversations[sessionId][0]['content'] = (
-                             self.session_conversations[sessionId][0]['content'] + "\n" + memory_block
-                         )
+                         system_content = system_content + "\n" + memory_block
          except Exception as e:
              logger.warning(f"注入记忆上下文失败：{e}")
+
+         if not self.session_conversations[sessionId]:
+             self.session_conversations[sessionId].append({"role": "system", "content": system_content})
+         else:
+             if self.session_conversations[sessionId][0].get("role") == "system":
+                 self.session_conversations[sessionId][0]["content"] = system_content
+             else:
+                 self.session_conversations[sessionId].insert(0, {"role": "system", "content": system_content})
          self.session_conversations[sessionId].append({"role": "user", "content": user_query})
          print(f"发起的conversation: {self.session_conversations[sessionId]}")
 
@@ -320,6 +340,12 @@ class BasicAgent:
                                      self.session_conversations[sessionId].append(result)
                                      tool_calls_processed = True
                                      yield {"text": f"{json.dumps(new_res)}", "type": "tool_result"}
+                     else:
+                         assistant_message = {
+                             "role": "assistant",
+                             "content": chunk.get("assistant_text") or "",
+                         }
+                         self.session_conversations[sessionId].append(assistant_message)
              if not tool_calls_processed:
                  break
 

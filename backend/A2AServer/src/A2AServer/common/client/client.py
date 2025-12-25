@@ -57,17 +57,36 @@ class A2AClient:
                 headers['Authorization'] = auth.strip()
         except Exception:
             pass
-        with httpx.Client(timeout=None, headers=headers or None) as client:
-            with connect_sse(
-                client, "POST", self.url, json=request.model_dump()
-            ) as event_source:
-                try:
-                    for sse in event_source.iter_sse():
-                        yield SendTaskStreamingResponse(**json.loads(sse.data))
-                except json.JSONDecodeError as e:
-                    raise A2AClientJSONError(str(e)) from e
-                except httpx.RequestError as e:
-                    raise A2AClientHTTPError(400, str(e)) from e
+        timeout = httpx.Timeout(connect=30.0, read=None, write=30.0, pool=30.0)
+        try:
+            from httpx_sse import aconnect_sse
+        except Exception:
+            aconnect_sse = None
+
+        if aconnect_sse:
+            async with httpx.AsyncClient(timeout=timeout, headers=headers or None) as client:
+                async with aconnect_sse(
+                    client, "POST", self.url, json=request.model_dump()
+                ) as event_source:
+                    try:
+                        async for sse in event_source.aiter_sse():
+                            yield SendTaskStreamingResponse(**json.loads(sse.data))
+                    except json.JSONDecodeError as e:
+                        raise A2AClientJSONError(str(e)) from e
+                    except httpx.RequestError as e:
+                        raise A2AClientHTTPError(400, str(e)) from e
+        else:
+            with httpx.Client(timeout=None, headers=headers or None) as client:
+                with connect_sse(
+                    client, "POST", self.url, json=request.model_dump()
+                ) as event_source:
+                    try:
+                        for sse in event_source.iter_sse():
+                            yield SendTaskStreamingResponse(**json.loads(sse.data))
+                    except json.JSONDecodeError as e:
+                        raise A2AClientJSONError(str(e)) from e
+                    except httpx.RequestError as e:
+                        raise A2AClientHTTPError(400, str(e)) from e
 
     async def _send_request(self, request: JSONRPCRequest) -> dict[str, Any]:
         headers = {}
@@ -78,11 +97,11 @@ class A2AClient:
                 headers['Authorization'] = auth.strip()
         except Exception:
             pass
-        async with httpx.AsyncClient(headers=headers or None) as client:
+        timeout = httpx.Timeout(connect=30.0, read=300.0, write=30.0, pool=30.0)
+        async with httpx.AsyncClient(headers=headers or None, timeout=timeout) as client:
             try:
-                # Image generation could take time, adding timeout
                 response = await client.post(
-                    self.url, json=request.model_dump(), timeout=30
+                    self.url, json=request.model_dump()
                 )
                 response.raise_for_status()
                 return response.json()

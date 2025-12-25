@@ -4,13 +4,30 @@
   flex-direction: column;
   height: 100vh;
   background-color: #f8f9fa;
+  position: relative;
 }
 
 /* 聊天历史区域 */
 .chat-history {
-  flex: 1;
   padding: 20rpx;
   background-color: #f8f9fa;
+  height: 100vh;
+  box-sizing: border-box;
+  padding-bottom: 280rpx;
+}
+
+.jump-to-bottom {
+  position: absolute;
+  right: 24rpx;
+  bottom: 240rpx;
+  padding: 14rpx 20rpx;
+  border-radius: 999rpx;
+  background: rgba(0, 0, 0, 0.72);
+  color: #fff;
+  font-size: 26rpx;
+  z-index: 20;
+  display: flex;
+  align-items: center;
 }
 
 /* 消息容器 */
@@ -132,9 +149,18 @@
 }
 
 /* AI回答滚动窗口 */
-.message-bubble-container.assistant .message-content-scroll-wrapper {
+.message-content-collapsed {
   max-height: 600rpx;
-  overflow-y: auto;
+  overflow: hidden;
+}
+
+.expand-toggle {
+  margin-top: 10rpx;
+  padding: 8rpx 14rpx;
+  font-size: 24rpx;
+  border: 1px solid #999;
+  border-radius: 8rpx;
+  background: #fff;
 }
 
 /* 时间戳 */
@@ -245,6 +271,11 @@
   border-top: 1rpx solid #e5e5ea;
   padding: 20rpx;
   box-shadow: 0 -2rpx 8rpx rgba(0, 0, 0, 0.05);
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 30;
 }
 
 .input-container {
@@ -301,12 +332,28 @@
   /*pointer-events: none;*/
 }
 button[disabled] {
-    color: #cccccc !important;
-    background-color: #f5f5f5 !important;
-  }
+  color: #cccccc !important;
+  background-color: #f5f5f5 !important;
+}
 .send-button.active:active {
   transform: scale(0.95);
 }
-.thinking-container { margin-top: 10rpx; }
-.thinking-toggle { margin-top: 8rpx; padding: 8rpx 14rpx; font-size: 24rpx; border: 1px solid #999; border-radius: 8rpx; background: #fff; }
-.thinking-content { margin-top: 8rpx; padding: 12rpx; background: #f5f5f5; border-radius: 8rpx; font-size: 24rpx; word-break: break-all; }
+.thinking-container {
+  margin-top: 10rpx;
+}
+.thinking-toggle {
+  margin-top: 8rpx;
+  padding: 8rpx 14rpx;
+  font-size: 24rpx;
+  border: 1px solid #999;
+  border-radius: 8rpx;
+  background: #fff;
+}
+.thinking-content {
+  margin-top: 8rpx;
+  padding: 12rpx;
+  background: #f5f5f5;
+  border-radius: 8rpx;
+  font-size: 24rpx;
+  word-break: break-all;
+}

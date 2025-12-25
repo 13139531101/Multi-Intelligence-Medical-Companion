@@ -55,31 +55,80 @@ def init_database():
 init_database()
 
 @mcp.tool()
-def save_consultation(user_id: str, question: str, answer: str, tags: list = None) -> str:
+def save_consultation(
+    user_id: str,
+    question: str,
+    answer: str,
+    tags: list = None,
+    consultation_id: str = None,
+    session_id: str = None,
+) -> str:
     """
     保存健康咨询记录
     :param user_id: 用户ID
     :param question: 用户的问题
     :param answer: 智能体的回答
     :param tags: 相关的标签列表
+    :param consultation_id: 咨询ID（用于复用同一会话）
+    :param session_id: 会话ID（可选）
     :return: 保存结果
     """
     try:
-        consultation_id = str(uuid.uuid4())
-        # 在实际应用中，session_id 可能需要从上下文获取，这里暂时生成一个新的或使用默认值
-        session_id = str(uuid.uuid4())
+        env_cid = os.getenv("A2A_CURRENT_CONVERSATION_ID") or os.getenv("A2A_CURRENT_SESSION_ID") or ""
+        cid = (consultation_id or env_cid or str(uuid.uuid4())).strip()
+        sid = (session_id or os.getenv("A2A_CURRENT_SESSION_ID") or cid).strip()
 
-        query = """
-            INSERT INTO consultations
-            (user_id, consultation_id, session_id, question, answer, tags)
-            VALUES (%s, %s, %s, %s, %s, %s)
+        cols = db_manager.execute_query(
+            """
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_name='consultations'
+            """,
+        )
+        colset = set([c.get("column_name") for c in (cols or []) if c and c.get("column_name")])
+        if "consultation_id" not in colset or "user_id" not in colset:
+            raise RuntimeError("consultations table schema incompatible")
+
+        insert_cols = ["user_id", "consultation_id"]
+        insert_vals = ["%s", "%s"]
+        params = [user_id, cid]
+
+        if "session_id" in colset:
+            insert_cols.append("session_id")
+            insert_vals.append("%s")
+            params.append(sid)
+        if "question" in colset:
+            insert_cols.append("question")
+            insert_vals.append("%s")
+            params.append(question)
+        if "answer" in colset:
+            insert_cols.append("answer")
+            insert_vals.append("%s")
+            params.append(answer)
+        if "tags" in colset:
+            insert_cols.append("tags")
+            insert_vals.append("%s::jsonb")
+            params.append(json.dumps(tags, ensure_ascii=False) if tags else "[]")
+
+        update_sets = []
+        if "session_id" in colset:
+            update_sets.append("session_id = EXCLUDED.session_id")
+        if "question" in colset:
+            update_sets.append("question = EXCLUDED.question")
+        if "answer" in colset:
+            update_sets.append("answer = EXCLUDED.answer")
+        if "tags" in colset:
+            update_sets.append("tags = EXCLUDED.tags")
+
+        query = f"""
+            INSERT INTO consultations ({", ".join(insert_cols)})
+            VALUES ({", ".join(insert_vals)})
+            ON CONFLICT (consultation_id)
+            DO UPDATE SET {", ".join(update_sets) if update_sets else "user_id = EXCLUDED.user_id"}
         """
+        db_manager.execute_update(query, tuple(params))
 
-        tags_json = json.dumps(tags, ensure_ascii=False) if tags else '[]'
-
-        db_manager.execute_update(query, (user_id, consultation_id, session_id, question, answer, tags_json))
-
-        return json.dumps({'success': True, 'consultation_id': consultation_id}, ensure_ascii=False)
+        return json.dumps({"success": True, "consultation_id": cid}, ensure_ascii=False)
 
     except Exception as e:
         logger.error(f"保存咨询记录失败: {e}")

@@ -112,13 +112,18 @@ def main(host, port, agent_prompt_file, model_name, provider, mcp_config_path, a
         except Exception as e:
             logger.error(f"数据库预检异常：{e}")
         
-        # 初始化记忆服务（可通过环境变量 SKIP_MEMORY_INIT=1 跳过，加速调试）
-        if os.getenv("SKIP_MEMORY_INIT", "0") == "1":
-            logger.warning("检测到 SKIP_MEMORY_INIT=1，跳过记忆服务初始化（仅用于调试）")
+        enable_memory_flag = os.getenv("ENABLE_AGENT_MEMORY", "true").lower()
+        skip_memory_init = os.getenv("SKIP_MEMORY_INIT", "0") == "1"
+        enable_memory = (enable_memory_flag in ("true", "1")) and not skip_memory_init
+
+        if not enable_memory:
+            logger.warning("记忆服务未启用（ENABLE_AGENT_MEMORY=false 或 SKIP_MEMORY_INIT=1）")
         else:
             logger.info("正在初始化记忆服务...")
             try:
-                memory_initialized = asyncio.run(health_records_memory_service.initialize())
+                memory_initialized = asyncio.run(
+                    health_records_memory_service.initialize()
+                )
                 if memory_initialized:
                     logger.info("记忆服务初始化成功")
                 else:

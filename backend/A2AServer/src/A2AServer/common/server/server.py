@@ -190,7 +190,7 @@ class A2AServer:
                 async for item in result:
                     yield {"data": item.model_dump_json(exclude_none=True)}
 
-            return EventSourceResponse(event_generator(result))
+            return EventSourceResponse(event_generator(result), ping=15)
         elif isinstance(result, JSONRPCResponse):
             return JSONResponse(result.model_dump(exclude_none=True))
         else:

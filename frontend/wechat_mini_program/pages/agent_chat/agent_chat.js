@@ -26,6 +26,10 @@ Page({
     conversationId: null,
     isPolling: false,
     scrollIntoView: "",
+    shouldAutoScroll: true,
+    showJumpToBottom: false,
+    unreadCount: 0,
+    scrollViewHeight: 0,
     isSending: false,
     mode: "default", // default, summary, consultation, medication, health_records
     agentType: "default",
@@ -42,6 +46,8 @@ Page({
   // 流式回复内容缓存
   streamingContent: "",
   currentStreamingId: null,
+  scrollTimer: null,
+  lastScrollDetail: null,
 
   /**
    * Lifecycle function--Called when page load
@@ -49,10 +55,11 @@ Page({
   async onLoad(options) {
     const agentType = options.agentType || options.mode || "default";
     const conversationId = options.id || null;
+    const sessionId = conversationId || this.generateUUID();
 
     this.setData({
       agentType,
-      sessionId: this.generateUUID(),
+      sessionId,
       conversationId: conversationId,
       isHistorySynced: !!conversationId,
     });
@@ -71,12 +78,169 @@ Page({
     }
   },
 
+  onReady() {
+    this.refreshScrollViewHeight();
+  },
+
+  formatTextToRichHtml(text) {
+    const raw = text === undefined || text === null ? "" : String(text);
+    let html = raw.replace(/\r\n/g, "\n");
+    html = html
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+
+    html = html.replace(/^#{1,6}\s*(.+)$/gm, "<b>$1</b>");
+    html = html.replace(/\*\*(.+?)\*\*/g, "<b>$1</b>");
+    html = html.replace(
+      /`([^`]+)`/g,
+      '<span style="font-family: monospace;">$1</span>'
+    );
+    html = html.replace(/^\s*-\s+/gm, "&bull; ");
+    html = html.replace(/\n/g, "<br/>");
+    return `<div style="word-break: break-word;">${html}</div>`;
+  },
+
+  isLongAssistantText(text) {
+    const raw = text === undefined || text === null ? "" : String(text);
+    return raw.length >= 1200;
+  },
+
+  refreshScrollViewHeight() {
+    return new Promise((resolve) => {
+      wx.createSelectorQuery()
+        .in(this)
+        .select("#messageList")
+        .boundingClientRect((rect) => {
+          const height = rect && rect.height ? rect.height : 0;
+          if (height && height !== this.data.scrollViewHeight) {
+            this.setData({ scrollViewHeight: height });
+          }
+          resolve(height);
+        })
+        .exec();
+    });
+  },
+
+  getLastMessageViewId() {
+    const list = this.data.messages || [];
+    if (!Array.isArray(list) || list.length === 0) return "";
+    return `msg-${list[list.length - 1].id}`;
+  },
+
+  scheduleScrollToBottom(force = false, newItems = 0) {
+    const viewId = this.getLastMessageViewId();
+    if (!viewId) return;
+
+    if (!force && !this.data.shouldAutoScroll) {
+      const patch = { showJumpToBottom: true };
+      if (newItems) {
+        patch.unreadCount = (this.data.unreadCount || 0) + newItems;
+      }
+      this.setData(patch);
+      return;
+    }
+
+    if (this.scrollTimer) return;
+    this.scrollTimer = setTimeout(() => {
+      this.scrollTimer = null;
+      const latestId = this.getLastMessageViewId();
+      if (!latestId) return;
+      if (force || this.data.shouldAutoScroll) {
+        this.setData({
+          scrollIntoView: latestId,
+          showJumpToBottom: false,
+          unreadCount: 0,
+        });
+      }
+    }, 80);
+  },
+
+  jumpToBottom() {
+    this.setData(
+      {
+        shouldAutoScroll: true,
+        showJumpToBottom: false,
+        unreadCount: 0,
+      },
+      () => this.scheduleScrollToBottom(true)
+    );
+  },
+
+  handleScroll(e) {
+    const detail = e && e.detail ? e.detail : null;
+    if (!detail) return;
+    this.lastScrollDetail = detail;
+
+    if (!this.data.scrollViewHeight) {
+      this.refreshScrollViewHeight();
+      return;
+    }
+
+    const scrollTop = Number(detail.scrollTop || 0);
+    const scrollHeight = Number(detail.scrollHeight || 0);
+    const viewHeight = Number(this.data.scrollViewHeight || 0);
+    if (!scrollHeight || !viewHeight) return;
+
+    const distanceToBottom = scrollHeight - (scrollTop + viewHeight);
+    const atBottom = distanceToBottom <= 80;
+
+    if (atBottom) {
+      if (!this.data.shouldAutoScroll || this.data.showJumpToBottom) {
+        this.setData({
+          shouldAutoScroll: true,
+          showJumpToBottom: false,
+          unreadCount: 0,
+        });
+      }
+      return;
+    }
+
+    if (this.data.shouldAutoScroll) {
+      this.setData({ shouldAutoScroll: false });
+    }
+  },
+
+  handleScrollToLower() {
+    if (!this.data.shouldAutoScroll || this.data.showJumpToBottom) {
+      this.setData({
+        shouldAutoScroll: true,
+        showJumpToBottom: false,
+        unreadCount: 0,
+      });
+    }
+  },
+
+  toggleExpand(e) {
+    const index = e.currentTarget.dataset.index;
+    const messages = this.data.messages;
+    const msg = messages[index];
+    if (msg && msg.role === "assistant" && msg.isLong && !msg.isStreaming) {
+      msg.collapsed = !msg.collapsed;
+      this.setData({ messages }, () => this.scheduleScrollToBottom());
+    }
+  },
+
+  extractTextFromMessage(message) {
+    if (!message) return "";
+    if (message.content !== undefined && message.content !== null) {
+      return String(message.content);
+    }
+    if (Array.isArray(message.parts) && message.parts.length > 0) {
+      let s = "";
+      message.parts.forEach((p) => {
+        if (p && p.type === "text" && p.text) s += String(p.text);
+      });
+      return s;
+    }
+    return "";
+  },
+
   // 处理消息内容，返回结构化部分
   processMessageContent(message) {
     let parts = [];
     const toRichTextNodes = (text) => {
-      const safeText = text === undefined || text === null ? "" : String(text);
-      return [{ type: "text", text: safeText }];
+      return this.formatTextToRichHtml(text);
     };
 
     const parseFilesToParts = (files) => {
@@ -167,10 +331,7 @@ Page({
   },
 
   normalizeHistoryMessages(rawMessages) {
-    const toRichTextNodes = (text) => {
-      const safeText = text === undefined || text === null ? "" : String(text);
-      return [{ type: "text", text: safeText }];
-    };
+    const toRichTextNodes = (text) => this.formatTextToRichHtml(text);
 
     const normalizeRole = (role) => {
       if (!role) return "assistant";
@@ -199,11 +360,16 @@ Page({
             contentParts: [
               { type: "text", content: toRichTextNodes(item.question) },
             ],
+            rawText: String(item.question || ""),
+            isLong: false,
+            collapsed: false,
             timestamp: baseTime,
             timeString: this.formatTime(baseTime),
           });
         }
         if (item.answer) {
+          const answerText = String(item.answer || "");
+          const isLong = this.isLongAssistantText(answerText);
           result.push({
             id: item.id
               ? `${item.id}_a`
@@ -214,6 +380,9 @@ Page({
             contentParts: [
               { type: "text", content: toRichTextNodes(item.answer) },
             ],
+            rawText: answerText,
+            isLong,
+            collapsed: isLong,
             timestamp: baseTime + 0.1,
             timeString: this.formatTime(baseTime + 0.1),
           });
@@ -228,6 +397,8 @@ Page({
         `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
       const role = normalizeRole(item.role);
+      const rawText = this.extractTextFromMessage(item);
+      const isLong = role === "assistant" && this.isLongAssistantText(rawText);
       const contentParts = this.processMessageContent(item);
       if (!contentParts || contentParts.length === 0) return;
 
@@ -235,6 +406,9 @@ Page({
         id: msgId,
         role,
         contentParts,
+        rawText,
+        isLong,
+        collapsed: isLong,
         timestamp: baseTime,
         timeString: this.formatTime(baseTime),
       });
@@ -377,13 +551,15 @@ Page({
 
         console.log("Final messages to render:", finalMessages);
 
-        this.setData({
-          messages: finalMessages,
-          scrollIntoView:
-            finalMessages.length > 0
-              ? `msg-${finalMessages[finalMessages.length - 1].id}`
-              : "",
-        });
+        this.setData(
+          {
+            messages: finalMessages,
+            shouldAutoScroll: true,
+            showJumpToBottom: false,
+            unreadCount: 0,
+          },
+          () => this.scheduleScrollToBottom(true)
+        );
       }
     } catch (error) {
       console.error("Load history failed:", error);
@@ -456,8 +632,11 @@ Page({
           id: "system_welcome",
           role: "assistant",
           contentParts: [
-            { type: "text", content: [{ type: "text", text: welcomeMsg }] },
+            { type: "text", content: this.formatTextToRichHtml(welcomeMsg) },
           ],
+          rawText: welcomeMsg,
+          isLong: this.isLongAssistantText(welcomeMsg),
+          collapsed: this.isLongAssistantText(welcomeMsg),
           timestamp: Date.now() / 1000,
           timeString: this.formatTime(Date.now() / 1000),
         },
@@ -560,6 +739,10 @@ Page({
     if (this.requestTask) {
       this.requestTask.abort();
     }
+    if (this.scrollTimer) {
+      clearTimeout(this.scrollTimer);
+      this.scrollTimer = null;
+    }
   },
 
   // 生成UUID
@@ -619,7 +802,12 @@ Page({
     const userMessage = {
       id: `user_${Date.now()}`,
       role: "user",
-      contentParts: [{ type: "text", content: [{ type: "text", text }] }],
+      contentParts: [
+        { type: "text", content: this.formatTextToRichHtml(text) },
+      ],
+      rawText: text,
+      isLong: false,
+      collapsed: false,
       timestamp: Date.now() / 1000,
       timeString: this.formatTime(Date.now() / 1000),
     };
@@ -628,8 +816,11 @@ Page({
       messages: [...this.data.messages, userMessage],
       inputText: "",
       isSending: true,
-      scrollIntoView: `msg-${userMessage.id}`,
+      shouldAutoScroll: true,
+      showJumpToBottom: false,
+      unreadCount: 0,
     });
+    this.scheduleScrollToBottom(true);
 
     try {
       // 1. 如果没有会话ID，先创建会话
@@ -638,10 +829,10 @@ Page({
         const conv = await createConversation();
         if (conv && (conv.id || conv.conversation_id)) {
           convId = conv.id || conv.conversation_id;
-          this.setData({ conversationId: convId });
+          this.setData({ conversationId: convId, sessionId: convId });
         } else if (typeof conv === "string" && conv) {
           convId = conv;
-          this.setData({ conversationId: convId });
+          this.setData({ conversationId: convId, sessionId: convId });
         } else {
           throw new Error("Failed to create conversation");
         }
@@ -658,7 +849,7 @@ Page({
           await createConsultation({
             question: text,
             consultation_id: convId,
-            session_id: this.data.sessionId,
+            session_id: convId,
             tags: [this.data.agentType],
           });
           console.log("Consultation history synced");
@@ -690,8 +881,11 @@ Page({
           id: aiMsgId,
           role: "assistant", // or "ai"
           contentParts: [
-            { type: "text", content: [{ type: "text", text: "..." }] },
+            { type: "text", content: this.formatTextToRichHtml("...") },
           ],
+          rawText: "",
+          isLong: false,
+          collapsed: false,
           timestamp: Date.now() / 1000,
           timeString: this.formatTime(Date.now() / 1000),
           isStreaming: true,
@@ -699,8 +893,11 @@ Page({
 
         this.setData({
           messages: [...this.data.messages, aiMessage],
-          scrollIntoView: `msg-${aiMsgId}`,
+          shouldAutoScroll: true,
+          showJumpToBottom: false,
+          unreadCount: 0,
         });
+        this.scheduleScrollToBottom(true);
 
         this.streamingContent = "";
         this.currentStreamingId = aiMsgId;
@@ -739,49 +936,87 @@ Page({
                   }
                   return m;
                 });
-                this.setData({ messages: updatedMessages });
+                this.setData({ messages: updatedMessages }, () =>
+                  this.scheduleScrollToBottom(false, 0)
+                );
               }
             }
 
             // 2. 回复内容 (Artifact/Message)
-            let newText = "";
             const artifact = data?.result?.artifact;
+            const msgParts = data?.result?.message?.parts;
+            let shouldUpdateContent = false;
+
             if (artifact && artifact.parts) {
+              let artifactText = "";
               artifact.parts.forEach((p) => {
+                if (p.type === "text" && p.text) artifactText += p.text;
+              });
+
+              if (artifactText) {
+                const appendFlag = artifact.append;
+                const lastChunk = artifact.lastChunk;
+
+                if (!appendFlag) {
+                  this.streamingContent = artifactText;
+                } else {
+                  if (
+                    lastChunk &&
+                    this.streamingContent &&
+                    artifactText.startsWith(this.streamingContent)
+                  ) {
+                    this.streamingContent = artifactText;
+                  } else if (
+                    this.streamingContent &&
+                    artifactText &&
+                    this.streamingContent.endsWith(artifactText)
+                  ) {
+                    // ignore duplicate delta
+                  } else {
+                    this.streamingContent += artifactText;
+                  }
+                }
+                shouldUpdateContent = true;
+              }
+            } else if (msgParts) {
+              let newText = "";
+              msgParts.forEach((p) => {
                 if (p.type === "text" && p.text) newText += p.text;
               });
-            } else {
-              const msgParts = data?.result?.message?.parts;
-              if (msgParts) {
-                msgParts.forEach((p) => {
-                  if (p.type === "text" && p.text) newText += p.text;
-                });
+              if (newText) {
+                if (!this.streamingContent.endsWith(newText)) {
+                  this.streamingContent += newText;
+                }
+                shouldUpdateContent = true;
               }
             }
 
-            if (newText) {
-              this.streamingContent += newText;
-              // 更新 UI
+            if (shouldUpdateContent) {
               const updatedMessages = this.data.messages.map((m) => {
                 if (m.id === this.currentStreamingId) {
+                  const isLong = this.isLongAssistantText(
+                    this.streamingContent
+                  );
                   return {
                     ...m,
                     contentParts: [
                       {
                         type: "text",
-                        content: [
-                          {
-                            type: "text",
-                            text: this.streamingContent,
-                          },
-                        ],
+                        content: this.formatTextToRichHtml(
+                          this.streamingContent
+                        ),
                       },
                     ],
+                    rawText: this.streamingContent,
+                    isLong,
+                    collapsed: false,
                   };
                 }
                 return m;
               });
-              this.setData({ messages: updatedMessages });
+              this.setData({ messages: updatedMessages }, () =>
+                this.scheduleScrollToBottom(false, 0)
+              );
             }
 
             // 检查是否完成
@@ -797,25 +1032,27 @@ Page({
             console.error("Streaming error:", err);
             const updatedMessages = this.data.messages.map((m) => {
               if (m.id === this.currentStreamingId) {
+                const finalText = this.streamingContent || "抱歉，出错了。";
+                const isLong = this.isLongAssistantText(finalText);
                 return {
                   ...m,
                   contentParts: [
                     {
                       type: "text",
-                      content: [
-                        {
-                          type: "text",
-                          text: this.streamingContent || "抱歉，出错了。",
-                        },
-                      ],
+                      content: this.formatTextToRichHtml(finalText),
                     },
                   ],
+                  rawText: finalText,
+                  isLong,
+                  collapsed: isLong,
                   isStreaming: false,
                 };
               }
               return m;
             });
-            this.setData({ messages: updatedMessages, isSending: false });
+            this.setData({ messages: updatedMessages, isSending: false }, () =>
+              this.scheduleScrollToBottom(false, 0)
+            );
           },
           () => {
             // onComplete
@@ -857,8 +1094,11 @@ Page({
           });
           this.setData({
             messages: updatedMessages,
-            scrollIntoView: `msg-${sendResult.message_id}`,
+            shouldAutoScroll: true,
+            showJumpToBottom: false,
+            unreadCount: 0,
           });
+          this.scheduleScrollToBottom(true);
         }
 
         // 3. 开始轮询回复
@@ -878,13 +1118,26 @@ Page({
     if (!this.currentStreamingId) return;
 
     // 标记完成
+    const finalText = this.streamingContent || "";
+    const isLong = this.isLongAssistantText(finalText);
     const updatedMessages = this.data.messages.map((m) => {
       if (m.id === this.currentStreamingId) {
-        return { ...m, isStreaming: false };
+        return {
+          ...m,
+          isStreaming: false,
+          rawText: finalText,
+          isLong,
+          collapsed: isLong,
+          contentParts: finalText
+            ? [{ type: "text", content: this.formatTextToRichHtml(finalText) }]
+            : m.contentParts,
+        };
       }
       return m;
     });
-    this.setData({ messages: updatedMessages, isSending: false });
+    this.setData({ messages: updatedMessages, isSending: false }, () =>
+      this.scheduleScrollToBottom()
+    );
 
     // 保存 AI 消息到数据库
     if (this.streamingContent) {
@@ -931,18 +1184,28 @@ Page({
 
       if (messages && messages.length > 0) {
         // 转换消息格式
-        const formattedMessages = messages.map((m) => ({
-          id:
+        const formattedMessages = messages.map((m) => {
+          const id =
             m.id ||
             (m.metadata && m.metadata.message_id) ||
-            `msg-${Date.now()}-${Math.random()}`,
-          role: m.role,
-          contentParts: this.processMessageContent(m),
-          timestamp: this.parseTimestampSeconds(m.created_at || m.createdAt),
-          timeString: this.formatTime(
-            this.parseTimestampSeconds(m.created_at || m.createdAt)
-          ),
-        }));
+            `msg-${Date.now()}-${Math.random()}`;
+          const role = m.role;
+          const rawText = this.extractTextFromMessage(m);
+          const isLong =
+            role === "assistant" && this.isLongAssistantText(rawText);
+          return {
+            id,
+            role,
+            contentParts: this.processMessageContent(m),
+            rawText,
+            isLong,
+            collapsed: isLong,
+            timestamp: this.parseTimestampSeconds(m.created_at || m.createdAt),
+            timeString: this.formatTime(
+              this.parseTimestampSeconds(m.created_at || m.createdAt)
+            ),
+          };
+        });
 
         // 合并消息，去重
         const currentIds = new Set(this.data.messages.map((m) => m.id));
@@ -951,11 +1214,13 @@ Page({
         );
 
         if (newMessages.length > 0) {
-          this.setData({
-            messages: [...this.data.messages, ...newMessages],
-            isSending: false, // 收到新消息认为发送/回复完成
-            scrollIntoView: `msg-${newMessages[newMessages.length - 1].id}`,
-          });
+          this.setData(
+            {
+              messages: [...this.data.messages, ...newMessages],
+              isSending: false, // 收到新消息认为发送/回复完成
+            },
+            () => this.scheduleScrollToBottom(false, newMessages.length)
+          );
         }
       }
     } catch (error) {

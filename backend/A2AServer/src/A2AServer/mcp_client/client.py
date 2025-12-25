@@ -25,6 +25,7 @@ from .providers.deepseek import generate_with_deepseek
 from .providers.anthropic import generate_with_anthropic
 from .providers.ollama import generate_with_ollama
 from .providers.dashscope import generate_with_dashscope
+from .providers.mock import generate_with_mock
 # 将 lmstudio 的导入改为可选，避免未安装第三方包导致整体导入失败
 try:
     from .providers.lmstudio import generate_with_lmstudio
@@ -440,6 +441,9 @@ async def generate_text(conversation: List[Dict], model_cfg: Dict,
             # Await the coroutine returned by the async generator function call
             # to get the actual async generator object.
             return await generator_coroutine # Return the awaitable generator object
+        elif provider == "mock":
+            generator_coroutine = generate_with_mock(conversation, model_cfg, all_functions, stream=True)
+            return await generator_coroutine
         elif provider == "zhipu":
             # *** Return the generator object directly ***
             generator_coroutine = generate_with_zhipu(conversation, model_cfg, all_functions, stream=True)
@@ -503,6 +507,8 @@ async def generate_text(conversation: List[Dict], model_cfg: Dict,
                             if False: yield
                         return err_gen()
                     return {"assistant_text": msg, "tool_calls": []}
+        elif provider == "mock":
+            return await generate_with_mock(conversation, model_cfg, all_functions, stream=False)
         else:
             return {"assistant_text": f"Unsupported provider '{provider}'", "tool_calls": []}
 
@@ -565,6 +571,16 @@ async def process_tool_call(tc: Dict, servers: Dict[str, MCPClient], quiet_mode:
         }
 
     srv_name, tool_name = parts
+
+    try:
+        if tool_name == "save_consultation":
+            sid = os.environ.get("A2A_CURRENT_CONVERSATION_ID") or os.environ.get("A2A_CURRENT_SESSION_ID")
+            if isinstance(sid, str) and sid.strip():
+                session_key = sid.strip()
+                func_args["consultation_id"] = session_key
+                func_args["session_id"] = session_key
+    except Exception:
+        pass
     logger.info(f"\n调用process_tool_call开始获取运行MCP工具{tool_name} from {srv_name} {json.dumps(func_args, ensure_ascii=False)}")
 
     if srv_name not in servers:

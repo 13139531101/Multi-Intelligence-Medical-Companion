@@ -162,7 +162,7 @@ class AgentTaskManager(InMemoryTaskManager):
         artifacts = []
         try:
             async for item in self.agent.stream(query, task_send_params.sessionId, user_id=user_id):
-                logger.info("返回的item: ", item)
+                logger.info("返回的item: %s", item)
                 if item.get("type") and item["type"] == "tool_call":
                     tool_data = decode_tool_calls_to_string(item["content"])
                     logger.info(f"CALL的工具的解析结果: {tool_data}")

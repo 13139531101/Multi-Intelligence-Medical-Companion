@@ -1,7 +1,16 @@
 <!--pages/agent_chat/agent_chat.wxml-->
-<view class="chat-container">
+  <view class="chat-container">
   <!-- 聊天历史区域 -->
-  <scroll-view scroll-y="true" class="chat-history" id="messageList" scroll-into-view="{{scrollIntoView}}">
+  <scroll-view
+    scroll-y="true"
+    class="chat-history"
+    id="messageList"
+    scroll-into-view="{{scrollIntoView}}"
+    scroll-with-animation="true"
+    lower-threshold="80"
+    bindscroll="handleScroll"
+    bindscrolltolower="handleScrollToLower"
+  >
     <view wx:for="{{messages}}" wx:for-item="item" wx:for-index="idx" wx:key="id" id="{{'msg-' + item.id}}" class="message-bubble-container {{item.role}}">
       <!-- 用户头像 -->
       <view wx:if="{{item.role === 'user'}}" class="avatar user-avatar">
@@ -16,7 +25,7 @@
       <!-- 消息气泡 -->
       <view class="message-bubble">
         <!-- 消息内容 -->
-        <view class="message-content-scroll-wrapper">
+        <view class="message-content-scroll-wrapper {{(item.role === 'assistant' && item.isLong && item.collapsed) ? 'message-content-collapsed' : ''}}">
           <block wx:for="{{item.contentParts}}" wx:key="index" wx:for-item="part">
             <rich-text wx:if="{{part.type === 'text'}}" class="message-content" nodes="{{part.content}}"></rich-text>
             <image wx:if="{{part.type === 'image'}}" src="{{part.url}}" mode="widthFix" class="message-image" bindtap="previewImage" data-src="{{part.url}}"></image>
@@ -29,6 +38,15 @@
             </view>
           </block>
         </view>
+
+        <button
+          wx:if="{{item.role === 'assistant' && item.isLong && !item.isStreaming}}"
+          class="expand-toggle"
+          bindtap="toggleExpand"
+          data-index="{{idx}}"
+        >
+          {{item.collapsed ? '展开全文' : '收起'}}
+        </button>
         <view wx:if="{{item.role === 'assistant' && item.thinking}}" class="thinking-container">
           <button class="thinking-toggle" bindtap="toggleThinking" data-index="{{idx}}">
             {{item.showThinking ? '隐藏思考过程' : '查看思考过程'}}
@@ -63,6 +81,11 @@
       </view>
     </view>
   </scroll-view>
+
+  <view wx:if="{{showJumpToBottom}}" class="jump-to-bottom" bindtap="jumpToBottom">
+    <text>回到底部</text>
+    <text wx:if="{{unreadCount > 0}}">({{unreadCount}})</text>
+  </view>
   
   <!-- 输入区域 -->
   <view class="chat-input-area">

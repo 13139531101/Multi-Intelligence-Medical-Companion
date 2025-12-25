@@ -405,14 +405,19 @@ const sendTaskStreaming = (
     id: `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
   };
 
+  const userInfo = wx.getStorageSync("userInfo");
+  const token = userInfo ? userInfo.token : "";
+
   // 微信小程序流式请求
   const requestTask = wx.request({
     url: cleanAgentUrl, // A2A Server 直接监听根路径
     method: "POST",
     data: requestBody,
     enableChunked: true,
+    timeout: 300000,
     header: {
       "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
     success: (res) => {
       if (res.statusCode >= 200 && res.statusCode < 300) {

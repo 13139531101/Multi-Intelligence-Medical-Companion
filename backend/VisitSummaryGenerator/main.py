@@ -80,20 +80,30 @@ def main(host, port, agent_prompt_file, model_name, provider, mcp_config_path, a
         # 预加载逻辑在服务器 startup 事件中执行，避免与主事件循环不一致
         
         # 初始化记忆服务
-        try:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            memory_initialized = loop.run_until_complete(visit_summary_memory_service.initialize())
-            if memory_initialized:
-                agent.memory_service = visit_summary_memory_service
-                logger.info("就诊摘要生成记忆服务初始化成功")
-            else:
-                logger.warning("就诊摘要生成记忆服务初始化失败，将在无记忆模式下运行")
-                agent.memory_service = None
-            loop.close()
-        except Exception as e:
-            logger.error(f"记忆服务初始化异常: {e}，将在无记忆模式下运行")
+        enable_memory_flag = os.getenv("ENABLE_AGENT_MEMORY", "true").lower()
+        skip_memory_init = os.getenv("SKIP_MEMORY_INIT", "0") == "1"
+        enable_memory = (enable_memory_flag in ("true", "1")) and not skip_memory_init
+
+        if not enable_memory:
+            logger.warning("记忆服务未启用（ENABLE_AGENT_MEMORY=false 或 SKIP_MEMORY_INIT=1）")
             agent.memory_service = None
+        else:
+            try:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                memory_initialized = loop.run_until_complete(
+                    visit_summary_memory_service.initialize()
+                )
+                if memory_initialized:
+                    agent.memory_service = visit_summary_memory_service
+                    logger.info("就诊摘要生成记忆服务初始化成功")
+                else:
+                    logger.warning("就诊摘要生成记忆服务初始化失败，将在无记忆模式下运行")
+                    agent.memory_service = None
+                loop.close()
+            except Exception as e:
+                logger.error(f"记忆服务初始化异常: {e}，将在无记忆模式下运行")
+                agent.memory_service = None
         
         # 启动 A2A 服务器
         server = A2AServer(
