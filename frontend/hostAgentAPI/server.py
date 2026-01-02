@@ -392,7 +392,12 @@ class ConversationServer:
 
   async def _query_events(self, request: Request, current_user: Optional[Dict[str, Any]] = Depends(get_current_user_optional)):
     data = await request.json()
-    conversation_id = data['params'].get("conversation_id")
+    params = data.get("params")
+    conversation_id = None
+    if isinstance(params, dict):
+      conversation_id = params.get("conversation_id")
+    else:
+      conversation_id = params
     
     # 如果用户已登录，验证会话权限
     if current_user and conversation_id:
@@ -418,7 +423,10 @@ class ConversationServer:
   async def _register_agent(self, request: Request):
     message_data = await request.json()
     url = message_data['params']
-    self.manager.register_agent(url)
+    try:
+      self.manager.register_agent(url)
+    except Exception as e:
+      logging.warning(f"代理注册失败: {url}: {e}")
     return RegisterAgentResponse()
 
   async def _list_agents(self):

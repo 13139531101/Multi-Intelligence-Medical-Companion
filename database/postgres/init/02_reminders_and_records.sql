@@ -13,6 +13,8 @@ CREATE TABLE IF NOT EXISTS medication_reminders (
     reminder_times JSONB NOT NULL,
     notes TEXT,
     is_active BOOLEAN DEFAULT TRUE,
+    medication_id INTEGER,
+    reminder_id INTEGER,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -20,6 +22,8 @@ CREATE TABLE IF NOT EXISTS medication_reminders (
 CREATE INDEX IF NOT EXISTS idx_medication_reminders_user ON medication_reminders(user_id);
 CREATE INDEX IF NOT EXISTS idx_medication_reminders_active ON medication_reminders(is_active);
 CREATE INDEX IF NOT EXISTS idx_medication_reminders_created ON medication_reminders(created_at);
+CREATE INDEX IF NOT EXISTS idx_medication_reminders_user_created_desc ON medication_reminders(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_medication_reminders_user_medication ON medication_reminders(user_id, medication_id);
 
 -- Appointment reminders
 CREATE TABLE IF NOT EXISTS appointment_reminders (
@@ -44,14 +48,19 @@ CREATE INDEX IF NOT EXISTS idx_appointment_reminders_date ON appointment_reminde
 CREATE TABLE IF NOT EXISTS reminder_logs (
     id SERIAL PRIMARY KEY,
     reminder_id INTEGER NOT NULL REFERENCES medication_reminders(id) ON DELETE CASCADE,
+    user_id TEXT,
     scheduled_time TIMESTAMPTZ NOT NULL,
     actual_time TIMESTAMPTZ,
     status TEXT NOT NULL,
     notes TEXT,
+    completion_time TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE INDEX IF NOT EXISTS idx_reminder_logs_reminder ON reminder_logs(reminder_id);
+CREATE INDEX IF NOT EXISTS idx_reminder_logs_reminder_scheduled ON reminder_logs(reminder_id, scheduled_time);
+CREATE INDEX IF NOT EXISTS idx_reminder_logs_user_scheduled ON reminder_logs(user_id, scheduled_time);
+CREATE INDEX IF NOT EXISTS idx_reminder_logs_user_scheduled_date ON reminder_logs(user_id, (scheduled_time::date));
 CREATE INDEX IF NOT EXISTS idx_reminder_logs_status ON reminder_logs(status);
 CREATE INDEX IF NOT EXISTS idx_reminder_logs_created ON reminder_logs(created_at);
 

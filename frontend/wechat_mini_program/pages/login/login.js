@@ -1,5 +1,5 @@
 // login.js
-const { checkApiStatus, login } = require("../../utils/api");
+const { checkApiStatus, login, bindWeChatOpenid } = require("../../utils/api");
 
 Page({
   data: {
@@ -74,6 +74,16 @@ Page({
           title: "登录成功",
           icon: "success",
         });
+
+        try {
+          wx.login({
+            success: (res) => {
+              const code = res && res.code ? String(res.code) : "";
+              if (!code) return;
+              bindWeChatOpenid(code).catch(() => {});
+            },
+          });
+        } catch (e) {}
 
         // 跳转到首页
         setTimeout(() => {

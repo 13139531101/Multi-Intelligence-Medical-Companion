@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 # 加载环境变量
 load_dotenv()
 
+
 def init_database():
     """
     初始化数据库，创建所有必需的表
@@ -27,7 +28,7 @@ def init_database():
         print("正在连接到PostgreSQL服务器...")
         connection = psycopg.connect(**config)
         cursor = connection.cursor()
-        
+
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS users (
@@ -64,6 +65,14 @@ def init_database():
                 updated_at TIMESTAMPTZ DEFAULT now()
             );
             """
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_user_medications_user_id "
+            "ON user_medications(user_id)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_user_medications_user_deleted "
+            "ON user_medications(user_id, is_deleted)"
         )
         cursor.execute(
             """
@@ -144,8 +153,34 @@ def init_database():
             );
             """
         )
-        cursor.execute("ALTER TABLE medication_reminders ADD COLUMN IF NOT EXISTS reminder_id INTEGER")
-        cursor.execute("ALTER TABLE medication_reminders ADD COLUMN IF NOT EXISTS medication_id INTEGER")
+        cursor.execute(
+            "ALTER TABLE medication_reminders "
+            "ADD COLUMN IF NOT EXISTS reminder_id INTEGER"
+        )
+        cursor.execute(
+            "ALTER TABLE medication_reminders "
+            "ADD COLUMN IF NOT EXISTS medication_id INTEGER"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_medication_reminders_user "
+            "ON medication_reminders(user_id)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_medication_reminders_active "
+            "ON medication_reminders(is_active)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_medication_reminders_created "
+            "ON medication_reminders(created_at)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_medication_reminders_user_created_desc "
+            "ON medication_reminders(user_id, created_at DESC)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_medication_reminders_user_medication "
+            "ON medication_reminders(user_id, medication_id)"
+        )
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS reminder_logs (
@@ -159,6 +194,31 @@ def init_database():
                 created_at TIMESTAMPTZ DEFAULT now()
             );
             """
+        )
+        cursor.execute("ALTER TABLE reminder_logs ADD COLUMN IF NOT EXISTS user_id TEXT")
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_reminder_logs_reminder "
+            "ON reminder_logs(reminder_id)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_reminder_logs_reminder_scheduled "
+            "ON reminder_logs(reminder_id, scheduled_time)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_reminder_logs_user_scheduled "
+            "ON reminder_logs(user_id, scheduled_time)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_reminder_logs_user_scheduled_date "
+            "ON reminder_logs(user_id, (scheduled_time::date))"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_reminder_logs_status "
+            "ON reminder_logs(status)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_reminder_logs_created "
+            "ON reminder_logs(created_at)"
         )
 
         cursor.execute(
@@ -190,10 +250,10 @@ def init_database():
             );
             """
         )
-        
+
         connection.commit()
         print("数据库初始化完成！")
-        
+
         print("\n验证表结构...")
         key_tables = ['users', 'user_sessions', 'health_records']
         for table in key_tables:
@@ -207,7 +267,7 @@ def init_database():
             else:
                 print(f"✗ 表 {table} 创建失败")
         return True
-        
+
     except Exception as e:
         print(f"数据库错误: {e}")
         return False
@@ -220,6 +280,7 @@ def init_database():
         if 'connection' in locals():
             connection.close()
             print("数据库连接已关闭")
+
 
 if __name__ == "__main__":
     print("=" * 50)

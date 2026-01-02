@@ -194,6 +194,20 @@ const getUserInfo = (token) => {
   });
 };
 
+const getWeChatTemplateIds = () => {
+  return request("/api/wechat/template-ids", { method: "GET" });
+};
+
+const bindWeChatOpenid = (code) => {
+  return request("/api/wechat/bind-openid", {
+    method: "POST",
+    data: { code },
+    headers: {
+      "Content-Type": "application/json",
+    },
+  });
+};
+
 // 获取正在处理的消息
 const getProcessingMessages = () => {
   return request("/message/pending", { method: "POST", data: {} });
@@ -283,6 +297,17 @@ const createMedication = (medicationData, user_id = null) => {
   });
 };
 
+// 删除用药记录（软删除）
+const deleteMedication = (medicationId, user_id = null) => {
+  let url = `/api/medications/${medicationId}`;
+  if (user_id) {
+    url += `?user_id=${user_id}`;
+  }
+  return request(url, {
+    method: "DELETE",
+  });
+};
+
 // 获取用药提醒（特定日期状态）
 const getMedicationReminders = (date = "", user_id = null) => {
   let url = "/api/medication-reminders";
@@ -320,6 +345,83 @@ const createMedicationReminder = (reminderData, user_id = null) => {
     headers: {
       "Content-Type": "application/json",
     },
+  });
+};
+
+// 获取提醒计划列表（用于“用药提醒”卡片展示）
+const getMedicationReminderPlans = (active_only = true, user_id = null) => {
+  let url = "/api/medication-reminder-plans";
+  const params = [];
+  if (active_only !== null && active_only !== undefined) {
+    params.push(`active_only=${active_only ? "true" : "false"}`);
+  }
+  if (user_id) params.push(`user_id=${user_id}`);
+  if (params.length > 0) url += `?${params.join("&")}`;
+  return request(url, {
+    method: "GET",
+  });
+};
+
+// 启用/停用单条提醒
+const setMedicationReminderActive = (reminderId, enabled, user_id = null) => {
+  let url = `/api/medication-reminders/${reminderId}/active`;
+  if (user_id) {
+    url += `?user_id=${user_id}`;
+  }
+  return request(url, {
+    method: "PUT",
+    data: { enabled: !!enabled },
+    headers: {
+      "Content-Type": "application/json",
+    },
+  });
+};
+
+// 标记“跳过/漏服”（写日志）
+const markMedicationSkipped = (reminderId, scheduledTime, user_id = null) => {
+  let url = `/api/medication-reminders/${reminderId}/skipped`;
+  if (user_id) {
+    url += `?user_id=${user_id}`;
+  }
+  return request(url, {
+    method: "POST",
+    data: { scheduledTime: scheduledTime || "" },
+    headers: {
+      "Content-Type": "application/json",
+    },
+  });
+};
+
+// 给已有用药新增提醒时间（不重复创建用药）
+const addMedicationRemindersToMedication = (
+  medicationId,
+  reminderData,
+  user_id = null
+) => {
+  let url = `/api/medications/${medicationId}/reminders`;
+  if (user_id) {
+    url += `?user_id=${user_id}`;
+  }
+  return request(url, {
+    method: "POST",
+    data: reminderData,
+    headers: {
+      "Content-Type": "application/json",
+    },
+  });
+};
+
+// 获取用药统计
+const getMedicationStats = (days = 7, date = "", user_id = null) => {
+  let url = "/api/medication-stats";
+  const params = [];
+  if (days) params.push(`days=${days}`);
+  if (date) params.push(`date=${date}`);
+  if (user_id) params.push(`user_id=${user_id}`);
+  if (params.length > 0) url += `?${params.join("&")}`;
+
+  return request(url, {
+    method: "GET",
   });
 };
 
@@ -603,6 +705,8 @@ module.exports = {
   login,
   register,
   getUserInfo,
+  getWeChatTemplateIds,
+  bindWeChatOpenid,
   getProcessingMessages,
   queryEvents,
   getVisitSummaries,
@@ -614,9 +718,15 @@ module.exports = {
   deleteConsultation,
   getMedications,
   createMedication,
+  deleteMedication,
   getMedicationReminders,
   markMedicationTaken,
   createMedicationReminder,
+  getMedicationReminderPlans,
+  setMedicationReminderActive,
+  markMedicationSkipped,
+  addMedicationRemindersToMedication,
+  getMedicationStats,
   uploadMedicationImage,
   getAgentCard,
   sendTaskStreaming,

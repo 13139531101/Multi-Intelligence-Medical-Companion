@@ -27,11 +27,17 @@ RUN pip install -i ${PIP_INDEX_URL} -r hrm_requirements.txt
 # App source (Host API)
 COPY frontend/hostAgentAPI ./
 
+# Provide backend modules used by Host API integrations (WeChat subscribe messages, etc.)
+COPY backend/notification_service.py ./backend/notification_service.py
+
 # Provide A2AServer package required by Host API
 COPY backend/A2AServer/src/A2AServer ./A2AServer
 
 # Ensure Python can resolve local package
 ENV PYTHONPATH=/app
+
+# Point Host API to the bundled backend module directory
+ENV BACKEND_DIR=/app/backend
 
 # Runtime env with sensible defaults
 ENV HOST_API_PORT=13002

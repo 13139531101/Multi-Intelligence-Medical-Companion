@@ -43,6 +43,7 @@ def init_database():
                 )
                 """
             )
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_user_medications_user_id ON user_medications(user_id)")
 
             # reminders table (Global reminders)
             cur.execute(
@@ -62,6 +63,7 @@ def init_database():
                 )
                 """
             )
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_reminders_user_time ON reminders(user_id, reminder_time DESC)")
 
             # medication_reminders table (Linking table)
             # Ensure it has reminder_id and medication_id
@@ -85,6 +87,13 @@ def init_database():
                 )
                 """
             )
+            cur.execute("ALTER TABLE medication_reminders ADD COLUMN IF NOT EXISTS medication_id INTEGER")
+            cur.execute("ALTER TABLE medication_reminders ADD COLUMN IF NOT EXISTS reminder_id INTEGER")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_medication_reminders_user ON medication_reminders(user_id)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_medication_reminders_active ON medication_reminders(is_active)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_medication_reminders_created ON medication_reminders(created_at)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_medication_reminders_user_created_desc ON medication_reminders(user_id, created_at DESC)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_medication_reminders_user_medication ON medication_reminders(user_id, medication_id)")
 
             cur.execute(
                 """
@@ -101,6 +110,14 @@ def init_database():
                 )
                 """
             )
+            cur.execute("ALTER TABLE reminder_logs ADD COLUMN IF NOT EXISTS user_id TEXT")
+            cur.execute("ALTER TABLE reminder_logs ADD COLUMN IF NOT EXISTS completion_time TIMESTAMPTZ")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_reminder_logs_reminder ON reminder_logs(reminder_id)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_reminder_logs_reminder_scheduled ON reminder_logs(reminder_id, scheduled_time)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_reminder_logs_user_scheduled ON reminder_logs(user_id, scheduled_time)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_reminder_logs_user_scheduled_date ON reminder_logs(user_id, (scheduled_time::date))")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_reminder_logs_status ON reminder_logs(status)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_reminder_logs_created ON reminder_logs(created_at)")
 
             cur.execute(
                 """
@@ -120,6 +137,8 @@ def init_database():
                 )
                 """
             )
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_appointment_reminders_user ON appointment_reminders(user_id)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_appointment_reminders_date ON appointment_reminders(appointment_date)")
             conn.commit()
 
 # 初始化数据库

@@ -1,51 +1,57 @@
-<!--medication.wxml-->
 <view class="container">
-  <!-- 页面标题 -->
-  <view class="page-header">
-    <text class="page-title">用药管理</text>
-    <text class="page-desc">科学用药，健康生活</text>
-  </view>
-
-  <!-- 快速操作 -->
-  <view class="quick-actions">
-    <view class="action-item" bindtap="addMedication">
-      <text class="action-icon">💊</text>
-      <text class="action-title">添加用药</text>
-      <text class="action-desc">记录新的用药信息</text>
+  <view class="hero">
+    <view class="hero-top">
+      <text class="hero-title">用药管理</text>
+      <text class="hero-desc">科学用药，健康生活</text>
     </view>
-    <view class="action-item" bindtap="setReminder">
-      <text class="action-icon">⏰</text>
-      <text class="action-title">设置提醒</text>
-      <text class="action-desc">定时用药提醒</text>
+    <view class="hero-actions">
+      <view class="hero-action" bindtap="addMedication">
+        <view class="hero-action-icon">💊</view>
+        <view class="hero-action-text">
+          <text class="hero-action-title">添加用药</text>
+          <text class="hero-action-desc">记录新的用药信息</text>
+        </view>
+      </view>
+      <view class="hero-action" bindtap="setReminder">
+        <view class="hero-action-icon">⏰</view>
+        <view class="hero-action-text">
+          <text class="hero-action-title">设置提醒</text>
+          <text class="hero-action-desc">定时用药提醒</text>
+        </view>
+      </view>
     </view>
   </view>
 
   <!-- 今日用药 -->
-  <view class="today-section">
+  <view class="today-section section-card">
     <view class="section-header">
       <text class="section-title">今日用药</text>
       <text class="section-date">{{todayDate}}</text>
     </view>
     
-    <view wx:if="{{todayMedications.length > 0}}" class="medication-list">
-      <view wx:for="{{todayMedications}}" wx:key="id" class="medication-item {{item.status}}" bindtap="viewMedicationDetail" data-id="{{item.id}}">
-        <view class="medication-time">{{item.time}}</view>
-        <view class="medication-info">
-          <view class="medication-name">{{item.name}}</view>
-          <view class="medication-dose">{{item.dose}} {{item.unit}}</view>
-          <view class="medication-type">{{item.type}}</view>
-        </view>
-        <view class="medication-status">
-          <text wx:if="{{item.status === 'pending'}}" class="status-text pending">待服用</text>
-          <text wx:if="{{item.status === 'taken'}}" class="status-text taken">已服用</text>
-          <text wx:if="{{item.status === 'missed'}}" class="status-text missed">已错过</text>
-        </view>
-        <view wx:if="{{item.status === 'pending'}}" class="medication-actions">
-          <button class="action-btn take-btn" bindtap="takeMedication" data-id="{{item.id}}" catchtap="noop">服用</button>
-          <button class="action-btn skip-btn" bindtap="skipMedication" data-id="{{item.id}}" catchtap="noop">跳过</button>
+    <scroll-view wx:if="{{todayMedications.length > 0}}" scroll-y enhanced show-scrollbar="{{false}}" class="medication-scroll">
+      <view class="medication-list">
+        <view wx:for="{{todayMedications}}" wx:key="id" class="medication-item {{item.status}}" bindtap="viewMedicationDetail" data-id="{{item.id}}">
+          <view class="medication-time">{{item.time}}</view>
+          <view class="medication-info">
+            <view class="medication-name">{{item.name}}</view>
+            <view class="medication-dose">{{item.dose}} {{item.unit}}</view>
+            <view class="medication-type">{{item.type}}</view>
+          </view>
+          <view class="medication-right">
+            <view class="medication-status">
+              <text wx:if="{{item.status === 'pending'}}" class="status-text pending">待服用</text>
+              <text wx:if="{{item.status === 'taken'}}" class="status-text taken">已服用</text>
+              <text wx:if="{{item.status === 'missed'}}" class="status-text missed">已错过</text>
+            </view>
+            <view wx:if="{{item.status === 'pending'}}" class="medication-actions">
+              <button size="mini" class="action-btn take-btn" catchtap="takeMedication" data-id="{{item.id}}">服用</button>
+              <button size="mini" class="action-btn skip-btn" catchtap="skipMedication" data-id="{{item.id}}">跳过</button>
+            </view>
+          </view>
         </view>
       </view>
-    </view>
+    </scroll-view>
 
     <view wx:else class="empty-state">
       <text class="empty-icon">💊</text>
@@ -55,7 +61,7 @@
   </view>
 
   <!-- 用药记录 -->
-  <view class="records-section">
+  <view class="records-section section-card">
     <view class="section-header">
       <text class="section-title">用药记录</text>
       <text class="section-more" bindtap="viewAllRecords">查看全部</text>
@@ -79,7 +85,10 @@
           <text class="progress-text">{{item.progress}}%</text>
         </view>
         <view class="record-status">
-          <text class="status-tag {{item.status}}">{{getStatusName(item.status)}}</text>
+          <view class="record-status-row">
+            <text class="status-tag {{item.status}}">{{getStatusName(item.status)}}</text>
+            <button size="mini" class="record-delete-btn" catchtap="deleteMedication" data-id="{{item.id}}">删除</button>
+          </view>
         </view>
       </view>
     </view>
@@ -92,7 +101,7 @@
   </view>
 
   <!-- 用药提醒 -->
-  <view class="reminders-section">
+  <view class="reminders-section section-card">
     <view class="section-header">
       <text class="section-title">用药提醒</text>
       <text class="section-more" bindtap="manageReminders">管理提醒</text>
@@ -100,10 +109,12 @@
 
     <view wx:if="{{reminders.length > 0}}" class="reminders-list">
       <view wx:for="{{reminders}}" wx:key="id" class="reminder-item" bindtap="editReminder" data-id="{{item.id}}">
-        <view class="reminder-time">{{item.time}}</view>
-        <view class="reminder-info">
-          <text class="reminder-medication">{{item.medicationName}}</text>
-          <text class="reminder-frequency">{{item.frequency}}</text>
+        <view class="reminder-left">
+          <view class="reminder-time">{{item.time}}</view>
+          <view class="reminder-info">
+            <text class="reminder-medication">{{item.medicationName}}</text>
+            <text class="reminder-frequency">{{item.frequency}}</text>
+          </view>
         </view>
         <view class="reminder-switch">
           <switch checked="{{item.enabled}}" bindchange="toggleReminder" data-id="{{item.id}}" catchtap="noop"/>
@@ -119,26 +130,26 @@
   </view>
 
   <!-- 统计图表 (占位) -->
-  <view class="stats-section">
+  <view class="stats-section section-card">
     <view class="section-header">
       <text class="section-title">服药统计</text>
     </view>
-    <view class="stats-container">
-      <view class="stats-item">
-        <text class="stats-value">{{stats.totalDays}}</text>
-        <text class="stats-label">连续天数</text>
+    <view class="stats-grid">
+      <view class="stat-item">
+        <text class="stat-number">{{stats.totalDays}}</text>
+        <text class="stat-label">连续天数</text>
       </view>
-      <view class="stats-item">
-        <text class="stats-value">{{stats.adherenceRate}}%</text>
-        <text class="stats-label">服药率</text>
+      <view class="stat-item">
+        <text class="stat-number">{{stats.adherenceRate}}%</text>
+        <text class="stat-label">服药率</text>
       </view>
-      <view class="stats-item">
-        <text class="stats-value">{{stats.missedDoses}}</text>
-        <text class="stats-label">漏服次数</text>
+      <view class="stat-item">
+        <text class="stat-number">{{stats.missedDoses}}</text>
+        <text class="stat-label">漏服次数</text>
       </view>
-      <view class="stats-item">
-        <text class="stats-value">{{stats.onTimeRate}}%</text>
-        <text class="stats-label">准时率</text>
+      <view class="stat-item">
+        <text class="stat-number">{{stats.onTimeRate}}%</text>
+        <text class="stat-label">准时率</text>
       </view>
     </view>
   </view>
@@ -160,8 +171,65 @@
           <view class="scan-btn" bindtap="scanMedicationBox">📷</view>
         </view>
       </view>
-      <!-- 其他表单项省略，实际项目中应完整实现 -->
-      <view class="form-tip">点击📷可扫描药盒自动识别</view>
+
+      <view class="form-group">
+        <text class="form-label">药品类型</text>
+        <picker class="form-picker" mode="selector" range="{{medicationTypes}}" value="{{newMedication.typeIndex}}" bindchange="onTypeChange">
+          <view class="picker-text">{{newMedication.type || "请选择药品类型"}}</view>
+        </picker>
+      </view>
+
+      <view class="form-group">
+        <text class="form-label">剂量</text>
+        <view class="dose-input">
+          <input class="form-input dose-number" placeholder="例如 1 / 0.5 / 100" type="digit" bindinput="onInputChange" data-field="dose" value="{{newMedication.dose}}" />
+          <picker class="form-picker dose-unit" mode="selector" range="{{doseUnits}}" value="{{newMedication.unitIndex}}" bindchange="onUnitChange">
+            <view class="picker-text">{{newMedication.unit || "单位"}}</view>
+          </picker>
+        </view>
+      </view>
+
+      <view class="form-group">
+        <text class="form-label">服用频率</text>
+        <picker class="form-picker" mode="selector" range="{{frequencies}}" value="{{newMedication.frequencyIndex}}" bindchange="onFrequencyChange">
+          <view class="picker-text">{{newMedication.frequency || "请选择频率"}}</view>
+        </picker>
+      </view>
+
+      <view class="form-group">
+        <text class="form-label">用药时间范围</text>
+        <view class="date-range">
+          <picker class="date-picker" mode="date" value="{{newMedication.startDate}}" bindchange="onStartDateChange">
+            <view class="date-text">{{newMedication.startDate || "开始日期"}}</view>
+          </picker>
+          <picker class="date-picker" mode="date" value="{{newMedication.endDate}}" start="{{newMedication.startDate}}" bindchange="onEndDateChange">
+            <view class="date-text">{{newMedication.endDate || "结束日期(可选)"}}</view>
+          </picker>
+        </view>
+      </view>
+
+      <view class="form-group" wx:if="{{newMedication.times && newMedication.times.length > 0}}">
+        <text class="form-label">服用时间</text>
+        <view class="time-inputs">
+          <picker
+            wx:for="{{newMedication.times}}"
+            wx:key="index"
+            class="time-picker"
+            mode="time"
+            value="{{item}}"
+            bindchange="onTimeChange"
+            data-index="{{index}}"
+          >
+            <view class="time-text">{{item || "选择时间"}}</view>
+          </picker>
+        </view>
+      </view>
+
+      <view class="form-group">
+        <text class="form-label">备注</text>
+        <textarea class="form-textarea" placeholder="可选：用法用量、注意事项等" bindinput="onInputChange" data-field="notes" value="{{newMedication.notes}}" />
+        <view class="form-tip">点击📷可扫描药盒自动识别</view>
+      </view>
     </view>
     <view class="modal-footer">
       <button class="btn-cancel" bindtap="closeAddModal">取消</button>

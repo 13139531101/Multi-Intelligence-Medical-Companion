@@ -3,11 +3,13 @@ import uuid
 import asyncio
 import os
 import sys
+import psycopg
+from psycopg.rows import dict_row
 from fastapi import FastAPI, APIRouter, Response, Request, UploadFile, File, Depends
 from typing import List, Optional, Dict, Any
 from fastapi.middleware.cors import CORSMiddleware
 from server import ConversationServer
-from auth import router as auth_router, get_current_user
+from auth import router as auth_router, get_current_user, DB_CONFIG
 from auth_middleware import get_current_user_optional
 from dotenv import load_dotenv
 import json
@@ -54,6 +56,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 app = FastAPI()
+
+def _get_user_id(user: dict) -> str:
+    return str(user.get("id") or user.get("user_id") or user.get("uid") or "")
 
 # 更严格且兼容本地开发的 CORS 设置：明确允许本地前端来源
 frontend_origins = [
@@ -208,9 +213,6 @@ try:
         return await health_api.get_api_status()
 
     # ====== 辅助：前端->后端字段映射与类型转换 ======
-    def _get_user_id(user: dict) -> str:
-        return str(user.get("id") or user.get("user_id") or user.get("uid"))
-
     def _map_record_type(front_type: str | None) -> health_api.RecordType | None:
         if not front_type:
             return None
@@ -358,18 +360,6 @@ try:
                 return ""
             s = str(text).replace("\n", " ").strip()
             return s[:max_len]
-        # 新增：中文占比估算，用于噪声检测
-        def _ch_ratio(s: str | None) -> float:
-            try:
-                if not s:
-                    return 0.0
-                s2 = ''.join(c for c in str(s) if not c.isspace())
-                if not s2:
-                    return 0.0
-                zh = sum(1 for c in s2 if '\u4e00' <= c <= '\u9fff')
-                return zh / len(s2)
-            except Exception:
-                return 0.0
         # 提取 JSON 字符串中的文本内容
         def _extract_text_from_jsonish(s: str | None) -> str:
             try:
@@ -763,6 +753,34 @@ try:
             except Exception:
                 raise
 
+    def _call_get_medication_reminders(user_id: str, date: str, active_only: bool):
+        fn = storage_get_reminders
+        impl = getattr(fn, "fn", fn)
+        import inspect
+        sig = inspect.signature(impl)
+        params = sig.parameters
+        kwargs = {}
+        if "user_id" in params:
+            kwargs["user_id"] = user_id
+        if "date" in params:
+            kwargs["date"] = date or ""
+        if "active_only" in params:
+            kwargs["active_only"] = active_only
+        elif "is_active" in params:
+            kwargs["is_active"] = active_only
+
+        if kwargs:
+            return impl(**kwargs)
+
+        try:
+            if len(params) >= 3:
+                return impl(user_id, date or "", active_only)
+            if len(params) == 2:
+                return impl(user_id, active_only)
+            return impl(user_id)
+        except Exception:
+            return impl(user_id)
+
     # 统一封装：兼容两种“标记服药”函数签名（HRM: 需要 user_id；MR: 不需要）
     def _call_mark_taken(reminder_id: int, taken_time: str, user_id: str):
         fn = storage_mark_taken
@@ -1035,10 +1053,9 @@ async def update_medication(medication_id: int, request: Request, user: dict = D
 async def list_medication_reminders(date: str = "", active_only: bool = True, user: dict = Depends(get_current_user)):
         try:
             user_id = str(user.get("id") or user.get("user_id") or user.get("uid"))
-            # 提醒工具的获取接口为 get_medication_reminders(user_id, active_only=True)
-            raw = storage_get_reminders(user_id, active_only)
+            raw = _call_get_medication_reminders(user_id, date, active_only)
             data = json.loads(raw) if isinstance(raw, str) else raw
-            rows = data.get("reminders") if isinstance(data, dict) else data
+            rows = (data.get("reminders") if isinstance(data, dict) else data) or []
             from datetime import datetime
             target_date = (date or (datetime.utcnow().date().isoformat()))
             result = []
@@ -1047,39 +1064,83 @@ async def list_medication_reminders(date: str = "", active_only: bool = True, us
                 dbm = get_db_manager()
             except Exception:
                 dbm = None
-            for r in rows or []:
-                med_id = r.get("medication_id")
-                if not med_id and dbm:
+
+            def _parse_times(row: dict) -> list:
+                times = []
+                if row.get("reminder_time"):
+                    times = [str(row.get("reminder_time"))]
+                else:
+                    raw_times = row.get("reminder_times")
                     try:
-                        res = dbm.execute_query("SELECT medication_id FROM medication_reminders WHERE id = %s", (r.get("id"),))
+                        if isinstance(raw_times, str):
+                            times = json.loads(raw_times)
+                        elif isinstance(raw_times, (list, tuple)):
+                            times = list(raw_times)
+                    except Exception:
+                        times = []
+                cleaned = []
+                import re
+                for t in times or []:
+                    m = re.search(r"(\d{1,2}):(\d{2})", str(t))
+                    if m:
+                        hh = int(m.group(1)); mm = int(m.group(2))
+                        if 0 <= hh <= 23 and 0 <= mm <= 59:
+                            cleaned.append(f"{hh:02d}:{mm:02d}")
+                return cleaned
+
+            def _status_for(reminder_row_id: int, scheduled_dt):
+                if not dbm:
+                    return "pending"
+                try:
+                    log_rows = dbm.execute_query(
+                        "SELECT status FROM reminder_logs WHERE reminder_id = %s AND user_id = %s AND scheduled_time = %s ORDER BY completion_time DESC NULLS LAST LIMIT 1",
+                        (reminder_row_id, user_id, scheduled_dt),
+                    )
+                    if log_rows:
+                        s = str(log_rows[0].get("status") or "").lower()
+                        if s in ("completed", "taken"):
+                            return "taken"
+                        if s in ("missed", "skipped"):
+                            return "missed"
+                except Exception:
+                    pass
+                return "pending"
+
+            for r in rows or []:
+                reminder_row_id = r.get("id")
+                med_id = r.get("medication_id") or r.get("medicationId")
+                if not med_id and dbm and reminder_row_id:
+                    try:
+                        res = dbm.execute_query(
+                            "SELECT medication_id FROM medication_reminders WHERE id = %s",
+                            (reminder_row_id,),
+                        )
                         if res:
                             med_id = res[0].get("medication_id")
                     except Exception:
                         pass
-                scheduled = f"{str(target_date)} {str(r.get('reminder_time'))}:00"
 
-                # 计算已服用状态：查询当天对应提醒的日志
-                taken_flag = False
-                if dbm:
+                for t in _parse_times(r):
                     try:
-                        # 直接使用 medication_reminders.id 查询日志
-                        # 注意：reminder_logs.reminder_id 对应的是 medication_reminders.id
-                        log_rows = dbm.execute_query(
-                            "SELECT status FROM reminder_logs WHERE reminder_id = %s AND user_id = %s AND scheduled_time = %s ORDER BY completion_time DESC LIMIT 1",
-                            (r.get("id"), user_id, scheduled)
-                        )
-                        if log_rows:
-                            status = str(log_rows[0].get("status") or "").lower()
-                            taken_flag = status in ("completed", "taken")
+                        scheduled_dt = datetime.strptime(f"{target_date} {t}:00", "%Y-%m-%d %H:%M:%S")
                     except Exception:
-                        taken_flag = False
+                        continue
+                    status = _status_for(int(reminder_row_id), scheduled_dt) if reminder_row_id else "pending"
+                    result.append({
+                        "id": reminder_row_id,
+                        "medicationId": med_id,
+                        "medicationName": r.get("medication_name") or r.get("medicationName") or r.get("title") or "",
+                        "dosage": r.get("dosage") or "",
+                        "scheduledTime": scheduled_dt.strftime("%Y-%m-%d %H:%M:%S"),
+                        "time": t,
+                        "status": status,
+                        "taken": status == "taken",
+                    })
 
-                result.append({
-                    "id": r.get("id"),
-                    "medicationId": med_id,
-                    "scheduledTime": scheduled,
-                    "taken": taken_flag,
-                })
+            try:
+                result.sort(key=lambda x: (x.get("scheduledTime") or ""))
+            except Exception:
+                pass
             return result
         except Exception as e:
             logging.error(f"获取用药提醒失败: {e}")
@@ -1285,6 +1346,342 @@ async def mark_medication_taken(reminder_id: int, taken_time: str = "", user: di
             logging.error(f"标记服药失败: {e}")
             return {"success": False, "message": f"标记服药失败: {str(e)}"}
 
+@meds_router.post("/api/medication-reminders/{reminder_id}/skipped")
+async def mark_medication_skipped(reminder_id: int, request: Request, user: dict = Depends(get_current_user)):
+    user_id = str(user.get("id") or user.get("user_id") or user.get("uid"))
+    payload = {}
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+
+    scheduled_raw = payload.get("scheduledTime") or payload.get("scheduled_time") or ""
+    scheduled_dt = None
+    from datetime import datetime
+    if scheduled_raw:
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+            try:
+                scheduled_dt = datetime.strptime(str(scheduled_raw), fmt)
+                break
+            except Exception:
+                pass
+
+    if scheduled_dt is None:
+        scheduled_dt = datetime.now().replace(second=0, microsecond=0)
+
+    dbm = None
+    try:
+        dbm = get_db_manager()
+    except Exception:
+        dbm = None
+
+    now = datetime.now()
+    if dbm:
+        try:
+            affected = dbm.execute_update(
+                "UPDATE reminder_logs SET status = 'missed', completion_time = NOW(), notes = '用户标记跳过' WHERE reminder_id = %s AND user_id = %s AND scheduled_time = %s",
+                (reminder_id, user_id, scheduled_dt),
+            )
+            if not affected:
+                dbm.execute_insert(
+                    "INSERT INTO reminder_logs (reminder_id, user_id, scheduled_time, actual_time, status, completion_time, notes) VALUES (%s, %s, %s, %s, 'missed', %s, '用户标记跳过')",
+                    (reminder_id, user_id, scheduled_dt, None, now),
+                )
+            return {"success": True}
+        except Exception:
+            try:
+                dbm.execute_insert(
+                    "INSERT INTO reminder_logs (reminder_id, scheduled_time, actual_time, status, notes, created_at) VALUES (%s, %s, %s, 'missed', '用户标记跳过', %s)",
+                    (reminder_id, scheduled_dt, None, now),
+                )
+                return {"success": True}
+            except Exception as e:
+                return {"success": False, "message": str(e)}
+
+    ok = _mark_local_missed(reminder_id, str(scheduled_dt))
+    return {"success": ok}
+
+@meds_router.put("/api/medication-reminders/{reminder_id}/active")
+async def set_medication_reminder_active(reminder_id: int, request: Request, user: dict = Depends(get_current_user)):
+    user_id = str(user.get("id") or user.get("user_id") or user.get("uid"))
+    payload = {}
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    raw_enabled = payload.get("enabled")
+    if isinstance(raw_enabled, bool):
+        enabled = raw_enabled
+    elif isinstance(raw_enabled, (int, float)):
+        enabled = bool(int(raw_enabled))
+    elif isinstance(raw_enabled, str):
+        enabled = raw_enabled.strip().lower() in ("1", "t", "true", "y", "yes", "on")
+    else:
+        enabled = False
+
+    dbm = None
+    try:
+        dbm = get_db_manager()
+    except Exception:
+        dbm = None
+
+    if not dbm:
+        ok = _set_local_reminder_active(reminder_id, enabled)
+        return {"success": ok}
+
+    try:
+        try:
+            affected = dbm.execute_update(
+                "UPDATE medication_reminders SET is_active = (%s)::boolean, updated_at = NOW() WHERE id = %s AND user_id = %s",
+                ("true" if enabled else "false", reminder_id, user_id),
+            )
+        except Exception:
+            affected = dbm.execute_update(
+                "UPDATE medication_reminders SET is_active = %s, updated_at = NOW() WHERE id = %s AND user_id = %s",
+                (1 if enabled else 0, reminder_id, user_id),
+            )
+        return {"success": affected > 0}
+    except Exception as e:
+        return {"success": False, "message": str(e)}
+
+@meds_router.delete("/medications/{medication_id}")
+@meds_router.delete("/api/medications/{medication_id}")
+async def delete_medication_api(medication_id: int, user: dict = Depends(get_current_user)):
+    user_id = str(user.get("id") or user.get("user_id") or user.get("uid"))
+    dbm = None
+    try:
+        dbm = get_db_manager()
+    except Exception:
+        dbm = None
+
+    if not dbm:
+        return {"success": False, "message": "DB not available"}
+
+    try:
+        try:
+            affected = dbm.execute_update(
+                "UPDATE user_medications SET is_deleted = %s, is_active = %s, updated_at = NOW() WHERE id = %s AND user_id = %s",
+                (True, False, medication_id, user_id),
+            )
+        except Exception:
+            affected = dbm.execute_update(
+                "UPDATE user_medications SET is_deleted = %s, is_active = %s, updated_at = NOW() WHERE id = %s AND user_id = %s",
+                (1, 0, medication_id, user_id),
+            )
+
+        if affected <= 0:
+            return {"success": False, "message": "not_found"}
+
+        try:
+            try:
+                dbm.execute_update(
+                    "UPDATE medication_reminders SET is_active = %s, updated_at = NOW() WHERE user_id = %s AND medication_id = %s",
+                    (False, user_id, medication_id),
+                )
+            except Exception:
+                dbm.execute_update(
+                    "UPDATE medication_reminders SET is_active = %s, updated_at = NOW() WHERE user_id = %s AND medication_id = %s",
+                    (0, user_id, medication_id),
+                )
+        except Exception:
+            pass
+
+        return {"success": True}
+    except Exception as e:
+        return {"success": False, "message": str(e)}
+
+@meds_router.post("/api/medications/{medication_id}/reminders")
+async def add_reminders_to_medication(medication_id: int, request: Request, user: dict = Depends(get_current_user)):
+    user_id = str(user.get("id") or user.get("user_id") or user.get("uid"))
+    payload = await request.json()
+    times = payload.get("times") or payload.get("reminder_times") or []
+    start_date = payload.get("startDate") or payload.get("start_date") or ""
+    end_date = payload.get("endDate") or payload.get("end_date") or ""
+    notes = payload.get("notes") or ""
+
+    import re
+    norm_times = []
+    for t in times if isinstance(times, list) else []:
+        m = re.search(r"(\d{1,2}):(\d{2})", str(t))
+        if m:
+            hh = int(m.group(1)); mm = int(m.group(2))
+            if 0 <= hh <= 23 and 0 <= mm <= 59:
+                norm_times.append(f"{hh:02d}:{mm:02d}")
+
+    start_date = (str(start_date)[:10] if start_date else "")
+    end_date = (str(end_date)[:10] if end_date else "")
+
+    if not norm_times:
+        return {"success": False, "message": "no_valid_times"}
+
+    dbm = None
+    try:
+        dbm = get_db_manager()
+    except Exception:
+        dbm = None
+
+    if not dbm:
+        return {"success": False, "message": "DB not available"}
+
+    from datetime import datetime
+    meds = dbm.execute_query(
+        "SELECT id, drug_name, dosage, frequency, start_date, end_date, notes FROM user_medications WHERE id = %s AND user_id = %s AND is_deleted = 0",
+        (medication_id, user_id),
+    )
+    if not meds:
+        return {"success": False, "message": "medication_not_found"}
+
+    med = meds[0]
+    drug_name = med.get("drug_name") or ""
+    dosage = med.get("dosage") or ""
+    frequency_text = med.get("frequency") or ""
+    merged_notes = notes or (med.get("notes") or "")
+
+    try:
+        import re as _re
+        existing_times = set(_re.findall(r"(\d{1,2}:\d{2})", frequency_text or ""))
+        if existing_times:
+            merged = sorted({*existing_times, *set(norm_times)})
+            frequency_text = f"每日{len(merged)}次，时间：{', '.join(merged)}"
+        else:
+            frequency_text = f"每日{len(norm_times)}次，时间：{', '.join(norm_times)}"
+        dbm.execute_update(
+            "UPDATE user_medications SET frequency = %s, updated_at = NOW() WHERE id = %s AND user_id = %s",
+            (frequency_text, medication_id, user_id),
+        )
+    except Exception:
+        pass
+
+    reminder_ids = []
+    for t in norm_times:
+        existing = []
+        try:
+            existing = dbm.execute_query(
+                "SELECT id FROM medication_reminders WHERE user_id = %s AND medication_id = %s AND reminder_times::text LIKE %s AND CAST(is_active AS TEXT) IN ('1','t','true') LIMIT 1",
+                (user_id, medication_id, f"%{t}%"),
+            )
+        except Exception:
+            existing = []
+        if existing:
+            continue
+
+        try:
+            first_dt = f"{start_date or datetime.utcnow().date().isoformat()} {t}:00"
+            main_id = dbm.execute_insert(
+                "INSERT INTO reminders (user_id, reminder_type, title, description, reminder_time) VALUES (%s, %s, %s, %s, %s)",
+                (user_id, "medication", drug_name, merged_notes, first_dt),
+            )
+            rid = dbm.execute_insert(
+                "INSERT INTO medication_reminders (reminder_id, user_id, medication_id, medication_name, dosage, frequency, reminder_times, start_date, end_date, notes) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                (main_id, user_id, medication_id, drug_name, dosage, frequency_text, json.dumps([t]), (start_date or None), (end_date or None), merged_notes),
+            )
+            reminder_ids.append(rid)
+        except Exception:
+            continue
+
+    return {"success": True, "reminder_ids": reminder_ids}
+
+@meds_router.get("/api/medication-stats")
+async def get_medication_stats(days: int = 7, date: str = "", user: dict = Depends(get_current_user)):
+    user_id = str(user.get("id") or user.get("user_id") or user.get("uid"))
+    from datetime import datetime, timedelta
+
+    try:
+        end_date = datetime.strptime(date, "%Y-%m-%d").date() if date else datetime.now().date()
+    except Exception:
+        end_date = datetime.now().date()
+
+    days = int(days or 7)
+    if days < 1:
+        days = 7
+    if days > 90:
+        days = 90
+
+    dbm = None
+    try:
+        dbm = get_db_manager()
+    except Exception:
+        dbm = None
+
+    if not dbm:
+        return {"success": False, "message": "DB not available"}
+
+    per_day = []
+    for i in range(days):
+        d = end_date - timedelta(days=(days - 1 - i))
+
+        scheduled_cnt = 0
+        try:
+            row = dbm.execute_query(
+                "SELECT COUNT(*) AS cnt FROM medication_reminders WHERE user_id = %s AND CAST(is_active AS TEXT) IN ('1','t','true') AND (start_date <= %s) AND (end_date IS NULL OR end_date >= %s)",
+                (user_id, d, d),
+            )
+            scheduled_cnt = int((row[0] or {}).get("cnt") or 0) if row else 0
+        except Exception:
+            scheduled_cnt = 0
+
+        taken_ids = set()
+        missed_ids = set()
+        on_time_ids = set()
+        try:
+            logs = dbm.execute_query(
+                "SELECT reminder_id, scheduled_time, actual_time, status FROM reminder_logs WHERE user_id = %s AND scheduled_time::date = %s",
+                (user_id, d),
+            )
+            for l in logs or []:
+                rid = l.get("reminder_id")
+                if rid is None:
+                    continue
+                status = str(l.get("status") or "").lower()
+                if status in ("completed", "taken"):
+                    taken_ids.add(int(rid))
+                    try:
+                        st = l.get("scheduled_time")
+                        at = l.get("actual_time")
+                        if st and at:
+                            delta = abs((at - st).total_seconds())
+                            if delta <= 30 * 60:
+                                on_time_ids.add(int(rid))
+                    except Exception:
+                        pass
+                elif status in ("missed", "skipped"):
+                    missed_ids.add(int(rid))
+        except Exception:
+            pass
+
+        per_day.append({
+            "date": d.isoformat(),
+            "scheduled": scheduled_cnt,
+            "taken": len(taken_ids),
+            "missed": len(missed_ids),
+            "onTime": len(on_time_ids),
+        })
+
+    total_scheduled = sum(x["scheduled"] for x in per_day)
+    total_taken = sum(x["taken"] for x in per_day)
+    total_missed = sum(x["missed"] for x in per_day)
+    total_on_time = sum(x["onTime"] for x in per_day)
+
+    adherence_rate = int(round((total_taken / total_scheduled) * 100)) if total_scheduled > 0 else 100
+    on_time_rate = int(round((total_on_time / total_taken) * 100)) if total_taken > 0 else 100
+
+    streak = 0
+    for x in reversed(per_day):
+        if x["scheduled"] > 0 and x["taken"] >= x["scheduled"] and x["missed"] == 0:
+            streak += 1
+        else:
+            break
+
+    return {
+        "success": True,
+        "totalDays": streak,
+        "adherenceRate": adherence_rate,
+        "missedDoses": total_missed,
+        "onTimeRate": on_time_rate,
+        "windowDays": days,
+        "perDay": per_day,
+    }
+
 @meds_router.post("/api/medications/ocr")
 async def recognize_medication_image(file: UploadFile = File(...), user: dict = Depends(get_current_user)):
     try:
@@ -1327,6 +1724,228 @@ async def recognize_medication_image(file: UploadFile = File(...), user: dict = 
         return {"success": False, "message": f"处理失败: {str(e)}"}
 
 app.include_router(meds_router)
+
+def _get_backend_notification_service():
+    try:
+        backend_dir = os.environ.get("BACKEND_DIR") or os.path.abspath(
+            os.path.join(os.path.dirname(__file__), "..", "..", "backend")
+        )
+        if backend_dir not in sys.path:
+            sys.path.insert(0, backend_dir)
+        import importlib
+        mod = importlib.import_module("notification_service")
+        return getattr(mod, "notification_service", None)
+    except Exception:
+        return None
+
+@app.get("/api/wechat/template-ids")
+async def get_wechat_template_ids():
+    svc = _get_backend_notification_service()
+    template_ids = getattr(svc, "template_ids", {}) if svc else {}
+    return {
+        "task_complete": template_ids.get("task_complete", ""),
+        "health_alert": template_ids.get("health_alert", ""),
+        "medication_reminder": template_ids.get("medication_reminder", ""),
+    }
+
+@app.post("/api/wechat/bind-openid")
+async def bind_wechat_openid(request: Request, user: dict = Depends(get_current_user)):
+    payload = {}
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+
+    code = str(payload.get("code") or "").strip()
+    if not code:
+        return {"success": False, "message": "缺少code"}
+
+    svc = _get_backend_notification_service()
+    if not svc:
+        return {"success": False, "message": "微信服务不可用"}
+
+    data = None
+    try:
+        data = await svc.code_to_session(code)
+    except Exception:
+        data = None
+
+    openid = (data or {}).get("openid") if isinstance(data, dict) else None
+    if not openid:
+        return {"success": False, "message": "获取openid失败"}
+
+    user_id = str(user.get("user_id") or user.get("id") or "").strip()
+    if not user_id:
+        return {"success": False, "message": "用户未登录"}
+
+    try:
+        with psycopg.connect(**DB_CONFIG, row_factory=dict_row) as conn:
+            with conn.cursor() as cur:
+                cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS openid VARCHAR(64) UNIQUE")
+                cur.execute(
+                    "UPDATE users SET openid = %s, updated_at = NOW() WHERE user_id = %s",
+                    (openid, user_id),
+                )
+                conn.commit()
+    except Exception as e:
+        return {"success": False, "message": str(e)}
+
+    return {"success": True, "openid": openid}
+
+def _build_wechat_medication_data(medication_name: str, dosage: str, scheduled_dt: datetime, notes: str):
+    raw = os.getenv("WECHAT_MEDICATION_TEMPLATE_DATA_JSON", "").strip()
+    vars_map = {
+        "medication_name": medication_name or "",
+        "dosage": dosage or "",
+        "time": scheduled_dt.strftime("%H:%M"),
+        "date": scheduled_dt.strftime("%Y-%m-%d"),
+        "datetime": scheduled_dt.strftime("%Y-%m-%d %H:%M"),
+        "notes": notes or "",
+    }
+
+    if raw:
+        try:
+            mapping = json.loads(raw)
+            if isinstance(mapping, dict):
+                out = {}
+                for k, v in mapping.items():
+                    try:
+                        out[str(k)] = {"value": str(v).format(**vars_map)}
+                    except Exception:
+                        out[str(k)] = {"value": str(v)}
+                return out
+        except Exception:
+            pass
+
+    return {
+        "thing1": {"value": medication_name or ""},
+        "thing2": {"value": dosage or ""},
+        "time3": {"value": scheduled_dt.strftime("%Y-%m-%d %H:%M")},
+    }
+
+async def _wechat_medication_reminder_tick():
+    svc = _get_backend_notification_service()
+    template_ids = getattr(svc, "template_ids", {}) if svc else {}
+    template_id = (template_ids or {}).get("medication_reminder", "")
+    if not svc or not template_id:
+        return 0
+
+    interval_sec = int(os.getenv("WECHAT_MEDICATION_REMINDER_INTERVAL_SEC", "20") or "20")
+    window_sec = int(os.getenv("WECHAT_MEDICATION_REMINDER_WINDOW_SEC", str(max(interval_sec, 60))) or "60")
+
+    now = datetime.now().replace(microsecond=0)
+    now_floor = now.replace(second=0)
+    today = now_floor.date()
+
+    sent = 0
+    with psycopg.connect(**DB_CONFIG, row_factory=dict_row) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT mr.id AS reminder_id,
+                       mr.user_id,
+                       u.openid,
+                       mr.medication_name,
+                       mr.dosage,
+                       mr.reminder_times,
+                       mr.notes
+                FROM medication_reminders mr
+                LEFT JOIN users u ON u.user_id = mr.user_id
+                WHERE mr.is_active = TRUE
+                  AND mr.start_date <= %s
+                  AND (mr.end_date IS NULL OR mr.end_date >= %s)
+                """,
+                (today, today),
+            )
+            rows = cur.fetchall() or []
+
+            for r in rows:
+                openid = (r.get("openid") or "").strip()
+                if not openid:
+                    continue
+
+                raw_times = r.get("reminder_times")
+                times_list = []
+                if isinstance(raw_times, list):
+                    times_list = raw_times
+                elif isinstance(raw_times, str) and raw_times.strip():
+                    try:
+                        parsed = json.loads(raw_times)
+                        if isinstance(parsed, list):
+                            times_list = parsed
+                        else:
+                            times_list = [parsed]
+                    except Exception:
+                        times_list = [raw_times]
+
+                for t in times_list or []:
+                    time_str = str(t).strip()
+                    try:
+                        tt = datetime.strptime(time_str, "%H:%M").time()
+                    except Exception:
+                        continue
+
+                    scheduled_dt = datetime.combine(today, tt)
+                    delta = abs((scheduled_dt - now).total_seconds())
+                    if scheduled_dt != now_floor and delta > window_sec:
+                        continue
+                    if scheduled_dt != now_floor and scheduled_dt < now_floor:
+                        continue
+
+                    reminder_id = int(r.get("reminder_id"))
+                    cur.execute(
+                        "SELECT 1 FROM reminder_logs WHERE reminder_id = %s AND scheduled_time = %s LIMIT 1",
+                        (reminder_id, scheduled_dt),
+                    )
+                    if cur.fetchone():
+                        continue
+
+                    data = _build_wechat_medication_data(
+                        str(r.get("medication_name") or ""),
+                        str(r.get("dosage") or ""),
+                        scheduled_dt,
+                        str(r.get("notes") or ""),
+                    )
+                    ok = await svc.send_subscribe_message(
+                        openid=openid,
+                        template_id=template_id,
+                        data=data,
+                        page="pages/medication/medication",
+                    )
+                    status = "notified" if ok else "notify_failed"
+                    cur.execute(
+                        "INSERT INTO reminder_logs (reminder_id, scheduled_time, status, notes, user_id) VALUES (%s, %s, %s, %s, %s)",
+                        (
+                            reminder_id,
+                            scheduled_dt,
+                            status,
+                            "wechat_subscribe",
+                            str(r.get("user_id") or ""),
+                        ),
+                    )
+                    sent += 1
+
+            conn.commit()
+
+    return sent
+
+async def _wechat_medication_reminder_loop():
+    interval_sec = int(os.getenv("WECHAT_MEDICATION_REMINDER_INTERVAL_SEC", "20") or "20")
+    while True:
+        try:
+            await _wechat_medication_reminder_tick()
+        except Exception as e:
+            logging.error(f"微信用药提醒扫描异常: {e}")
+        await asyncio.sleep(max(5, interval_sec))
+
+@app.on_event("startup")
+async def _start_wechat_medication_reminder_loop():
+    if os.getenv("ENABLE_WECHAT_MEDICATION_REMINDER", "1") != "1":
+        return
+    try:
+        asyncio.create_task(_wechat_medication_reminder_loop())
+    except Exception as e:
+        logging.warning(f"启动微信用药提醒扫描失败: {e}")
 
 # 直接挂载到 app 的调试端点，便于排查提醒函数签名
 @app.get("/debug/reminder-signature")
@@ -1371,8 +1990,17 @@ def _save_local_reminders(data: dict) -> None:
     except Exception as e:
         logging.error(f"保存本地提醒失败: {e}")
 
-def _create_local_reminder(user_id: str, drug_name: str, dosage: str, frequency: str,
-                           start_date: str, times_list: list, end_date: str, notes: str) -> dict:
+
+def _create_local_reminder(
+    user_id: str,
+    drug_name: str,
+    dosage: str,
+    frequency: str,
+    start_date: str,
+    times_list: list,
+    end_date: str,
+    notes: str,
+) -> dict:
     db = _load_local_reminders()
     items = db.get("reminders", [])
     new_id = (max([r.get("id", 0) for r in items]) + 1) if items else 1
@@ -1408,18 +2036,147 @@ def _mark_local_taken(reminder_id: int, taken_time: str = "") -> bool:
         _save_local_reminders({"reminders": items})
     return ok
 
-@app.get("/api/medication-reminders")
-async def list_medication_reminders(user: dict = Depends(get_current_user)):
+def _mark_local_missed(reminder_id: int, scheduled_time: str = "") -> bool:
+    db = _load_local_reminders()
+    items = db.get("reminders", [])
+    ok = False
+    for r in items:
+        if int(r.get("id", 0)) == int(reminder_id):
+            r["status"] = "missed"
+            r["last_missed_at"] = scheduled_time or datetime.utcnow().isoformat()
+            ok = True
+            break
+    if ok:
+        _save_local_reminders({"reminders": items})
+    return ok
+
+def _set_local_reminder_active(reminder_id: int, enabled: bool) -> bool:
+    db = _load_local_reminders()
+    items = db.get("reminders", [])
+    ok = False
+    for r in items:
+        if int(r.get("id", 0)) == int(reminder_id):
+            r["is_active"] = bool(enabled)
+            r["updated_at"] = datetime.utcnow().isoformat()
+            ok = True
+            break
+    if ok:
+        _save_local_reminders({"reminders": items})
+    return ok
+
+@app.get("/api/medication-reminder-plans")
+async def list_medication_reminder_plans(active_only: bool = True, user: dict = Depends(get_current_user)):
     uid = str(user.get("id") or user.get("user_id") or user.get("uid"))
+    dbm = None
     try:
-        raw = storage_get_reminders(uid, True)
+        dbm = get_db_manager()
+    except Exception:
+        dbm = None
+
+    if dbm:
+        try:
+            if active_only:
+                rows = dbm.execute_query(
+                    """
+                    SELECT id, medication_id, medication_name, dosage, frequency,
+                           reminder_times, start_date, end_date, notes, is_active
+                    FROM medication_reminders
+                    WHERE user_id = %s
+                      AND CAST(is_active AS TEXT) IN ('1','t','true')
+                    ORDER BY created_at DESC
+                    """,
+                    (uid,),
+                )
+            else:
+                rows = dbm.execute_query(
+                    """
+                    SELECT id, medication_id, medication_name, dosage, frequency,
+                           reminder_times, start_date, end_date, notes, is_active
+                    FROM medication_reminders
+                    WHERE user_id = %s
+                    ORDER BY created_at DESC
+                    """,
+                    (uid,),
+                )
+            plans = []
+            import re
+            for r in rows or []:
+                times = []
+                raw_times = r.get("reminder_times")
+                try:
+                    if isinstance(raw_times, str):
+                        times = json.loads(raw_times)
+                    elif isinstance(raw_times, (list, tuple)):
+                        times = list(raw_times)
+                except Exception:
+                    times = []
+                for t in times or []:
+                    m = re.search(r"(\d{1,2}):(\d{2})", str(t))
+                    if not m:
+                        continue
+                    hh = int(m.group(1))
+                    mm = int(m.group(2))
+                    if not (0 <= hh <= 23 and 0 <= mm <= 59):
+                        continue
+                    plans.append(
+                        {
+                            "id": r.get("id"),
+                            "medicationId": r.get("medication_id"),
+                            "medicationName": r.get("medication_name") or "",
+                            "dosage": r.get("dosage") or "",
+                            "frequency": r.get("frequency") or "",
+                            "time": f"{hh:02d}:{mm:02d}",
+                            "enabled": str(r.get("is_active") or "").lower()
+                            in ("1", "t", "true"),
+                            "notes": r.get("notes") or "",
+                            "startDate": (
+                                str(r.get("start_date"))[:10]
+                                if r.get("start_date")
+                                else ""
+                            ),
+                            "endDate": (
+                                str(r.get("end_date"))[:10]
+                                if r.get("end_date")
+                                else None
+                            ),
+                        }
+                    )
+            plans.sort(key=lambda x: (x.get("time") or ""))
+            return {"success": True, "plans": plans}
+        except Exception:
+            pass
+
+    try:
+        raw = _call_get_medication_reminders(uid, "", active_only)
         data = json.loads(raw) if isinstance(raw, str) else raw
         rows = data.get("reminders") if isinstance(data, dict) else data
-        return {"reminders": rows or []}
+        plans = []
+        for r in rows or []:
+            plans.append(
+                {
+                    "id": r.get("id"),
+                    "medicationId": r.get("medication_id") or r.get("medicationId"),
+                    "medicationName": (
+                        r.get("medication_name") or r.get("medicationName") or ""
+                    ),
+                    "dosage": r.get("dosage") or "",
+                    "frequency": r.get("frequency") or "",
+                    "time": str(r.get("reminder_time") or ""),
+                    "enabled": True,
+                    "notes": r.get("notes") or "",
+                    "startDate": (
+                        str(r.get("start_date"))[:10] if r.get("start_date") else ""
+                    ),
+                    "endDate": (
+                        str(r.get("end_date"))[:10] if r.get("end_date") else None
+                    ),
+                }
+            )
+        plans.sort(key=lambda x: (x.get("time") or ""))
+        return {"success": True, "plans": plans}
     except Exception:
-        db = _load_local_reminders()
-        res = [r for r in db.get("reminders", []) if str(r.get("user_id")) == uid]
-        return {"reminders": res}
+        return {"success": True, "plans": []}
+
 
 @app.get("/api/debug/db-tables")
 async def _debug_db_tables():
@@ -1428,11 +2185,20 @@ async def _debug_db_tables():
         _ensure_visit_summaries_table(dbm)
     except Exception:
         return {"error": "no_db_manager"}
-    rows = dbm.execute_query("select table_name from information_schema.tables where table_schema='public' order by 1")
+    rows = dbm.execute_query(
+        """
+        SELECT table_name
+        FROM information_schema.tables
+        WHERE table_schema='public'
+        ORDER BY 1
+        """
+    )
     names = []
     for r in rows:
-        names.append(r.get("table_name") if isinstance(r, dict) else (r[0] if r else None))
+        name = r.get("table_name") if isinstance(r, dict) else (r[0] if r else None)
+        names.append(name)
     return {"tables": names}
+
 
 @app.get("/api/debug/db-columns/{table}")
 async def _debug_db_columns(table: str):
@@ -1442,10 +2208,16 @@ async def _debug_db_columns(table: str):
     except Exception:
         return {"error": "no_db_manager"}
     rows = dbm.execute_query(
-        "select column_name,data_type from information_schema.columns where table_schema='public' and table_name=%s order by ordinal_position",
+        """
+        SELECT column_name, data_type
+        FROM information_schema.columns
+        WHERE table_schema='public' AND table_name=%s
+        ORDER BY ordinal_position
+        """,
         (table,)
     )
     return {"columns": rows}
+
 
 @app.post("/api/debug/init-med-tables")
 async def _debug_init_med_tables():
@@ -1533,8 +2305,19 @@ async def _debug_init_med_tables():
         "ALTER TABLE health_records ADD COLUMN IF NOT EXISTS file_hash TEXT",
         "ALTER TABLE medication_reminders ADD COLUMN IF NOT EXISTS reminder_id INTEGER",
         "ALTER TABLE medication_reminders ADD COLUMN IF NOT EXISTS medication_id INTEGER",
+        "CREATE INDEX IF NOT EXISTS idx_medication_reminders_user ON medication_reminders(user_id)",
+        "CREATE INDEX IF NOT EXISTS idx_medication_reminders_active ON medication_reminders(is_active)",
+        "CREATE INDEX IF NOT EXISTS idx_medication_reminders_created ON medication_reminders(created_at)",
+        "CREATE INDEX IF NOT EXISTS idx_medication_reminders_user_created_desc ON medication_reminders(user_id, created_at DESC)",
+        "CREATE INDEX IF NOT EXISTS idx_medication_reminders_user_medication ON medication_reminders(user_id, medication_id)",
         "ALTER TABLE reminder_logs ADD COLUMN IF NOT EXISTS user_id TEXT",
         "ALTER TABLE reminder_logs ADD COLUMN IF NOT EXISTS completion_time TIMESTAMPTZ",
+        "CREATE INDEX IF NOT EXISTS idx_reminder_logs_reminder ON reminder_logs(reminder_id)",
+        "CREATE INDEX IF NOT EXISTS idx_reminder_logs_reminder_scheduled ON reminder_logs(reminder_id, scheduled_time)",
+        "CREATE INDEX IF NOT EXISTS idx_reminder_logs_user_scheduled ON reminder_logs(user_id, scheduled_time)",
+        "CREATE INDEX IF NOT EXISTS idx_reminder_logs_user_scheduled_date ON reminder_logs(user_id, (scheduled_time::date))",
+        "CREATE INDEX IF NOT EXISTS idx_reminder_logs_status ON reminder_logs(status)",
+        "CREATE INDEX IF NOT EXISTS idx_reminder_logs_created ON reminder_logs(created_at)",
         "ALTER TABLE consultations ADD COLUMN IF NOT EXISTS question TEXT",
         "ALTER TABLE consultations ADD COLUMN IF NOT EXISTS session_id TEXT",
         "ALTER TABLE consultations ADD COLUMN IF NOT EXISTS tags JSONB",
@@ -1646,14 +2429,19 @@ async def create_consultation(request: Request, user: dict = Depends(get_current
         _ensure_consultation_tables(dbm)
 
         # 检查是否存在
-        exists = dbm.execute_query("SELECT consultation_id FROM consultations WHERE consultation_id=%s", (cid,))
+        exists = dbm.execute_query(
+            "SELECT consultation_id FROM consultations WHERE consultation_id=%s",
+            (cid,),
+        )
         if not exists:
             dbm.execute_update(
                 """
-                INSERT INTO consultations (consultation_id, user_id, title, consultation_type, created_at, updated_at, question, session_id, tags)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+                INSERT INTO consultations (
+                    consultation_id, user_id, title, consultation_type, created_at, updated_at,
+                    question, session_id, tags
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
                 """,
-                (cid, uid, title, ctype, now, now, question, session_id, json.dumps(tags))
+                (cid, uid, title, ctype, now, now, question, session_id, json.dumps(tags)),
             )
 
         return {
@@ -1668,22 +2456,35 @@ async def create_consultation(request: Request, user: dict = Depends(get_current
         logging.error(f"Create consultation failed: {e}")
         return {"error": str(e)}
 
+
 @app.get("/api/consultations/{cid}/messages")
 @app.get("/consultations/{cid}/messages")
-async def get_consultation_messages(cid: str, user: dict = Depends(get_current_user)):
+async def get_consultation_messages_legacy(cid: str, user: dict = Depends(get_current_user)):
     uid = _get_user_id(user)
     try:
         dbm = get_db_manager()
         _ensure_consultation_tables(dbm)
 
         # 验证归属
-        c_rows = dbm.execute_query("SELECT consultation_id FROM consultations WHERE consultation_id=%s AND user_id=%s", (cid, uid))
+        c_rows = dbm.execute_query(
+            """
+            SELECT consultation_id
+            FROM consultations
+            WHERE consultation_id=%s AND user_id=%s
+            """,
+            (cid, uid),
+        )
         if not c_rows:
             # 也许是刚创建还没同步？或者无权访问
             return {"messages": []}
 
         rows = dbm.execute_query(
-            "SELECT id, role, content, files, created_at FROM chat_messages WHERE consultation_id=%s ORDER BY created_at ASC",
+            """
+            SELECT id, role, content, files, created_at
+            FROM chat_messages
+            WHERE consultation_id=%s
+            ORDER BY created_at ASC
+            """,
             (cid,)
         )
         messages = []
@@ -1692,7 +2493,7 @@ async def get_consultation_messages(cid: str, user: dict = Depends(get_current_u
             if isinstance(files, str):
                 try:
                     files = json.loads(files)
-                except:
+                except Exception:
                     files = []
 
             messages.append({
@@ -1725,14 +2526,20 @@ async def save_consultation_message_endpoint(request: Request, user: dict = Depe
         _ensure_consultation_tables(dbm)
 
         # 自动创建会话如果不存在 (容错)
-        exists = dbm.execute_query("SELECT consultation_id FROM consultations WHERE consultation_id=%s", (cid,))
+        exists = dbm.execute_query(
+            "SELECT consultation_id FROM consultations WHERE consultation_id=%s",
+            (cid,),
+        )
         if not exists:
-             # 尝试恢复/创建
-             now = datetime.utcnow().isoformat()
-             dbm.execute_update(
-                "INSERT INTO consultations (consultation_id, user_id, title, consultation_type, created_at, updated_at) VALUES (%s, %s, %s, %s, %s, %s)",
-                (cid, uid, "自动保存会话", "general", now, now)
-             )
+            now = datetime.utcnow().isoformat()
+            dbm.execute_update(
+                """
+                INSERT INTO consultations (
+                    consultation_id, user_id, title, consultation_type, created_at, updated_at
+                ) VALUES (%s, %s, %s, %s, %s, %s)
+                """,
+                (cid, uid, "自动保存会话", "general", now, now),
+            )
 
         msg_id = uuid.uuid4().hex
         dbm.execute_update(
@@ -1746,6 +2553,7 @@ async def save_consultation_message_endpoint(request: Request, user: dict = Depe
     except Exception as e:
         logging.error(f"Save message failed: {e}")
         return {"error": str(e)}
+
 
 @app.post("/consultations/{cid}/messages")
 async def send_consultation_message_legacy(cid: str, request: Request, user: dict = Depends(get_current_user)):
@@ -1763,27 +2571,40 @@ async def send_consultation_message_legacy(cid: str, request: Request, user: dic
         _ensure_consultation_tables(dbm)
 
         # 确保会话存在
-        exists = dbm.execute_query("SELECT consultation_id FROM consultations WHERE consultation_id=%s", (cid,))
+        exists = dbm.execute_query(
+            "SELECT consultation_id FROM consultations WHERE consultation_id=%s",
+            (cid,),
+        )
         if not exists:
-             now = datetime.utcnow().isoformat()
-             dbm.execute_update(
-                "INSERT INTO consultations (consultation_id, user_id, title, consultation_type, created_at, updated_at) VALUES (%s, %s, %s, %s, %s, %s)",
-                (cid, uid, "快速咨询", "general", now, now)
-             )
+            now = datetime.utcnow().isoformat()
+            dbm.execute_update(
+                """
+                INSERT INTO consultations (
+                    consultation_id, user_id, title, consultation_type, created_at, updated_at
+                ) VALUES (%s, %s, %s, %s, %s, %s)
+                """,
+                (cid, uid, "快速咨询", "general", now, now),
+            )
 
         # User message
         user_msg_id = uuid.uuid4().hex
         dbm.execute_update(
-            "INSERT INTO chat_messages (id, consultation_id, role, content, files, created_at) VALUES (%s, %s, 'user', %s, %s::jsonb, now())",
-            (user_msg_id, cid, content, json.dumps(files))
+            """
+            INSERT INTO chat_messages (id, consultation_id, role, content, files, created_at)
+            VALUES (%s, %s, 'user', %s, %s::jsonb, now())
+            """,
+            (user_msg_id, cid, content, json.dumps(files)),
         )
 
         # AI reply (placeholder)
         ai_text = f"收到: {content[:20]}... (请使用流式接口获取完整回复)"
         ai_msg_id = uuid.uuid4().hex
         dbm.execute_update(
-            "INSERT INTO chat_messages (id, consultation_id, role, content, created_at) VALUES (%s, %s, 'ai', %s, now())",
-            (ai_msg_id, cid, ai_text)
+            """
+            INSERT INTO chat_messages (id, consultation_id, role, content, created_at)
+            VALUES (%s, %s, 'ai', %s, now())
+            """,
+            (ai_msg_id, cid, ai_text),
         )
 
         return {
@@ -1795,8 +2616,7 @@ async def send_consultation_message_legacy(cid: str, request: Request, user: dic
 
 
 SUMMARIES_DB_PATH = os.path.join(os.path.dirname(__file__), "visit_summaries.json")
-def _get_user_id(user: dict) -> str:
-    return str(user.get("user_id") or user.get("id") or user.get("uid") or "")
+
 
 def _ensure_visit_summaries_table(dbm):
     stmts = [
@@ -1824,7 +2644,10 @@ def _ensure_visit_summaries_table(dbm):
             updated_at TIMESTAMPTZ DEFAULT now()
         )
         """,
-        "CREATE INDEX IF NOT EXISTS idx_visit_summaries_user_date ON visit_summaries(user_id, visit_date)",
+        """
+        CREATE INDEX IF NOT EXISTS idx_visit_summaries_user_date
+        ON visit_summaries(user_id, visit_date)
+        """,
         "ALTER TABLE visit_summaries ADD COLUMN IF NOT EXISTS tests JSONB",
     ]
     for s in stmts:
@@ -1881,6 +2704,7 @@ def _save_user_summaries(user_id: str, items: list) -> None:
     except Exception as e:
         logging.error(f"保存用户就诊摘要失败: {e}")
 
+
 @app.get("/summaries")
 async def list_summaries(
     user: dict = Depends(get_current_user),
@@ -1903,8 +2727,17 @@ async def list_summaries(
         if ed:
             where += " AND visit_date <= %s"
             params.append(ed)
+        query = f"""
+            SELECT
+                id, user_id, title, visit_date, doctor, hospital, department,
+                chief_complaint, symptoms, examination, diagnosis, treatment,
+                prescription, follow_up, notes, files, tests, created_at, updated_at
+            FROM visit_summaries
+            WHERE {where}
+            ORDER BY visit_date DESC NULLS LAST
+        """
         rows = dbm.execute_query(
-            f"SELECT id, user_id, title, visit_date, doctor, hospital, department, chief_complaint, symptoms, examination, diagnosis, treatment, prescription, follow_up, notes, files, tests, created_at, updated_at FROM visit_summaries WHERE {where} ORDER BY visit_date DESC NULLS LAST",
+            query,
             tuple(params)
         )
         for r in rows:
@@ -1920,7 +2753,8 @@ async def list_summaries(
                     tv = json.loads(tv)
                 except Exception:
                     tv = []
-            visitDateStr = (str(r.get("visit_date"))[:10] if r.get("visit_date") else "")
+            visit_date_val = r.get("visit_date")
+            visitDateStr = str(visit_date_val)[:10] if visit_date_val else ""
             doctorStr = r.get("doctor") or ""
             hospitalStr = r.get("hospital") or ""
             titleStr = r.get("title") or ""
@@ -1929,16 +2763,20 @@ async def list_summaries(
                 titleStr = f"{base} - {visitDateStr}" if visitDateStr else base
             elif "未填医生" in titleStr and doctorStr:
                 titleStr = f"{doctorStr} - {visitDateStr}" if visitDateStr else doctorStr
-            join_tests = "\n".join([
-                " ".join([
-                    p for p in [
-                        str(x.get("name") or x.get("test_name") or "").strip(),
-                        (str(x.get("value") or "").strip() + str(x.get("unit") or "")),
-                        str(x.get("status") or "").strip()
-                    ] if p
-                ])
-                for x in (tv or [])
-            ]) if tv else ""
+            join_tests = ""
+            if tv:
+                parts = []
+                for x in tv or []:
+                    if not isinstance(x, dict):
+                        continue
+                    name = str(x.get("name") or x.get("test_name") or "").strip()
+                    value = str(x.get("value") or "").strip()
+                    unit = str(x.get("unit") or "").strip()
+                    status = str(x.get("status") or "").strip()
+                    s = " ".join([p for p in [name, value + unit, status] if p])
+                    if s:
+                        parts.append(s)
+                join_tests = "\n".join(parts)
             exam_text = r.get("examination") or join_tests
             items.append({
                 "id": str(r.get("id")),
@@ -1965,6 +2803,7 @@ async def list_summaries(
         items = []
     json_items = _load_user_summaries(uid)
     existing = set([str(it.get("id")) for it in items])
+
     def _sig(obj: dict) -> str:
         return "|".join([
             str(obj.get("visitDate") or ""),
@@ -1990,7 +2829,12 @@ async def list_summaries(
         for it in items:
             k = it.get("doctor") or ""
             if k not in agg:
-                agg[k] = {"doctor": k, "count": 0, "lastVisit": it.get("visitDate"), "items": []}
+                agg[k] = {
+                    "doctor": k,
+                    "count": 0,
+                    "lastVisit": it.get("visitDate"),
+                    "items": [],
+                }
             agg[k]["count"] += 1
             if (it.get("visitDate") or "") > (agg[k]["lastVisit"] or ""):
                 agg[k]["lastVisit"] = it.get("visitDate")
@@ -2006,7 +2850,12 @@ async def list_summaries(
         for it in items:
             k = it.get("hospital") or ""
             if k not in agg:
-                agg[k] = {"hospital": k, "count": 0, "lastVisit": it.get("visitDate"), "items": []}
+                agg[k] = {
+                    "hospital": k,
+                    "count": 0,
+                    "lastVisit": it.get("visitDate"),
+                    "items": [],
+                }
             agg[k]["count"] += 1
             if (it.get("visitDate") or "") > (agg[k]["lastVisit"] or ""):
                 agg[k]["lastVisit"] = it.get("visitDate")
@@ -2018,6 +2867,7 @@ async def list_summaries(
             pass
         return res
     return items
+
 
 @app.post("/summaries")
 async def create_summary(request: Request, user: dict = Depends(get_current_user)):
@@ -2042,12 +2892,23 @@ async def create_summary(request: Request, user: dict = Depends(get_current_user
             )
             """,
             (
-                new_id, uid, payload.get("title") or "就诊摘要", vd,
-                payload.get("doctor") or "", payload.get("hospital") or "", payload.get("department") or "",
-                payload.get("chiefComplaint") or "", payload.get("symptoms") or "", payload.get("examination") or "",
-                payload.get("diagnosis") or "", payload.get("treatment") or "",
-                payload.get("prescription") or "", payload.get("followUp") or "", payload.get("notes") or "",
-                json.dumps(files), json.dumps(tests)
+                new_id,
+                uid,
+                payload.get("title") or "就诊摘要",
+                vd,
+                payload.get("doctor") or "",
+                payload.get("hospital") or "",
+                payload.get("department") or "",
+                payload.get("chiefComplaint") or "",
+                payload.get("symptoms") or "",
+                payload.get("examination") or "",
+                payload.get("diagnosis") or "",
+                payload.get("treatment") or "",
+                payload.get("prescription") or "",
+                payload.get("followUp") or "",
+                payload.get("notes") or "",
+                json.dumps(files),
+                json.dumps(tests),
             )
         )
     except Exception:
@@ -2078,11 +2939,14 @@ async def create_summary(request: Request, user: dict = Depends(get_current_user
     _save_user_summaries(uid, items)
     return summary
 
+
 @app.put("/summaries/{sid}")
 async def update_summary(sid: str, request: Request, user: dict = Depends(get_current_user)):
     payload = await request.json()
     uid = _get_user_id(user)
-    vd = _normalize_date(payload.get("visitDate")) if payload.get("visitDate") else None
+    vd = (
+        _normalize_date(payload.get("visitDate")) if payload.get("visitDate") else None
+    )
     files = payload.get("files") if "files" in payload else None
     tests = payload.get("tests") if "tests" in payload else None
     try:
@@ -2125,7 +2989,10 @@ async def update_summary(sid: str, request: Request, user: dict = Depends(get_cu
         if tests is not None:
             sets.append("tests = %s::jsonb")
             params.append(json.dumps(tests))
-        sql = f"UPDATE visit_summaries SET {', '.join(sets)} WHERE id = %s AND user_id = %s"
+        sql = (
+            f"UPDATE visit_summaries SET {', '.join(sets)} "
+            "WHERE id = %s AND user_id = %s"
+        )
         params.extend([sid, uid])
         dbm.execute_update(sql, tuple(params))
     except Exception:
@@ -2161,13 +3028,18 @@ async def update_summary(sid: str, request: Request, user: dict = Depends(get_cu
     _save_user_summaries(uid, items)
     return updated
 
+
 @app.delete("/summaries/{sid}")
 async def delete_summary(sid: str, user: dict = Depends(get_current_user)):
     uid = _get_user_id(user)
     try:
         dbm = get_db_manager()
         dbm.execute_update(
-            "UPDATE visit_summaries SET is_deleted = 1, updated_at = now() WHERE id = %s AND user_id = %s",
+            """
+            UPDATE visit_summaries
+            SET is_deleted = 1, updated_at = now()
+            WHERE id = %s AND user_id = %s
+            """,
             (sid, uid)
         )
     except Exception:
@@ -2176,6 +3048,7 @@ async def delete_summary(sid: str, user: dict = Depends(get_current_user)):
     new_items = [s for s in items if str(s.get("id")) != str(sid)]
     _save_user_summaries(uid, new_items)
     return {"success": True, "deleted": str(sid)}
+
 
 @app.post("/summaries/generate")
 async def generate_ai_summary(request: Request, user: dict = Depends(get_current_user)):
@@ -2188,11 +3061,15 @@ async def generate_ai_summary(request: Request, user: dict = Depends(get_current
 
     try:
         import importlib
-        backend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "backend"))
+        backend_dir = os.path.abspath(
+            os.path.join(os.path.dirname(__file__), "..", "..", "backend")
+        )
         if backend_dir not in sys.path:
             sys.path.append(backend_dir)
         health_api = importlib.import_module("health_records_api")
-        doc_tool = importlib.import_module("VisitSummaryGenerator.mcpserver.document_tool")
+        doc_tool = importlib.import_module(
+            "VisitSummaryGenerator.mcpserver.document_tool"
+        )
 
         def _to_doc_type(rt: str | None) -> str:
             if not rt:
@@ -2261,7 +3138,9 @@ async def generate_ai_summary(request: Request, user: dict = Depends(get_current
                         val = str(it.get("value") or "").strip()
                         unit = str(it.get("unit") or "").strip()
                         status = str(it.get("status") or "").strip()
-                        s = " ".join([p for p in [name, val + (unit or ""), status] if p])
+                        s = " ".join(
+                            [p for p in [name, val + (unit or ""), status] if p]
+                        )
                         if s:
                             parts.append(s)
                 return "\n".join(parts)
@@ -2282,13 +3161,15 @@ async def generate_ai_summary(request: Request, user: dict = Depends(get_current
             tests_json = []
             for x in tests:
                 if isinstance(x, dict):
-                    tests_json.append({
-                        "name": str(x.get("test_name") or x.get("name") or ""),
-                        "value": str(x.get("value") or ""),
-                        "unit": str(x.get("unit") or ""),
-                        "status": str(x.get("status") or ""),
-                        "date": visit_date
-                    })
+                    tests_json.append(
+                        {
+                            "name": str(x.get("test_name") or x.get("name") or ""),
+                            "value": str(x.get("value") or ""),
+                            "unit": str(x.get("unit") or ""),
+                            "status": str(x.get("status") or ""),
+                            "date": visit_date,
+                        }
+                    )
             generated = {
                 "id": uuid.uuid4().hex,
                 "title": title,
@@ -2357,18 +3238,23 @@ async def generate_ai_summary(request: Request, user: dict = Depends(get_current
 
     return generated
 
+
 @app.api_route("/ping", methods=["GET", "POST"])
 async def ping():
     return "Pong"
 
 # 智能路由接口 - 统一API入口
+
 @app.post("/smart_chat")
-async def smart_chat(request: Request, current_user: Optional[Dict[str, Any]] = Depends(get_current_user_optional)):
+async def smart_chat(
+    request: Request,
+    current_user: Optional[Dict[str, Any]] = Depends(get_current_user_optional),
+):
     """
     智能路由接口：根据用户输入自动选择合适的智能体
     """
     try:
-        # Robust body decoding: try UTF-8 then fallback to GBK (common on Windows CN)
+        # Robust body decoding: try UTF-8 then fallback to GBK
         raw = await request.body()
         try:
             text = raw.decode("utf-8")
@@ -2425,10 +3311,16 @@ async def smart_chat(request: Request, current_user: Optional[Dict[str, Any]] = 
         try:
             user_id = None
             if current_user and isinstance(current_user, dict):
-                user_id = str(current_user.get('user_id') or current_user.get('id') or '').strip()
+                user_id = str(
+                    current_user.get("user_id") or current_user.get("id") or ""
+                ).strip()
             if not user_id:
-                env_uid = os.getenv('A2A_CURRENT_USER_ID') or os.getenv('USER_ID') or os.getenv('FRONTEND_USER_ID')
-                user_id = str(env_uid or '').strip()
+                env_uid = (
+                    os.getenv("A2A_CURRENT_USER_ID")
+                    or os.getenv("USER_ID")
+                    or os.getenv("FRONTEND_USER_ID")
+                )
+                user_id = str(env_uid or "").strip()
             if user_id:
                 message.metadata['user_id'] = user_id
                 os.environ['A2A_CURRENT_USER_ID'] = user_id
@@ -2444,6 +3336,7 @@ async def smart_chat(request: Request, current_user: Optional[Dict[str, Any]] = 
         # 发送消息到智能体
         message = agent_server.manager.sanitize_message(message)
         task = asyncio.create_task(agent_server.manager.process_message(message))
+
         def _done_cb(t):
             try:
                 exc = t.exception()
@@ -2455,7 +3348,10 @@ async def smart_chat(request: Request, current_user: Optional[Dict[str, Any]] = 
                     conv_id = conversation.conversation_id
                     conv = agent_server.manager.get_conversation(conv_id)
                     if conv:
-                        from A2AServer.common.A2Atypes import Message as AMsg, TextPart as AText
+                        from A2AServer.common.A2Atypes import (
+                            Message as AMsg,
+                            TextPart as AText,
+                        )
                         err_msg = AMsg(
                             role='agent',
                             parts=[AText(text=f"路由任务失败：{str(exc)}")],
@@ -2527,8 +3423,13 @@ if __name__ == "__main__":
         if winerr == 10013 or getattr(e, "errno", None) == 13:
             fallback_host = "127.0.0.1"
             # 若原端口受限，尝试自动选择可用端口
-            alt_port = _resolve_port("auto" if str(env_port).lower() != "auto" else env_port, fallback_host)
-            logging.error(f"[HostAPI] 绑定 {host}:{port} 失败（权限/防火墙限制），回退到 {fallback_host}:{alt_port}")
+            alt_port = _resolve_port(
+                "auto" if str(env_port).lower() != "auto" else env_port,
+                fallback_host,
+            )
+            logging.error(
+                f"[HostAPI] 绑定 {host}:{port} 失败（权限/防火墙限制），回退到 {fallback_host}:{alt_port}"
+            )
             uvicorn.run(app, host=fallback_host, port=alt_port)
         else:
             raise

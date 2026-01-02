@@ -121,32 +121,37 @@ class ConversationServerTestCase(unittest.TestCase):
         """
         测试 /message/list 接口
         """
-        # 首先确保已经创建了一个 conversation 并且发送了消息
-        self.created_conversation_id = "ed7ee627-227d-4269-ae94-cfe20b9446e4"
-        self.sent_message_id = "fc745aaa-4e7b-4756-babf-b98e5da15e6d"
+        if not hasattr(self, 'created_conversation_id'):
+            self.test_create_conversation()
+        self.test_send_message()
 
         url = f"{self.base_url}/message/list"
         headers = {'Content-Type': 'application/json'}
         payload = {"params": self.created_conversation_id}
         start_time = time.time()
-        response = requests.post(url, headers=headers, json=payload)
-        self.assertEqual(response.status_code, 200, f"/message/list 接口状态码应为 200，但实际为 {response.status_code}")
-        self.assertEqual(response.headers.get('Content-Type'), 'application/json', f"/message/list 接口 Content-Type 应为 application/json，但实际为 {response.headers.get('Content-Type')}")
-        res = response.json()
-        print(f"list messages结果是:")
-        print(json.dumps(res, indent=2, ensure_ascii=False))
-        self.assertIn("result", res, "/message/list 接口返回值应包含 'result' 字段")
-        self.assertIsInstance(res["result"], list, "/message/list 接口返回值 'result' 应为列表")
-        if res["result"]:
-            found = False
-            for message in res["result"]:
+        timeout = 15
+        interval = 0.5
+        found = False
+        last_res = None
+
+        while time.time() - start_time < timeout and not found:
+            response = requests.post(url, headers=headers, json=payload)
+            self.assertEqual(response.status_code, 200, f"/message/list 接口状态码应为 200，但实际为 {response.status_code}")
+            self.assertEqual(response.headers.get('Content-Type'), 'application/json', f"/message/list 接口 Content-Type 应为 application/json，但实际为 {response.headers.get('Content-Type')}")
+            last_res = response.json()
+            self.assertIn("result", last_res, "/message/list 接口返回值应包含 'result' 字段")
+            self.assertIsInstance(last_res["result"], list, "/message/list 接口返回值 'result' 应为列表")
+            for message in last_res["result"]:
                 if message.get("metadata", {}).get("message_id") == self.sent_message_id:
                     found = True
                     break
-            print(f"message_id: {self.sent_message_id} 是否在返回结果中: {found}")
-            self.assertTrue(found, f"/message/list 接口返回值应包含已发送的消息，message_id: {self.sent_message_id}")
-        else:
-            self.assertTrue(res["result"], f"/message/list 测试结果为空")
+            if not found:
+                time.sleep(interval)
+
+        print(f"list messages结果是:")
+        print(json.dumps(last_res, indent=2, ensure_ascii=False))
+        print(f"message_id: {self.sent_message_id} 是否在返回结果中: {found}")
+        self.assertTrue(found, f"/message/list 接口返回值应包含已发送的消息，message_id: {self.sent_message_id}")
         print(f"/message/list 测试花费时间: {time.time() - start_time}秒")
 
     def test_pending_messages(self):
@@ -197,8 +202,10 @@ class ConversationServerTestCase(unittest.TestCase):
         """
         测试查询事件的接口
         """
-        # 可以先调用test_send_message创建1个conversation
-        conversation_id = "12daaca7-afe0-425d-a2da-032a63407109"
+        if not hasattr(self, 'created_conversation_id'):
+            self.test_create_conversation()
+        self.test_send_message()
+        conversation_id = self.created_conversation_id
         url = f"{self.base_url}/events/query"
         headers = {'Content-Type': 'application/json'}
         message_payload = {
@@ -207,10 +214,19 @@ class ConversationServerTestCase(unittest.TestCase):
             }
         }
         start_time = time.time()
-        response = requests.post(url, headers=headers, json=message_payload)
-        self.assertEqual(response.status_code, 200, f"/message/send 接口状态码应为 200，但实际为 {response.status_code}")
-        self.assertEqual(response.headers.get('Content-Type'), 'application/json', f"/message/send 接口 Content-Type 应为 application/json，但实际为 {response.headers.get('Content-Type')}")
-        res = response.json()
+        timeout = 15
+        interval = 0.5
+        res = None
+
+        while time.time() - start_time < timeout:
+            response = requests.post(url, headers=headers, json=message_payload)
+            self.assertEqual(response.status_code, 200, f"/events/query 接口状态码应为 200，但实际为 {response.status_code}")
+            self.assertEqual(response.headers.get('Content-Type'), 'application/json', f"/events/query 接口 Content-Type 应为 application/json，但实际为 {response.headers.get('Content-Type')}")
+            res = response.json()
+            if res.get("error") is None and res.get("result"):
+                break
+            time.sleep(interval)
+
         print(json.dumps(res, indent=2, ensure_ascii=False))
         assert res.get("error") is None, "错误不为空，请检查"
         assert res.get("result"), "返回的结果为空，请检查数据"

@@ -242,6 +242,7 @@ def save_medication(user_id: str, drug_name: str, dosage: str = "", frequency: s
             INSERT INTO user_medications
             (user_id, drug_name, dosage, frequency, start_date, end_date, notes)
             VALUES (%s, %s, %s, %s, %s, %s, %s)
+            RETURNING id
         """
 
         medication_id = storage.db_manager.execute_insert(

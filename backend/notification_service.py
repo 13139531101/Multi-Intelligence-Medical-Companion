@@ -18,7 +18,8 @@ class WeChatNotificationService:
         # 默认尝试从环境变量获取，如果没有则使用空字符串（发送时会失败但会有日志）
         self.template_ids = {
             "task_complete": os.environ.get("WECHAT_TEMPLATE_TASK_COMPLETE", ""),
-            "health_alert": os.environ.get("WECHAT_TEMPLATE_HEALTH_ALERT", "")
+            "health_alert": os.environ.get("WECHAT_TEMPLATE_HEALTH_ALERT", ""),
+            "medication_reminder": os.environ.get("WECHAT_TEMPLATE_MEDICATION_REMINDER", ""),
         }
 
     async def get_access_token(self) -> Optional[str]:

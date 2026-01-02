@@ -1,66 +1,82 @@
 /* medication.wxss */
 .container {
-  padding: 0 30rpx 30rpx;
-  background-color: #f5f5f5;
+  padding: 24rpx 24rpx 40rpx;
+  background-color: #f6f7fb;
   min-height: 100vh;
+  box-sizing: border-box;
 }
 
-/* 页面标题 */
-.page-header {
-  padding: 40rpx 0 30rpx;
-  text-align: center;
+.hero {
+  padding: 32rpx;
+  border-radius: 24rpx;
+  background: linear-gradient(135deg, #2b7cff 0%, #6bb5ff 100%);
+  box-shadow: 0 12rpx 30rpx rgba(43, 124, 255, 0.22);
+  margin: 24rpx 0;
 }
 
-.page-title {
-  font-size: 36rpx;
-  font-weight: bold;
-  color: #333;
-  margin-bottom: 10rpx;
+.hero-title {
+  font-size: 42rpx;
+  font-weight: 700;
+  color: #fff;
+  display: block;
+  letter-spacing: 1rpx;
 }
 
-.page-desc {
-  font-size: 28rpx;
-  color: #666;
+.hero-desc {
+  font-size: 26rpx;
+  color: rgba(255, 255, 255, 0.85);
+  margin-top: 10rpx;
+  display: block;
 }
 
-/* 快速操作 */
-.quick-actions {
+.hero-actions {
   display: flex;
-  gap: 20rpx;
-  margin-bottom: 40rpx;
+  gap: 16rpx;
+  margin-top: 24rpx;
 }
 
-.action-item {
+.hero-action {
   flex: 1;
-  background-color: #fff;
-  border-radius: 15rpx;
-  padding: 30rpx 20rpx;
-  text-align: center;
-  box-shadow: 0 2rpx 15rpx rgba(0, 0, 0, 0.1);
+  background: rgba(255, 255, 255, 0.92);
+  border-radius: 18rpx;
+  padding: 18rpx 18rpx;
+  display: flex;
+  align-items: center;
+  gap: 14rpx;
   transition: transform 0.2s;
 }
 
-.action-item:active {
+.hero-action:active {
   transform: scale(0.95);
 }
 
-.action-icon {
-  font-size: 48rpx;
-  margin-bottom: 15rpx;
-  display: block;
+.hero-action-icon {
+  width: 64rpx;
+  height: 64rpx;
+  border-radius: 18rpx;
+  background: rgba(43, 124, 255, 0.12);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 40rpx;
 }
 
-.action-title {
+.hero-action-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.hero-action-title {
   font-size: 28rpx;
-  font-weight: bold;
-  color: #333;
-  margin-bottom: 8rpx;
+  font-weight: 700;
+  color: #1f2937;
   display: block;
 }
 
-.action-desc {
+.hero-action-desc {
   font-size: 24rpx;
-  color: #666;
+  color: #6b7280;
+  margin-top: 6rpx;
   display: block;
 }
 
@@ -69,45 +85,57 @@
 .records-section,
 .reminders-section,
 .stats-section {
-  margin-bottom: 40rpx;
+  margin-bottom: 24rpx;
+}
+
+.section-card {
+  background-color: #fff;
+  border-radius: 24rpx;
+  padding: 24rpx;
+  box-shadow: 0 10rpx 24rpx rgba(17, 24, 39, 0.06);
 }
 
 .section-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 20rpx;
+  margin-bottom: 16rpx;
 }
 
 .section-title {
-  font-size: 32rpx;
-  font-weight: bold;
-  color: #333;
+  font-size: 30rpx;
+  font-weight: 700;
+  color: #111827;
 }
 
 .section-date {
   font-size: 26rpx;
-  color: #666;
+  color: #6b7280;
 }
 
 .section-more {
   font-size: 26rpx;
-  color: #1890ff;
+  color: #2b7cff;
 }
 
 /* 今日用药 */
+.medication-scroll {
+  max-height: 52vh;
+}
+
 .medication-list {
-  margin-bottom: 20rpx;
+  padding-bottom: 8rpx;
 }
 
 .medication-item {
-  background-color: #fff;
-  border-radius: 15rpx;
-  padding: 25rpx;
-  margin-bottom: 15rpx;
-  box-shadow: 0 2rpx 15rpx rgba(0, 0, 0, 0.1);
+  background-color: #f9fafb;
+  border-radius: 18rpx;
+  padding: 20rpx;
+  margin-bottom: 12rpx;
+  border: 1rpx solid #eef2f7;
   display: flex;
   align-items: center;
+  flex-wrap: nowrap;
   transition: transform 0.2s;
 }
 
@@ -116,9 +144,9 @@
 }
 
 .medication-time {
-  font-size: 32rpx;
-  font-weight: bold;
-  color: #1890ff;
+  font-size: 34rpx;
+  font-weight: 800;
+  color: #2b7cff;
   margin-right: 20rpx;
   flex-shrink: 0;
 }
@@ -126,35 +154,49 @@
 .medication-info {
   flex: 1;
   margin-right: 15rpx;
+  min-width: 0;
 }
 
 .medication-name {
   font-size: 30rpx;
-  font-weight: bold;
-  color: #333;
+  font-weight: 700;
+  color: #111827;
   margin-bottom: 5rpx;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .medication-dose {
   font-size: 26rpx;
-  color: #666;
+  color: #4b5563;
   margin-bottom: 3rpx;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .medication-type {
   font-size: 24rpx;
-  color: #999;
+  color: #9ca3af;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.medication-status {
-  margin-right: 15rpx;
+.medication-right {
+  display: flex;
+  align-items: center;
+  gap: 12rpx;
   flex-shrink: 0;
 }
 
 .status-text {
   font-size: 24rpx;
-  padding: 4rpx 10rpx;
-  border-radius: 10rpx;
+  padding: 6rpx 12rpx;
+  border-radius: 999rpx;
+  font-weight: 600;
+  white-space: nowrap;
 }
 
 .status-text.pending {
@@ -174,16 +216,17 @@
 
 .medication-actions {
   display: flex;
-  gap: 10rpx;
+  gap: 8rpx;
   flex-shrink: 0;
 }
 
 .action-btn {
-  padding: 8rpx 16rpx;
-  border-radius: 20rpx;
+  padding: 0 18rpx;
+  height: 52rpx;
+  line-height: 52rpx;
+  border-radius: 999rpx;
   font-size: 24rpx;
   border: none;
-  line-height: 1;
 }
 
 .take-btn {
@@ -193,7 +236,7 @@
 
 .skip-btn {
   background-color: #f0f0f0;
-  color: #666;
+  color: #4b5563;
 }
 
 /* 用药记录 */
@@ -202,11 +245,11 @@
 }
 
 .record-item {
-  background-color: #fff;
-  border-radius: 15rpx;
+  background-color: #f9fafb;
+  border-radius: 18rpx;
   padding: 25rpx;
   margin-bottom: 15rpx;
-  box-shadow: 0 2rpx 15rpx rgba(0, 0, 0, 0.1);
+  border: 1rpx solid #eef2f7;
   transition: transform 0.2s;
 }
 
@@ -223,13 +266,13 @@
 
 .record-name {
   font-size: 30rpx;
-  font-weight: bold;
-  color: #333;
+  font-weight: 700;
+  color: #111827;
 }
 
 .record-date {
   font-size: 24rpx;
-  color: #999;
+  color: #9ca3af;
 }
 
 .record-info {
@@ -243,7 +286,7 @@
 .record-frequency,
 .record-duration {
   font-size: 26rpx;
-  color: #666;
+  color: #4b5563;
 }
 
 .record-progress {
@@ -255,7 +298,7 @@
 .progress-bar {
   flex: 1;
   height: 8rpx;
-  background-color: #f0f0f0;
+  background-color: #eef2f7;
   border-radius: 4rpx;
   margin-right: 15rpx;
   overflow: hidden;
@@ -269,7 +312,7 @@
 
 .progress-text {
   font-size: 24rpx;
-  color: #666;
+  color: #6b7280;
   flex-shrink: 0;
 }
 
@@ -277,15 +320,34 @@
   text-align: right;
 }
 
+.record-status-row {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 12rpx;
+}
+
 .status-tag {
   font-size: 24rpx;
   padding: 4rpx 10rpx;
-  border-radius: 10rpx;
+  border-radius: 999rpx;
+  font-weight: 600;
+}
+
+.record-delete-btn {
+  height: 52rpx;
+  line-height: 52rpx;
+  padding: 0 18rpx;
+  border-radius: 999rpx;
+  font-size: 24rpx;
+  background-color: #fff2f0;
+  color: #ff4d4f;
+  border: 1rpx solid rgba(255, 77, 79, 0.25);
 }
 
 .status-tag.active {
   background-color: #e6f7ff;
-  color: #1890ff;
+  color: #2b7cff;
 }
 
 .status-tag.completed {
@@ -309,37 +371,52 @@
 }
 
 .reminder-item {
-  background-color: #fff;
-  border-radius: 15rpx;
+  background-color: #f9fafb;
+  border-radius: 18rpx;
   padding: 25rpx;
   margin-bottom: 15rpx;
-  box-shadow: 0 2rpx 15rpx rgba(0, 0, 0, 0.1);
+  border: 1rpx solid #eef2f7;
   display: flex;
   align-items: center;
 }
 
-.reminder-info {
+.reminder-left {
+  display: flex;
+  align-items: center;
+  gap: 16rpx;
   flex: 1;
+  min-width: 0;
 }
 
-.reminder-name {
-  font-size: 30rpx;
-  font-weight: bold;
-  color: #333;
-  margin-bottom: 8rpx;
+.reminder-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.reminder-medication {
+  font-size: 28rpx;
+  font-weight: 700;
+  color: #111827;
   display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .reminder-time {
   font-size: 26rpx;
-  color: #1890ff;
-  margin-bottom: 5rpx;
-  display: block;
+  font-weight: 700;
+  color: #2b7cff;
+  padding: 10rpx 14rpx;
+  border-radius: 14rpx;
+  background: rgba(43, 124, 255, 0.1);
+  flex-shrink: 0;
 }
 
 .reminder-frequency {
   font-size: 24rpx;
-  color: #666;
+  color: #6b7280;
+  margin-top: 6rpx;
   display: block;
 }
 
@@ -351,28 +428,28 @@
 .stats-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 20rpx;
+  gap: 16rpx;
 }
 
 .stat-item {
-  background-color: #fff;
-  border-radius: 15rpx;
-  padding: 30rpx 20rpx;
-  text-align: center;
-  box-shadow: 0 2rpx 15rpx rgba(0, 0, 0, 0.1);
+  background-color: #f9fafb;
+  border-radius: 18rpx;
+  padding: 28rpx 20rpx;
+  text-align: left;
+  border: 1rpx solid #eef2f7;
 }
 
 .stat-number {
   font-size: 36rpx;
-  font-weight: bold;
-  color: #1890ff;
+  font-weight: 800;
+  color: #111827;
   margin-bottom: 10rpx;
   display: block;
 }
 
 .stat-label {
   font-size: 26rpx;
-  color: #666;
+  color: #6b7280;
   display: block;
 }
 
@@ -480,9 +557,11 @@
 
 .form-input {
   width: 100%;
-  padding: 20rpx;
-  border: 1rpx solid #d9d9d9;
-  border-radius: 8rpx;
+  height: 80rpx;
+  line-height: 80rpx;
+  padding: 0 20rpx;
+  border: 1rpx solid #e5e7eb;
+  border-radius: 12rpx;
   font-size: 28rpx;
   background-color: #fff;
   box-sizing: border-box;
@@ -490,26 +569,32 @@
 
 .form-picker {
   width: 100%;
-  padding: 20rpx;
+  height: 80rpx;
+  padding: 0 20rpx;
   border: 1rpx solid #d9d9d9;
   border-radius: 8rpx;
   background-color: #fff;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
 }
 
 .picker-text {
   font-size: 28rpx;
   color: #333;
+  line-height: 1.4;
 }
 
 .form-textarea {
   width: 100%;
   min-height: 120rpx;
   padding: 20rpx;
-  border: 1rpx solid #d9d9d9;
-  border-radius: 8rpx;
+  border: 1rpx solid #e5e7eb;
+  border-radius: 12rpx;
   font-size: 28rpx;
   background-color: #fff;
   box-sizing: border-box;
+  line-height: 1.4;
 }
 
 .dose-input {
@@ -525,6 +610,31 @@
   flex: 1;
 }
 
+.date-range {
+  display: flex;
+  gap: 15rpx;
+}
+
+.date-picker {
+  flex: 1;
+  min-width: 150rpx;
+  height: 80rpx;
+  padding: 0 20rpx;
+  border: 1rpx solid #d9d9d9;
+  border-radius: 8rpx;
+  background-color: #fff;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.date-text {
+  font-size: 28rpx;
+  color: #333;
+  line-height: 1.4;
+}
+
 .time-inputs {
   display: flex;
   flex-wrap: wrap;
@@ -534,16 +644,21 @@
 .time-picker {
   flex: 1;
   min-width: 150rpx;
-  padding: 20rpx;
+  height: 80rpx;
+  padding: 0 20rpx;
   border: 1rpx solid #d9d9d9;
   border-radius: 8rpx;
   background-color: #fff;
-  text-align: center;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .time-text {
   font-size: 28rpx;
   color: #333;
+  line-height: 1.4;
 }
 
 /* 按钮样式 */
@@ -558,11 +673,49 @@
 }
 
 .btn-cancel {
+  flex: 1;
+  padding: 20rpx;
+  border-radius: 12rpx;
+  font-size: 28rpx;
+  text-align: center;
+  border: none;
+  line-height: 1;
   background-color: #f0f0f0;
   color: #666;
 }
 
-.btn-primary {
-  background-color: #1890ff;
+.btn-submit {
+  flex: 1;
+  padding: 20rpx;
+  border-radius: 12rpx;
+  font-size: 28rpx;
+  text-align: center;
+  border: none;
+  line-height: 1;
+  background-color: #2b7cff;
   color: #fff;
+}
+
+.input-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 12rpx;
+}
+
+.scan-btn {
+  width: 72rpx;
+  height: 72rpx;
+  border-radius: 16rpx;
+  background: rgba(43, 124, 255, 0.1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 34rpx;
+  flex-shrink: 0;
+}
+
+.form-tip {
+  font-size: 24rpx;
+  color: #6b7280;
+  margin-top: 12rpx;
 }

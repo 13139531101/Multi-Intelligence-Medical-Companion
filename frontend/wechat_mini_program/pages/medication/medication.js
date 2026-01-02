@@ -3,8 +3,14 @@ const {
   createMedication,
   getMedicationReminders,
   markMedicationTaken,
-  createMedicationReminder,
+  getMedicationReminderPlans,
+  setMedicationReminderActive,
+  markMedicationSkipped,
+  addMedicationRemindersToMedication,
+  getMedicationStats,
   uploadMedicationImage,
+  deleteMedication: deleteMedicationApi,
+  getWeChatTemplateIds,
 } = require("../../utils/api");
 
 const app = getApp();
@@ -46,6 +52,8 @@ Page({
       frequency: "",
       frequencyIndex: 0,
       times: [""],
+      startDate: "",
+      endDate: "",
       duration: "",
       notes: "",
     },
@@ -99,6 +107,20 @@ Page({
   // 空函数，用于阻止冒泡
   noop() {},
 
+  onMedicationNameInput(e) {
+    this.setData({
+      "newMedication.name": e.detail.value,
+    });
+  },
+
+  scanMedicationBox() {
+    return this.scanMedication();
+  },
+
+  submitMedication() {
+    return this.saveMedication();
+  },
+
   // 初始化页面
   initPage() {
     const today = new Date();
@@ -109,7 +131,52 @@ Page({
   },
 
   getUserId() {
-    return app.globalData?.userInfo?.id || null;
+    const userInfo = wx.getStorageSync("userInfo") || {};
+    return (
+      userInfo.user_id ||
+      userInfo.id ||
+      app.globalData?.userInfo?.user_id ||
+      app.globalData?.userInfo?.id ||
+      null
+    );
+  },
+
+  getToken() {
+    const userInfo = wx.getStorageSync("userInfo") || {};
+    return userInfo.token || "";
+  },
+
+  async ensureMedicationSubscribeAuth() {
+    const cached = wx.getStorageSync("medicationSubscribeAccepted");
+    if (cached) return true;
+
+    let templateId = "";
+    try {
+      const ids = await getWeChatTemplateIds();
+      templateId =
+        (ids && (ids.medication_reminder || ids.medicationReminder)) || "";
+    } catch (e) {
+      templateId = "";
+    }
+    if (!templateId) return false;
+
+    return await new Promise((resolve) => {
+      wx.requestSubscribeMessage({
+        tmplIds: [templateId],
+        success: (res) => {
+          const state = res ? res[templateId] : "";
+          if (state === "accept") {
+            try {
+              wx.setStorageSync("medicationSubscribeAccepted", true);
+            } catch (e) {}
+            resolve(true);
+            return;
+          }
+          resolve(false);
+        },
+        fail: () => resolve(false),
+      });
+    });
   },
 
   // 加载数据
@@ -127,7 +194,10 @@ Page({
 
       // 3. 获取今日提醒状态
       const today = new Date().toISOString().split("T")[0];
-      const remindersToday = await getMedicationReminders(today, userId);
+      const remindersTodayRaw = await getMedicationReminders(today, userId);
+      const remindersToday = Array.isArray(remindersTodayRaw)
+        ? remindersTodayRaw
+        : remindersTodayRaw?.reminders || [];
 
       // 4. 映射为 todayMedications
       const todayMedications = this.mapRemindersToToday(
@@ -135,11 +205,26 @@ Page({
         medications
       );
 
-      // 5. 映射为 reminders 设置
-      const reminders = this.mapMedicationsToReminders(medications);
+      // 5. 获取提醒计划（用于“用药提醒”卡片）
+      const plansRaw = await getMedicationReminderPlans(false, userId);
+      const plans = Array.isArray(plansRaw) ? plansRaw : plansRaw?.plans || [];
+      const reminders = this.mapPlansToReminders(plans);
 
-      // 6. 计算统计数据
-      const stats = this.calculateStats(todayMedications, medicationRecords);
+      // 6. 获取统计数据（真实）
+      let stats = this.calculateStats(todayMedications, medicationRecords);
+      try {
+        const statsRaw = await getMedicationStats(7, today, userId);
+        if (statsRaw && statsRaw.success) {
+          stats = {
+            totalDays: Number(statsRaw.totalDays || 0),
+            adherenceRate: Number(statsRaw.adherenceRate || 0),
+            missedDoses: Number(statsRaw.missedDoses || 0),
+            onTimeRate: Number(statsRaw.onTimeRate || 0),
+          };
+        }
+      } catch (e) {
+        stats = this.calculateStats(todayMedications, medicationRecords);
+      }
 
       this.setData({
         medicationRecords,
@@ -182,15 +267,35 @@ Page({
         if (end < now) status = "completed";
       }
 
+      let progress = 0;
+      if (m.startDate && m.endDate) {
+        const start = new Date(m.startDate);
+        const end = new Date(m.endDate);
+        const total = Math.max(
+          1,
+          Math.floor((end - start) / (1000 * 60 * 60 * 24)) + 1
+        );
+        const passed = Math.floor((now - start) / (1000 * 60 * 60 * 24)) + 1;
+        progress = Math.min(
+          100,
+          Math.max(0, Math.round((passed / total) * 100))
+        );
+      }
+
       return {
         id: m.id,
         name: m.name,
         dose,
         unit,
         frequency: m.frequency,
-        duration: m.startDate ? `开始于 ${m.startDate}` : "",
+        duration:
+          m.startDate && m.endDate
+            ? `${m.startDate} 至 ${m.endDate}`
+            : m.startDate
+            ? `开始于 ${m.startDate}`
+            : "",
         date: m.startDate || "",
-        progress: 0, // 暂无法计算精确进度
+        progress,
         status,
         original: m,
       };
@@ -208,10 +313,12 @@ Page({
 
     return remindersToday
       .map((r) => {
-        const med = medMap[r.medicationId] || {};
+        const medId = r.medicationId ?? r.medication_id ?? null;
+        const med =
+          (medId !== null && medId !== undefined ? medMap[medId] : null) || {};
 
         // 解析剂量
-        let dose = med.dosage || "";
+        let dose = r.dosage || med.dosage || "";
         let unit = "";
         const unitMatch = dose.match(/([0-9.]+)(.*)/);
         if (unitMatch) {
@@ -220,46 +327,51 @@ Page({
         }
 
         // 解析时间
-        let time = "";
-        if (r.scheduledTime) {
+        let time = r.time || "";
+        if (!time && r.scheduledTime) {
           const parts = r.scheduledTime.split(" ");
           if (parts.length > 1) {
             time = parts[1].substring(0, 5); // HH:MM
           }
         }
 
+        const statusRaw = String(r.status || "").toLowerCase();
+        const status =
+          statusRaw === "taken" || statusRaw === "completed"
+            ? "taken"
+            : statusRaw === "missed" || statusRaw === "skipped"
+            ? "missed"
+            : r.taken
+            ? "taken"
+            : "pending";
+
         return {
-          id: r.id, // reminder instance id
-          medicationId: r.medicationId,
-          name: med.name || "未知药物",
+          id: r.id,
+          medicationId: medId,
+          name: r.medicationName || med.name || "未知药物",
           dose,
           unit,
-          type: "药物", // 后端暂未返回类型
+          type: med.frequency || "",
           time,
-          status: r.taken ? "taken" : "pending",
+          scheduledTime: r.scheduledTime || "",
+          status,
         };
       })
       .sort((a, b) => a.time.localeCompare(b.time));
   },
 
-  mapMedicationsToReminders(medications) {
-    if (!medications || !Array.isArray(medications)) return [];
-
-    const reminders = [];
-    medications.forEach((m) => {
-      if (m.reminderEnabled && m.times && m.times.length > 0) {
-        m.times.forEach((t) => {
-          reminders.push({
-            id: m.id, // 这里使用 medication id，实际上 UI 可能需要 unique key
-            medicationName: m.name,
-            time: t,
-            frequency: "每天", // 简化处理
-            enabled: true,
-          });
-        });
-      }
-    });
-    return reminders.sort((a, b) => a.time.localeCompare(b.time));
+  mapPlansToReminders(plans) {
+    if (!plans || !Array.isArray(plans)) return [];
+    return plans
+      .map((p) => ({
+        id: p.id,
+        medicationName: p.medicationName || p.medication_name || "",
+        time: p.time || "",
+        frequency: p.frequency || "",
+        enabled: !!p.enabled,
+      }))
+      .filter((x) => x.id !== undefined && x.id !== null)
+      .sort((a, b) => String(a.time || "").localeCompare(String(b.time || "")));
   },
 
   calculateStats(todayMedications, medicationRecords) {
@@ -267,15 +379,17 @@ Page({
     const takenToday = todayMedications.filter(
       (m) => m.status === "taken"
     ).length;
+    const missedToday = todayMedications.filter(
+      (m) => m.status === "missed"
+    ).length;
 
     return {
-      totalDays: Math.floor(
-        (new Date() - new Date(2024, 0, 1)) / (1000 * 60 * 60 * 24)
-      ), // 示例
+      totalDays: 0,
       adherenceRate:
         totalToday > 0 ? Math.round((takenToday / totalToday) * 100) : 100,
-      missedDoses: totalToday - takenToday,
-      onTimeRate: 90, // 示例
+      missedDoses:
+        missedToday + Math.max(0, totalToday - takenToday - missedToday),
+      onTimeRate: takenToday > 0 ? 100 : 0,
     };
   },
 
@@ -338,6 +452,7 @@ Page({
 
   // 添加用药
   addMedication() {
+    const today = new Date().toISOString().split("T")[0];
     this.setData({
       showAddModal: true,
       newMedication: {
@@ -350,6 +465,8 @@ Page({
         frequency: "",
         frequencyIndex: 0,
         times: [""],
+        startDate: today,
+        endDate: "",
         duration: "",
         notes: "",
       },
@@ -380,31 +497,26 @@ Page({
 
   // 服用药物
   async takeMedication(e) {
-    const id = e.currentTarget.dataset.id;
+    const token = this.getToken();
+    if (!token) {
+      wx.showToast({ title: "请先登录", icon: "none" });
+      setTimeout(() => {
+        wx.reLaunch({ url: "/pages/login/login" });
+      }, 500);
+      return;
+    }
+
+    const userId = this.getUserId();
+    const id = String(e.currentTarget.dataset.id ?? "");
 
     try {
-      await markMedicationTaken(id, this.getUserId());
-
-      const medications = this.data.todayMedications.map((item) => {
-        if (item.id === id) {
-          return { ...item, status: "taken" };
-        }
-        return item;
-      });
-
-      this.setData({
-        todayMedications: medications,
-      });
+      await markMedicationTaken(id, userId);
 
       wx.showToast({
         title: "已记录服用",
         icon: "success",
       });
-
-      // 更新统计
-      this.setData({
-        stats: this.calculateStats(medications, this.data.medicationRecords),
-      });
+      await this.loadData();
     } catch (error) {
       console.error("标记服用失败:", error);
       wx.showToast({ title: "操作失败", icon: "error" });
@@ -412,71 +524,162 @@ Page({
   },
 
   // 跳过药物
-  skipMedication(e) {
-    // 后端暂无跳过接口，暂时仅前端更新
-    const id = e.currentTarget.dataset.id;
-    const medications = this.data.todayMedications.map((item) => {
-      if (item.id === id) {
-        return { ...item, status: "missed" };
-      }
-      return item;
-    });
+  async skipMedication(e) {
+    const id = String(e.currentTarget.dataset.id ?? "");
+    const item = (this.data.todayMedications || []).find(
+      (x) => String(x.id) === id
+    );
 
-    this.setData({
-      todayMedications: medications,
-    });
+    const today = new Date().toISOString().split("T")[0];
+    const scheduledTime =
+      item?.scheduledTime || (item?.time ? `${today} ${item.time}:00` : "");
 
-    wx.showToast({
-      title: "已标记跳过",
-      icon: "none",
-    });
+    try {
+      await markMedicationSkipped(id, scheduledTime, this.getUserId());
+      wx.showToast({ title: "已标记跳过", icon: "none" });
+      await this.loadData();
+    } catch (error) {
+      console.error("标记跳过失败:", error);
+      wx.showToast({ title: "操作失败", icon: "error" });
+    }
   },
 
   // 查看用药详情
   viewMedicationDetail(e) {
-    const id = e.currentTarget.dataset.id;
-    wx.navigateTo({
-      url: `/pages/medication-detail/medication-detail?id=${id}`,
+    const id = String(e.currentTarget.dataset.id ?? "");
+    const item = (this.data.todayMedications || []).find(
+      (x) => String(x.id) === id
+    );
+    if (!item) return;
+
+    const statusText =
+      item.status === "taken"
+        ? "已服用"
+        : item.status === "missed"
+        ? "已错过"
+        : "待服用";
+
+    wx.showModal({
+      title: item.name || "用药详情",
+      content: `时间：${item.time || "-"}\n剂量：${item.dose || "-"}${
+        item.unit ? ` ${item.unit}` : ""
+      }\n状态：${statusText}`,
+      showCancel: false,
     });
   },
 
   // 查看记录详情
   viewRecordDetail(e) {
-    const id = e.currentTarget.dataset.id;
-    wx.navigateTo({
-      url: `/pages/medication-record/medication-record?id=${id}`,
+    const id = String(e.currentTarget.dataset.id ?? "");
+    const record = (this.data.medicationRecords || []).find(
+      (x) => String(x.id) === id
+    );
+    if (!record) return;
+
+    const raw = record.original || {};
+    const lines = [
+      `剂量：${
+        raw.dosage || `${record.dose || ""}${record.unit || ""}` || "-"
+      }`,
+      `频率：${raw.frequency || record.frequency || "-"}`,
+      `开始：${raw.startDate || record.date || "-"}`,
+      `结束：${raw.endDate || "-"}`,
+      raw.notes ? `备注：${raw.notes}` : "",
+    ].filter(Boolean);
+
+    wx.showModal({
+      title: record.name || "用药记录",
+      content: lines.join("\n"),
+      showCancel: false,
     });
   },
 
   // 查看全部记录
   viewAllRecords() {
-    wx.navigateTo({
-      url: "/pages/medication-records/medication-records",
+    wx.showModal({
+      title: "用药记录",
+      content: `共 ${this.data.medicationRecords.length || 0} 条记录`,
+      showCancel: false,
     });
   },
 
   // 管理提醒
   manageReminders() {
-    wx.navigateTo({
-      url: "/pages/medication-reminders/medication-reminders",
+    wx.showModal({
+      title: "用药提醒",
+      content: `共 ${this.data.reminders.length || 0} 条提醒`,
+      showCancel: false,
+    });
+  },
+
+  editReminder(e) {
+    const id = String(e.currentTarget.dataset.id ?? "");
+    const item = (this.data.reminders || []).find((x) => String(x.id) === id);
+    if (!item) return;
+
+    wx.showModal({
+      title: "提醒详情",
+      content: `药物：${item.medicationName || "-"}\n时间：${
+        item.time || "-"
+      }\n频率：${item.frequency || "-"}\n状态：${
+        item.enabled ? "已启用" : "已停用"
+      }`,
+      showCancel: false,
     });
   },
 
   // 切换提醒开关
-  toggleReminder(e) {
-    // 暂未实现后端开关
-    const id = e.currentTarget.dataset.id;
-    const enabled = e.detail.value;
+  async toggleReminder(e) {
+    const id = String(e.currentTarget.dataset.id ?? "");
+    const enabled = !!e.detail.value;
+    const userId = this.getUserId();
 
-    const reminders = this.data.reminders.map((item) => {
-      if (item.id === id) {
+    const prev = this.data.reminders || [];
+    const next = prev.map((item) => {
+      if (String(item.id) === id) {
         return { ...item, enabled };
       }
       return item;
     });
 
-    this.setData({
-      reminders: reminders,
+    this.setData({ reminders: next });
+
+    try {
+      const res = await setMedicationReminderActive(id, enabled, userId);
+      if (!res || res.success !== true) {
+        throw new Error(res?.message || "set_active_failed");
+      }
+      await this.loadData();
+    } catch (err) {
+      console.error("切换提醒失败:", err);
+      this.setData({ reminders: prev });
+      wx.showToast({ title: "操作失败", icon: "error" });
+    }
+  },
+
+  async deleteMedication(e) {
+    const id = String(e.currentTarget.dataset.id ?? "");
+    const record = (this.data.medicationRecords || []).find(
+      (x) => String(x.id) === id
+    );
+
+    wx.showModal({
+      title: "删除用药",
+      content: `确定删除“${record?.name || "该用药"}”吗？\n相关提醒也会停用。`,
+      success: async (res) => {
+        if (!res.confirm) return;
+        try {
+          const resp = await deleteMedicationApi(id, this.getUserId());
+          if (!resp || resp.success !== true) {
+            throw new Error(resp?.message || "delete_failed");
+          }
+          wx.showToast({ title: "已删除", icon: "success" });
+          await this.loadData();
+        } catch (error) {
+          console.error("删除用药失败:", error);
+          wx.showToast({ title: "删除失败", icon: "error" });
+        }
+      },
     });
   },
 
@@ -542,6 +745,31 @@ Page({
     });
   },
 
+  onStartDateChange(e) {
+    const startDate = e.detail.value;
+    const currentEnd = this.data.newMedication.endDate || "";
+    this.setData({
+      "newMedication.startDate": startDate,
+      "newMedication.endDate":
+        currentEnd && currentEnd < startDate ? "" : currentEnd,
+    });
+  },
+
+  onEndDateChange(e) {
+    const endDate = e.detail.value;
+    const startDate =
+      this.data.newMedication.startDate ||
+      new Date().toISOString().split("T")[0];
+
+    if (endDate && endDate < startDate) {
+      wx.showToast({ title: "结束日期不能早于开始日期", icon: "none" });
+      this.setData({ "newMedication.endDate": "" });
+      return;
+    }
+
+    this.setData({ "newMedication.endDate": endDate });
+  },
+
   // 提醒相关处理
   onReminderInputChange(e) {
     const field = e.currentTarget.dataset.field;
@@ -588,6 +816,12 @@ Page({
     }
 
     const validTimes = medication.times.filter((time) => time);
+    const today = new Date().toISOString().split("T")[0];
+    const startDate = medication.startDate || today;
+    const endDate =
+      medication.endDate && medication.endDate >= startDate
+        ? medication.endDate
+        : "";
 
     try {
       const payload = {
@@ -595,10 +829,17 @@ Page({
         dosage: `${medication.dose}${medication.unit}`,
         frequency: medication.frequency,
         times: validTimes,
-        startDate: new Date().toISOString().split("T")[0],
+        startDate,
+        ...(endDate ? { endDate } : {}),
         notes: medication.notes,
         reminderEnabled: validTimes.length > 0,
       };
+
+      if (payload.reminderEnabled) {
+        try {
+          await this.ensureMedicationSubscribeAuth();
+        } catch (e) {}
+      }
 
       await createMedication(payload, this.getUserId());
 
@@ -641,18 +882,20 @@ Page({
 
     try {
       const payload = {
-        medication_name: selectedMed.name,
-        // 注意：后端 createMedicationReminder 实际上是 createMedication 的逻辑，
-        // 如果要给已有药物加提醒，可能需要更新药物或创建一个"仅提醒"的条目。
-        // 这里我们假设创建一个新的提醒条目
-        name: selectedMed.name,
         times: [reminder.time],
         startDate: new Date().toISOString().split("T")[0],
         notes: reminder.message,
-        reminderEnabled: true,
       };
 
-      await createMedicationReminder(payload, this.getUserId());
+      try {
+        await this.ensureMedicationSubscribeAuth();
+      } catch (e) {}
+
+      await addMedicationRemindersToMedication(
+        selectedMed.id,
+        payload,
+        this.getUserId()
+      );
 
       wx.showToast({
         title: "设置成功",

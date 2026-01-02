@@ -105,6 +105,7 @@ def add_medication_reminder(user_id: str, medication_name: str, dosage: str,
             INSERT INTO user_medications
             (user_id, drug_name, dosage, frequency, start_date, end_date, notes)
             VALUES (%s, %s, %s, %s, %s, %s, %s)
+            RETURNING id
         """
 
         frequency_text = f"每日{len(valid_times)}次，时间：{', '.join(valid_times)}"
@@ -125,6 +126,7 @@ def add_medication_reminder(user_id: str, medication_name: str, dosage: str,
                 INSERT INTO reminders
                 (user_id, reminder_type, title, description, reminder_time)
                 VALUES (%s, %s, %s, %s, %s)
+                RETURNING id
                 """,
                 (user_id, "medication", medication_name, notes, first_dt)
             )
@@ -136,6 +138,7 @@ def add_medication_reminder(user_id: str, medication_name: str, dosage: str,
                 (reminder_id, user_id, medication_id, medication_name, dosage, frequency, reminder_times,
                  start_date, end_date, notes)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING id
                 """,
                 (main_id, user_id, medication_id, medication_name, dosage, frequency_text, json.dumps([time_str]),
                  start_date_sql, end_date_sql, notes)
