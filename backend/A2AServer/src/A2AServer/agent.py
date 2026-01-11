@@ -322,19 +322,20 @@ class BasicAgent:
                      remaining = chunk["assistant_text"][len(accumulated_text):]
                      if remaining:
                         yield {"text": remaining, "type": "reasoning"} # YIELD here as well 剩余文本
+
                     tool_calls = chunk.get("tool_calls", [])
-                     if tool_calls:
-                         for tc in tool_calls:
-                             tc["type"] = "function"
-                         assistant_message = {
-                             "role": "assistant",
-                             "content": chunk["assistant_text"],
-                             "tool_calls": tool_calls
-                         }
-                         yield {"text": f"{json.dumps(tool_calls, ensure_ascii=False)}", "type": "tool_call"}
+                    if tool_calls:
+                        for tc in tool_calls:
+                            tc["type"] = "function"
+                        assistant_message = {
+                            "role": "assistant",
+                            "content": chunk["assistant_text"],
+                            "tool_calls": tool_calls
+                        }
+                        yield {"text": f"{json.dumps(tool_calls, ensure_ascii=False)}", "type": "tool_call"}
 
                         tool_results_to_append = []
-                         for tc in tool_calls:
+                        for tc in tool_calls:
                              if tc.get("function", {}).get("name"):
                                  result = await process_tool_call(tc, self.servers, self.quiet_mode)
                                  if result:
