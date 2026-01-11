@@ -4,6 +4,6 @@
         "urlCheck": false,
         "compileHotReLoad": true
     },
-    "libVersion": "3.8.10",
+    "libVersion": "3.13.1",
     "projectname": "wechat_mini_program"
 }

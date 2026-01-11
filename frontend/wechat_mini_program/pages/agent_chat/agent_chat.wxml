@@ -109,19 +109,7 @@
         {{isSending ? '发送中' : '发送'}}
         </button>
         <!-- 无disabled的发送按钮 -->
-        <!-- 临时调试按钮 -->
-        <button 
-          bindtap="debugState"
-          style="margin-left: 10rpx; padding: 8rpx 16rpx; font-size: 24rpx; background: #ff9500; color: white; border-radius: 8rpx;"
-        >
-          状态
-        </button>
-        <button 
-          bindtap="resetState"
-          style="margin-left: 10rpx; padding: 8rpx 16rpx; font-size: 24rpx; background: #ff3b30; color: white; border-radius: 8rpx;"
-        >
-          重置
-        </button>
+
       </view>
     </view>
   </view>

@@ -7,12 +7,14 @@
 ## 核心特性
 
 ### 🧠 记忆类型支持
-- **短期记忆 (Short-term)**: 临时信息，24小时后自动过期
-- **工作记忆 (Working)**: 当前任务相关信息，7天后过期
+
+- **短期记忆 (Short-term)**: 临时信息，24 小时后自动过期
+- **工作记忆 (Working)**: 当前任务相关信息，7 天后过期
 - **长期记忆 (Long-term)**: 重要信息，永久保存
 - **元记忆 (Meta)**: 关于记忆本身的信息
 
 ### 🔍 智能检索
+
 - **语义搜索**: 基于向量嵌入的语义相似度搜索
 - **时间范围搜索**: 按时间段检索记忆
 - **标签搜索**: 基于标签的精确匹配
@@ -20,12 +22,14 @@
 - **关联记忆**: 查找相关联的记忆
 
 ### 📊 记忆管理
+
 - **重要性评估**: 基于多因子的智能重要性评分
 - **记忆压缩**: 自动合并相似记忆
 - **过期清理**: 自动清理过期和低价值记忆
 - **关联构建**: 自动建立记忆间的关联关系
 
 ### 🔒 安全特性
+
 - **数据加密**: 敏感信息加密存储
 - **访问控制**: 基于智能体和用户的权限控制
 - **审计日志**: 完整的操作记录
@@ -58,9 +62,8 @@
 ### 1. 环境要求
 
 - Python 3.8+
-- MySQL 8.0+
 - 至少 4GB RAM
-- 支持向量计算的CPU或GPU
+- 支持向量计算的 CPU 或 GPU
 
 ### 2. 安装依赖
 
@@ -71,7 +74,7 @@ pip install -r requirements.txt
 
 ### 3. 数据库配置
 
-创建MySQL数据库：
+创建 MySQL 数据库：
 
 ```sql
 CREATE DATABASE agent_memory CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
@@ -302,15 +305,15 @@ print(f"必需标签: {health_config['required_tags']}")
 
 ### 2. 嵌入模型优化
 
-- 使用GPU加速（如果可用）
+- 使用 GPU 加速（如果可用）
 - 调整批处理大小
 - 考虑使用更小的模型以提高速度
 
 ### 3. 缓存策略
 
 - 启用记忆缓存
-- 配置适当的缓存TTL
-- 使用Redis作为分布式缓存
+- 配置适当的缓存 TTL
+- 使用 Redis 作为分布式缓存
 
 ## 测试
 
@@ -331,11 +334,13 @@ python -m unittest test_memory_system.TestMemorySystem.test_store_memory
 ### 常见问题
 
 1. **数据库连接失败**
+
    - 检查数据库服务是否运行
    - 验证连接参数
    - 确认用户权限
 
 2. **嵌入模型加载失败**
+
    - 检查网络连接
    - 验证模型名称
    - 确认磁盘空间
@@ -353,7 +358,7 @@ python -m unittest test_memory_system.TestMemorySystem.test_store_memory
 tail -f logs/memory_system.log
 ```
 
-## API参考
+## API 参考
 
 ### 核心接口
 
@@ -362,31 +367,33 @@ tail -f logs/memory_system.log
 存储新记忆。
 
 **参数:**
-- `agent_id` (str): 智能体ID
-- `user_id` (str): 用户ID
+
+- `agent_id` (str): 智能体 ID
+- `user_id` (str): 用户 ID
 - `content` (dict): 记忆内容
 - `memory_type` (str): 记忆类型
 - `importance` (float): 重要性评分 (0.0-1.0)
 - `tags` (list): 标签列表
 - `expires_hours` (int): 过期时间（小时）
 
-**返回:** 记忆ID (str)
+**返回:** 记忆 ID (str)
 
 #### `search_memories(query, agent_id, user_id, memory_types, limit, min_similarity)`
 
 语义搜索记忆。
 
 **参数:**
+
 - `query` (str): 查询文本
-- `agent_id` (str): 智能体ID
-- `user_id` (str): 用户ID
+- `agent_id` (str): 智能体 ID
+- `user_id` (str): 用户 ID
 - `memory_types` (list): 记忆类型过滤
 - `limit` (int): 结果数量限制
 - `min_similarity` (float): 最小相似度阈值
 
 **返回:** 记忆列表 (list)
 
-更多API详情请参考源代码文档。
+更多 API 详情请参考源代码文档。
 
 ## 贡献指南
 
@@ -404,8 +411,7 @@ tail -f logs/memory_system.log
 
 如有问题或建议，请通过以下方式联系：
 
-- 项目Issues: [GitHub Issues](https://github.com/your-repo/issues)
-- 邮箱: your-email@example.com
+- 邮箱: 2925042883@qq.com
 
 ---
 

@@ -284,6 +284,13 @@ class BasicAgent:
          except Exception as e:
              logger.warning(f"注入记忆上下文失败：{e}")
 
+         try:
+             conv = self.session_conversations[sessionId]
+             while conv and conv[-1].get("role") == "assistant" and conv[-1].get("tool_calls"):
+                 conv.pop()
+         except Exception:
+             pass
+
          if not self.session_conversations[sessionId]:
              self.session_conversations[sessionId].append({"role": "system", "content": system_content})
          else:
@@ -314,9 +321,8 @@ class BasicAgent:
                  else:
                      remaining = chunk["assistant_text"][len(accumulated_text):]
                      if remaining:
-                         yield {"text": remaining, "type": "reasoning"} # YIELD here as well 剩余文本
-
-                     tool_calls = chunk.get("tool_calls", [])
+                        yield {"text": remaining, "type": "reasoning"} # YIELD here as well 剩余文本
+                    tool_calls = chunk.get("tool_calls", [])
                      if tool_calls:
                          for tc in tool_calls:
                              tc["type"] = "function"
@@ -325,21 +331,34 @@ class BasicAgent:
                              "content": chunk["assistant_text"],
                              "tool_calls": tool_calls
                          }
-                         self.session_conversations[sessionId].append(assistant_message)
                          yield {"text": f"{json.dumps(tool_calls, ensure_ascii=False)}", "type": "tool_call"}
 
+                        tool_results_to_append = []
                          for tc in tool_calls:
                              if tc.get("function", {}).get("name"):
-                                 # 对工具进行参数的修改
-                                 result = await process_tool_call(tc, self.servers, self.quiet_mode) # AWAIT valid here
+                                 result = await process_tool_call(tc, self.servers, self.quiet_mode)
                                  if result:
-                                     # 这里是工具的调用结果，那么只需要部分数据添加到LLM的会话中
                                      new_res = copy.deepcopy(result)
                                      if "data" in result:
                                          result.pop("data")
-                                     self.session_conversations[sessionId].append(result)
+                                     tool_results_to_append.append(result)
                                      tool_calls_processed = True
                                      yield {"text": f"{json.dumps(new_res)}", "type": "tool_result"}
+                         if not tool_results_to_append:
+                             for tc in tool_calls:
+                                 tool_call_id = tc.get("id")
+                                 if tool_call_id:
+                                     tool_results_to_append.append(
+                                         {
+                                             "role": "tool",
+                                             "tool_call_id": tool_call_id,
+                                             "content": json.dumps({"error": "Tool call was not executed"}, ensure_ascii=False),
+                                         }
+                                     )
+                             tool_calls_processed = True
+                         if tool_calls_processed:
+                             self.session_conversations[sessionId].append(assistant_message)
+                             self.session_conversations[sessionId].extend(tool_results_to_append)
                      else:
                          assistant_message = {
                              "role": "assistant",

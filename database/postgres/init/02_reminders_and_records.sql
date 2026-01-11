@@ -98,3 +98,27 @@ CREATE TABLE IF NOT EXISTS file_attachments (
 );
 
 CREATE INDEX IF NOT EXISTS idx_file_attachments_record ON file_attachments(record_id);
+
+-- RAG chunks (pgvector)
+CREATE TABLE IF NOT EXISTS rag_chunks (
+    id UUID PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    source_type TEXT NOT NULL,
+    source_id TEXT NOT NULL,
+    record_type TEXT,
+    title TEXT,
+    chunk_index INTEGER NOT NULL,
+    chunk_text TEXT NOT NULL,
+    embedding_model TEXT NOT NULL,
+    embedding_dim INTEGER NOT NULL,
+    embedding vector(384) NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (source_type, source_id, chunk_index, embedding_model)
+);
+
+CREATE INDEX IF NOT EXISTS idx_rag_chunks_user ON rag_chunks(user_id);
+CREATE INDEX IF NOT EXISTS idx_rag_chunks_user_source ON rag_chunks(user_id, source_type);
+CREATE INDEX IF NOT EXISTS idx_rag_chunks_source ON rag_chunks(source_type, source_id);
+CREATE INDEX IF NOT EXISTS idx_rag_chunks_created ON rag_chunks(created_at);
+CREATE INDEX IF NOT EXISTS idx_rag_chunks_embedding ON rag_chunks USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);

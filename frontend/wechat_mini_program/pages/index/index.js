@@ -17,6 +17,16 @@ Page({
     recentActivities: [],
   },
 
+  formatActivityTime(t) {
+    const s = (t ?? "").toString().trim();
+    if (!s) return "";
+    if (s.startsWith("今天") || s.startsWith("昨天")) return s;
+    if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}/.test(s)) return s.slice(0, 16);
+    if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(s))
+      return s.slice(0, 16).replace("T", " ");
+    return s.length > 16 ? s.slice(0, 16).replace("T", " ") : s;
+  },
+
   onLoad() {
     this.checkApi();
     this.checkLoginStatus();
@@ -60,16 +70,64 @@ Page({
   // 加载仪表板数据
   async loadDashboardData() {
     try {
-      // 加载健康档案数量
-      await this.loadHealthRecordsCount();
-      // 加载用药记录数量
-      await this.loadMedicationCount();
-      // 加载就诊摘要数量
-      await this.loadSummaryCount();
-      // 加载最近活动
-      await this.loadRecentActivities();
+      await this.loadDashboardStats();
     } catch (error) {
       console.error("加载仪表板数据失败:", error);
+    }
+  },
+
+  // 统一加载仪表板统计与最近活动
+  async loadDashboardStats() {
+    try {
+      const response = await request("/api/dashboard/stats", {
+        method: "GET",
+      });
+      if (!response || typeof response !== "object") {
+        this.setData({
+          healthRecordsCount: 0,
+          medicationCount: 0,
+          summaryCount: 0,
+          recentActivities: [],
+        });
+        return;
+      }
+
+      const healthRecordsCount =
+        typeof response.health_records_count === "number"
+          ? response.health_records_count
+          : 0;
+      const summaryCount =
+        typeof response.summary_count === "number" ? response.summary_count : 0;
+      const medicationCount =
+        typeof response.medication_count === "number"
+          ? response.medication_count
+          : 0;
+
+      const activities = Array.isArray(response.recent_activities)
+        ? response.recent_activities.map((item, index) => ({
+            id: item.id || `${index}`,
+            title: item.title || "",
+            time: this.formatActivityTime(
+              item.time || item.created_at || item.timestamp
+            ),
+            icon: item.icon || "📝",
+          }))
+        : [];
+
+      this.setData({
+        healthRecordsCount,
+        summaryCount,
+        medicationCount,
+        recentActivities: activities,
+      });
+    } catch (error) {
+      console.error("加载仪表板统计失败:", error);
+      this.setData({
+        healthRecordsCount: 0,
+        medicationCount: 0,
+        summaryCount: 0,
+        recentActivities: [],
+      });
     }
   },
 
@@ -113,8 +171,19 @@ Page({
 
   // 加载就诊摘要数量
   async loadSummaryCount() {
-    // 模拟数据，实际应调用API
-    this.setData({ summaryCount: 5 });
+    try {
+      const response = await request("/api/visit-summaries/count", {
+        method: "GET",
+      });
+      if (response && typeof response.count === "number") {
+        this.setData({ summaryCount: response.count });
+      } else {
+        this.setData({ summaryCount: 0 });
+      }
+    } catch (error) {
+      console.error("加载就诊摘要数量失败:", error);
+      this.setData({ summaryCount: 0 });
+    }
   },
 
   // 加载最近活动

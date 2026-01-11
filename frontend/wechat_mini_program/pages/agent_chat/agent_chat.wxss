@@ -3,24 +3,24 @@
   display: flex;
   flex-direction: column;
   height: 100vh;
-  background-color: #f8f9fa;
+  background-color: var(--bg-color);
   position: relative;
 }
 
 /* 聊天历史区域 */
 .chat-history {
-  padding: 20rpx;
-  background-color: #f8f9fa;
+  padding: 30rpx 20rpx;
+  background-color: var(--bg-color);
   height: 100vh;
   box-sizing: border-box;
-  padding-bottom: 280rpx;
+  padding-bottom: calc(250rpx + env(safe-area-inset-bottom));
 }
 
 .jump-to-bottom {
   position: absolute;
-  right: 24rpx;
-  bottom: 240rpx;
-  padding: 14rpx 20rpx;
+  right: 30rpx;
+  bottom: calc(260rpx + env(safe-area-inset-bottom));
+  padding: 16rpx 24rpx;
   border-radius: 999rpx;
   background: rgba(0, 0, 0, 0.72);
   color: #fff;
@@ -28,14 +28,16 @@
   z-index: 20;
   display: flex;
   align-items: center;
+  box-shadow: 0 4rpx 12rpx rgba(0, 0, 0, 0.15);
+  backdrop-filter: blur(10px);
 }
 
 /* 消息容器 */
 .message-bubble-container {
   display: flex;
   align-items: flex-start;
-  margin-bottom: 30rpx;
-  padding: 0 20rpx;
+  margin-bottom: 40rpx;
+  padding: 0 10rpx;
 }
 
 .message-bubble-container.user {
@@ -56,10 +58,11 @@
   justify-content: center;
   margin: 0 20rpx;
   flex-shrink: 0;
+  box-shadow: var(--shadow-sm);
 }
 
 .user-avatar {
-  background: linear-gradient(135deg, #007aff 0%, #0056cc 100%);
+  background: var(--primary-gradient);
 }
 
 .ai-avatar {
@@ -74,40 +77,43 @@
 
 /* 消息气泡 */
 .message-bubble {
-  max-width: 500rpx;
-  padding: 24rpx 28rpx;
-  border-radius: 24rpx;
+  max-width: 520rpx;
+  padding: 24rpx 30rpx;
+  border-radius: 32rpx;
   word-wrap: break-word;
   position: relative;
-  box-shadow: 0 2rpx 8rpx rgba(0, 0, 0, 0.1);
+  box-shadow: var(--shadow-sm);
 }
 
 .message-bubble-container.user .message-bubble {
-  background-color: #007aff;
+  background: var(--primary-gradient);
   color: white;
   border-bottom-right-radius: 8rpx;
+  border-top-right-radius: 32rpx;
 }
 
 .message-bubble-container.assistant .message-bubble {
   background-color: white;
-  color: #333;
-  border: 1rpx solid #e5e5ea;
+  color: var(--text-main);
+  border: 1rpx solid rgba(0, 0, 0, 0.05);
   border-bottom-left-radius: 8rpx;
+  border-top-left-radius: 32rpx;
 }
 
 /* 消息内容 */
 .message-content {
   font-size: 32rpx;
-  line-height: 1.5;
+  line-height: 1.6;
   word-break: break-word;
 }
 
 /* 图片消息 */
 .message-image {
   max-width: 100%;
-  border-radius: 12rpx;
-  margin-top: 10rpx;
+  border-radius: 16rpx;
+  margin-top: 16rpx;
   display: block;
+  box-shadow: 0 4rpx 12rpx rgba(0, 0, 0, 0.1);
 }
 
 /* 文件消息 */
@@ -115,9 +121,9 @@
   display: flex;
   align-items: center;
   background-color: rgba(0, 0, 0, 0.05);
-  padding: 16rpx;
-  border-radius: 12rpx;
-  margin-top: 10rpx;
+  padding: 20rpx;
+  border-radius: 16rpx;
+  margin-top: 16rpx;
 }
 
 .message-bubble-container.user .message-file {
@@ -125,8 +131,8 @@
 }
 
 .file-icon {
-  font-size: 40rpx;
-  margin-right: 16rpx;
+  font-size: 44rpx;
+  margin-right: 20rpx;
 }
 
 .file-info {
@@ -136,7 +142,7 @@
 
 .file-name {
   font-size: 28rpx;
-  font-weight: 500;
+  font-weight: 600;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -144,58 +150,63 @@
 
 .file-type {
   font-size: 22rpx;
-  opacity: 0.7;
-  margin-top: 4rpx;
+  opacity: 0.8;
+  margin-top: 6rpx;
 }
 
 /* AI回答滚动窗口 */
 .message-content-collapsed {
   max-height: 600rpx;
   overflow: hidden;
+  mask-image: linear-gradient(to bottom, black 80%, transparent 100%);
 }
 
 .expand-toggle {
-  margin-top: 10rpx;
-  padding: 8rpx 14rpx;
+  margin-top: 16rpx;
+  padding: 10rpx 20rpx;
   font-size: 24rpx;
-  border: 1px solid #999;
-  border-radius: 8rpx;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  border-radius: 20rpx;
   background: #fff;
+  color: var(--primary-color);
+  box-shadow: var(--shadow-sm);
 }
 
 /* 时间戳 */
 .message-time {
   font-size: 22rpx;
-  opacity: 0.7;
+  opacity: 0.6;
   margin-top: 12rpx;
   text-align: right;
+  font-weight: 500;
 }
 
 .message-bubble-container.assistant .message-time {
-  color: #999;
+  color: var(--text-sub);
 }
 
 .message-bubble-container.user .message-time {
-  color: rgba(255, 255, 255, 0.8);
+  color: rgba(255, 255, 255, 0.9);
 }
 
 /* 重复计数 */
 .dup-count {
   font-size: 20rpx;
-  opacity: 0.6;
-  margin-top: 8rpx;
-  padding: 4rpx 12rpx;
-  background-color: rgba(0, 0, 0, 0.1);
-  border-radius: 12rpx;
+  opacity: 0.8;
+  margin-top: 10rpx;
+  padding: 6rpx 16rpx;
+  background-color: rgba(0, 0, 0, 0.15);
+  border-radius: 20rpx;
   display: inline-block;
+  font-weight: 600;
 }
 
 /* 加载状态 */
 .loading-container {
   display: flex;
   align-items: flex-start;
-  margin-bottom: 30rpx;
-  padding: 0 20rpx;
+  margin-bottom: 40rpx;
+  padding: 0 10rpx;
 }
 
 .loading-avatar {
@@ -208,15 +219,16 @@
   justify-content: center;
   margin-right: 20rpx;
   flex-shrink: 0;
+  box-shadow: var(--shadow-sm);
 }
 
 .loading-bubble {
   background-color: white;
-  padding: 24rpx 28rpx;
-  border-radius: 24rpx;
+  padding: 24rpx 30rpx;
+  border-radius: 32rpx;
   border-bottom-left-radius: 8rpx;
-  border: 1rpx solid #e5e5ea;
-  box-shadow: 0 2rpx 8rpx rgba(0, 0, 0, 0.1);
+  border: 1rpx solid rgba(0, 0, 0, 0.05);
+  box-shadow: var(--shadow-sm);
 }
 
 /* 打字指示器 */
@@ -227,11 +239,11 @@
 }
 
 .dot {
-  width: 12rpx;
-  height: 12rpx;
+  width: 14rpx;
+  height: 14rpx;
   border-radius: 50%;
-  background-color: #007aff;
-  margin-right: 8rpx;
+  background-color: var(--primary-color);
+  margin-right: 10rpx;
   animation: typing 1.4s infinite ease-in-out;
 }
 
@@ -251,7 +263,7 @@
   0%,
   80%,
   100% {
-    transform: scale(0.8);
+    transform: scale(0.6);
     opacity: 0.5;
   }
   40% {
@@ -261,28 +273,36 @@
 }
 
 .loading-text {
-  font-size: 28rpx;
-  color: #666;
+  font-size: 26rpx;
+  color: var(--text-sub);
+  font-weight: 500;
 }
 
 /* 输入区域 */
 .chat-input-area {
   background-color: white;
-  border-top: 1rpx solid #e5e5ea;
-  padding: 20rpx;
-  box-shadow: 0 -2rpx 8rpx rgba(0, 0, 0, 0.05);
+  border-top: 1rpx solid rgba(0, 0, 0, 0.05);
+  padding: 20rpx 30rpx;
+  box-shadow: 0 -4rpx 16rpx rgba(0, 0, 0, 0.05);
   position: fixed;
   left: 0;
   right: 0;
   bottom: 0;
   z-index: 30;
+  padding-bottom: calc(20rpx + env(safe-area-inset-bottom));
 }
 
 .input-container {
-  background-color: #f8f9fa;
-  border-radius: 24rpx;
-  padding: 16rpx 24rpx;
-  border: 1rpx solid #e5e5ea;
+  background-color: #f5f7fa;
+  border-radius: 40rpx;
+  padding: 16rpx 30rpx;
+  border: 1rpx solid rgba(0, 0, 0, 0.05);
+  transition: border-color 0.3s, background-color 0.3s;
+}
+
+.input-container:active {
+  background-color: white;
+  border-color: var(--primary-color);
 }
 
 .chat-input {
@@ -295,65 +315,41 @@
   border: none;
   outline: none;
   resize: none;
+  color: var(--text-main);
 }
 
 .input-actions {
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-end;
   align-items: center;
   margin-top: 16rpx;
 }
 
 .char-count {
   font-size: 24rpx;
-  color: #999;
+  color: var(--text-sub);
+  margin-right: 20rpx;
 }
 
 .send-button {
-  padding: 12rpx 32rpx;
-  border-radius: 20rpx;
-  font-size: 28rpx;
-  font-weight: 500;
-  border: none;
-  transition: all 0.3s ease;
-}
-
-.send-button.active {
-  background: linear-gradient(135deg, #007aff 0%, #0056cc 100%);
-  color: white;
-  box-shadow: 0 4rpx 12rpx rgba(0, 122, 255, 0.3);
+  margin: 0 !important;
+  padding: 10rpx 30rpx !important;
+  font-size: 28rpx !important;
+  border-radius: 30rpx !important;
+  background: var(--primary-color) !important;
+  color: white !important;
+  font-weight: 500 !important;
+  min-height: 60rpx !important;
+  line-height: 1.5 !important;
+  width: auto !important;
 }
 
 .send-button.disabled {
-  background-color: #e5e5ea;
-  color: #999;
-  box-shadow: none;
-  opacity: 0.6;
-  /*pointer-events: none;*/
+  background: #e0e0e0 !important;
+  color: #999 !important;
 }
-button[disabled] {
-  color: #cccccc !important;
-  background-color: #f5f5f5 !important;
-}
-.send-button.active:active {
-  transform: scale(0.95);
-}
-.thinking-container {
-  margin-top: 10rpx;
-}
-.thinking-toggle {
-  margin-top: 8rpx;
-  padding: 8rpx 14rpx;
-  font-size: 24rpx;
-  border: 1px solid #999;
-  border-radius: 8rpx;
-  background: #fff;
-}
-.thinking-content {
-  margin-top: 8rpx;
-  padding: 12rpx;
-  background: #f5f5f5;
-  border-radius: 8rpx;
-  font-size: 24rpx;
-  word-break: break-all;
+
+.send-button.active {
+  background: var(--primary-gradient) !important;
+  box-shadow: 0 4rpx 12rpx rgba(0, 122, 255, 0.3);
 }

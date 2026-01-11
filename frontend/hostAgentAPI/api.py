@@ -5,7 +5,8 @@ import os
 import sys
 import psycopg
 from psycopg.rows import dict_row
-from fastapi import FastAPI, APIRouter, Response, Request, UploadFile, File, Depends
+from fastapi import FastAPI, APIRouter, Response, Request, UploadFile, File, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from typing import List, Optional, Dict, Any
 from fastapi.middleware.cors import CORSMiddleware
 from server import ConversationServer
@@ -14,6 +15,8 @@ from auth_middleware import get_current_user_optional
 from dotenv import load_dotenv
 import json
 from datetime import date, datetime
+from urllib.parse import unquote
+import httpx
 
 load_dotenv(override=False)
 
@@ -182,6 +185,109 @@ async def log_request_body(request: Request, call_next):
     return response
 router = APIRouter()
 agent_server = ConversationServer(router)
+
+def _normalize_agent_name(name: str) -> str:
+    n = (name or "").strip()
+    alias = {
+        "就诊摘要生成器": "就诊摘要生成",
+        "就诊摘要": "就诊摘要生成",
+        "就诊摘要助手": "就诊摘要生成",
+        "健康档案": "健康档案管理员",
+        "健康档案管理": "健康档案管理员",
+        "档案管理员": "健康档案管理员",
+    }
+    return alias.get(n, n)
+
+
+def _resolve_agent_url_by_name(agent_name: str) -> str | None:
+    name = _normalize_agent_name(agent_name)
+    agents = getattr(agent_server, "manager", None)
+    cards = getattr(agents, "agents", None) if agents else None
+    if not cards:
+        return None
+
+    for c in cards:
+        try:
+            if c.name == name:
+                return c.url
+        except Exception:
+            continue
+    name_l = name.lower()
+    for c in cards:
+        try:
+            if c.name.lower() == name_l:
+                return c.url
+        except Exception:
+            continue
+    for c in cards:
+        try:
+            if name_l and name_l in c.name.lower():
+                return c.url
+        except Exception:
+            continue
+    return None
+
+
+@app.post("/a2a")
+async def a2a_streaming_proxy(request: Request):
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="请求体必须是JSON")
+
+    method = body.get("method")
+    if method not in ("tasks/sendSubscribe", "tasks/send"):
+        raise HTTPException(status_code=400, detail="不支持的method")
+
+    hdr = request.headers.get("X-Target-Agent") or request.headers.get("x-target-agent") or ""
+    agent_name = unquote(hdr).strip() if isinstance(hdr, str) else ""
+    if not agent_name:
+        try:
+            agent_name = (
+                (body.get("params") or {})
+                .get("message", {})
+                .get("metadata", {})
+                .get("selected_agent", "")
+            )
+        except Exception:
+            agent_name = ""
+    if not agent_name:
+        raise HTTPException(status_code=400, detail="缺少目标智能体名称")
+
+    agent_url = _resolve_agent_url_by_name(agent_name)
+    if not agent_url:
+        raise HTTPException(status_code=404, detail="未找到目标智能体")
+
+    auth = request.headers.get("authorization") or request.headers.get("Authorization") or ""
+    headers: dict[str, str] = {"Content-Type": "application/json"}
+    if isinstance(auth, str) and auth.strip():
+        headers["Authorization"] = auth.strip()
+
+    timeout = httpx.Timeout(connect=10.0, read=None, write=10.0, pool=10.0)
+
+    async def _iter():
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            async with client.stream(
+                "POST",
+                agent_url.rstrip("/"),
+                headers=headers,
+                json=body,
+            ) as resp:
+                if resp.status_code < 200 or resp.status_code >= 300:
+                    data = await resp.aread()
+                    raise HTTPException(
+                        status_code=resp.status_code,
+                        detail=(data.decode("utf-8", errors="replace") if data else ""),
+                    )
+                async for chunk in resp.aiter_bytes():
+                    if chunk:
+                        yield chunk
+
+    return StreamingResponse(
+        _iter(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache"},
+    )
 
 # === 集成健康档案 API（方案B：将后端 API 挂载到 hostAgentAPI）===
 # 为了在同一进程内复用后端实现，这里将请求转发到 backend/health_records_api.py 中已实现的处理函数
@@ -566,6 +672,14 @@ try:
         return {"status": "ok"}
 
     # === 新增：就诊摘要与咨询历史代理 ===
+    @health_router.get("/api/visit-summaries/count")
+    async def get_visit_summary_count_proxy(
+        user: dict = Depends(get_current_user),
+        request: Request = None
+    ):
+        user_id = _get_user_id(user)
+        return await health_api.get_visit_summary_count(user_id=user_id, request=request)
+
     @health_router.get("/api/visit-summaries/history")
     async def get_visit_summaries_proxy(
         skip: int = 0,
@@ -605,6 +719,30 @@ try:
     ):
         user_id = _get_user_id(user)
         return await health_api.get_consultation_history(skip=skip, limit=limit, user_id=user_id, request=request)
+
+    @health_router.get("/api/dashboard/recent-activities")
+    async def get_dashboard_recent_activities_proxy(
+        limit: int = 10,
+        user: dict = Depends(get_current_user),
+        request: Request = None,
+    ):
+        user_id = _get_user_id(user)
+        return await health_api.get_dashboard_recent_activities(
+            limit=limit,
+            user_id=user_id,
+            request=request,
+        )
+
+    @health_router.get("/api/dashboard/stats")
+    async def get_dashboard_stats_proxy(
+        user: dict = Depends(get_current_user),
+        request: Request = None,
+    ):
+        user_id = _get_user_id(user)
+        return await health_api.get_dashboard_stats(
+            user_id=user_id,
+            request=request,
+        )
 
     @health_router.post("/api/visit-summaries/analyze-image")
     async def analyze_visit_summary_image(

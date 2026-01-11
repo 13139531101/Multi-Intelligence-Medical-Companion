@@ -6,6 +6,7 @@ const {
   getProcessingMessages,
   queryEvents,
   sendTaskStreaming,
+  sendTaskStreamingViaHost,
   listRemoteAgents,
   getAgentCard,
   createConsultation,
@@ -34,6 +35,7 @@ Page({
     mode: "default", // default, summary, consultation, medication, health_records
     agentType: "default",
     agentUrl: "",
+    selectedAgentName: "",
     sessionId: "",
     suggestions: [],
     isHistorySynced: false,
@@ -641,74 +643,9 @@ Page({
           timeString: this.formatTime(Date.now() / 1000),
         },
       ],
+      agentUrl: targetAgentName ? "__HOST_API__" : "",
+      selectedAgentName: targetAgentName || "",
     });
-
-    // 查找对应 Agent 的 URL
-    if (targetAgentName) {
-      try {
-        const agents = await listRemoteAgents();
-        let target = agents.find(
-          (a) => a.name === targetAgentName || a.name.includes(targetAgentName)
-        );
-
-        if (!target) {
-          // 尝试不区分大小写匹配
-          target = agents.find(
-            (a) =>
-              a.name.toLowerCase() === targetAgentName.toLowerCase() ||
-              a.name.toLowerCase().includes(targetAgentName.toLowerCase())
-          );
-        }
-
-        if (target && (target.url || target.base_url)) {
-          const rawUrl = target.url || target.base_url;
-          const resolvedUrl = resolveAgentUrl(rawUrl);
-
-          // Temporary fix: Force Host API routing for Health Advisor to avoid direct connection issues
-          if (targetAgentName === "健康顾问") {
-            console.log("Using Host API for Health Advisor");
-            this.setData({ agentUrl: "" });
-          } else {
-            this.setData({ agentUrl: resolvedUrl });
-          }
-
-          console.log(
-            "Agent URL resolved:",
-            resolvedUrl,
-            "Final agentUrl:",
-            this.data.agentUrl
-          );
-        } else {
-          // Fallback: 手动映射如果已知 agent
-          const svcMap = {
-            健康顾问: "10011",
-            健康档案管理员: "10010",
-            用药提醒助手: "10012",
-            就诊摘要生成器: "10013",
-          };
-          if (svcMap[targetAgentName]) {
-            const fallbackUrl = `http://127.0.0.1:${svcMap[targetAgentName]}`;
-            this.setData({ agentUrl: fallbackUrl });
-            console.log(
-              `Fallback resolved ${targetAgentName} to ${fallbackUrl}`
-            );
-          }
-        }
-      } catch (e) {
-        console.warn("Failed to list remote agents:", e);
-        // Fallback on error too
-        const svcMap = {
-          健康顾问: "10011",
-          健康档案管理员: "10010",
-          用药提醒助手: "10012",
-          就诊摘要生成器: "10013",
-        };
-        if (svcMap[targetAgentName]) {
-          const fallbackUrl = `http://127.0.0.1:${svcMap[targetAgentName]}`;
-          this.setData({ agentUrl: fallbackUrl });
-        }
-      }
-    }
   },
 
   /**
@@ -903,162 +840,318 @@ Page({
         this.currentStreamingId = aiMsgId;
 
         // 发送流式请求
+        const selectedAgentName = this.data.selectedAgentName || "";
         const payload = {
           id: this.generateUUID(),
           sessionId: convId,
           message: {
             role: "user",
             parts: [{ type: "text", text: text }],
+            metadata: selectedAgentName
+              ? { selected_agent: selectedAgentName }
+              : {},
           },
         };
 
-        this.requestTask = sendTaskStreaming(
-          this.data.agentUrl,
-          payload,
-          (data) => {
-            // onMessage
-            // 处理流式数据
-            // 1. 思考过程 (Thinking)
-            const statusParts = data?.result?.status?.message?.parts;
-            if (statusParts) {
-              let thinkingText = "";
-              statusParts.forEach((p) => {
-                if (p.type === "text" && p.text) thinkingText += p.text;
-              });
+        this.requestTask =
+          this.data.agentUrl === "__HOST_API__"
+            ? sendTaskStreamingViaHost(
+                selectedAgentName,
+                payload,
+                (data) => {
+                  // onMessage
+                  // 处理流式数据
+                  // 1. 思考过程 (Thinking)
+                  const statusParts = data?.result?.status?.message?.parts;
+                  if (statusParts) {
+                    let thinkingText = "";
+                    statusParts.forEach((p) => {
+                      if (p.type === "text" && p.text) thinkingText += p.text;
+                    });
 
-              if (thinkingText) {
-                const updatedMessages = this.data.messages.map((m) => {
-                  if (m.id === this.currentStreamingId) {
-                    return {
-                      ...m,
-                      thinking: (m.thinking || "") + thinkingText,
-                    };
+                    if (thinkingText) {
+                      const updatedMessages = this.data.messages.map((m) => {
+                        if (m.id === this.currentStreamingId) {
+                          return {
+                            ...m,
+                            thinking: (m.thinking || "") + thinkingText,
+                          };
+                        }
+                        return m;
+                      });
+                      this.setData({ messages: updatedMessages }, () =>
+                        this.scheduleScrollToBottom(false, 0)
+                      );
+                    }
                   }
-                  return m;
-                });
-                this.setData({ messages: updatedMessages }, () =>
-                  this.scheduleScrollToBottom(false, 0)
-                );
-              }
-            }
 
-            // 2. 回复内容 (Artifact/Message)
-            const artifact = data?.result?.artifact;
-            const msgParts = data?.result?.message?.parts;
-            let shouldUpdateContent = false;
+                  // 2. 回复内容 (Artifact/Message)
+                  const artifact = data?.result?.artifact;
+                  const msgParts = data?.result?.message?.parts;
+                  let shouldUpdateContent = false;
 
-            if (artifact && artifact.parts) {
-              let artifactText = "";
-              artifact.parts.forEach((p) => {
-                if (p.type === "text" && p.text) artifactText += p.text;
-              });
+                  if (artifact && artifact.parts) {
+                    let artifactText = "";
+                    artifact.parts.forEach((p) => {
+                      if (p.type === "text" && p.text) artifactText += p.text;
+                    });
 
-              if (artifactText) {
-                const appendFlag = artifact.append;
-                const lastChunk = artifact.lastChunk;
+                    if (artifactText) {
+                      const appendFlag = artifact.append;
+                      const lastChunk = artifact.lastChunk;
 
-                if (!appendFlag) {
-                  this.streamingContent = artifactText;
-                } else {
-                  if (
-                    lastChunk &&
-                    this.streamingContent &&
-                    artifactText.startsWith(this.streamingContent)
-                  ) {
-                    this.streamingContent = artifactText;
-                  } else if (
-                    this.streamingContent &&
-                    artifactText &&
-                    this.streamingContent.endsWith(artifactText)
-                  ) {
-                    // ignore duplicate delta
-                  } else {
-                    this.streamingContent += artifactText;
+                      if (!appendFlag) {
+                        this.streamingContent = artifactText;
+                      } else {
+                        if (
+                          lastChunk &&
+                          this.streamingContent &&
+                          artifactText.startsWith(this.streamingContent)
+                        ) {
+                          this.streamingContent = artifactText;
+                        } else if (
+                          this.streamingContent &&
+                          artifactText &&
+                          this.streamingContent.endsWith(artifactText)
+                        ) {
+                        } else {
+                          this.streamingContent += artifactText;
+                        }
+                      }
+                      shouldUpdateContent = true;
+                    }
+                  } else if (msgParts) {
+                    let newText = "";
+                    msgParts.forEach((p) => {
+                      if (p.type === "text" && p.text) newText += p.text;
+                    });
+                    if (newText) {
+                      if (!this.streamingContent.endsWith(newText)) {
+                        this.streamingContent += newText;
+                      }
+                      shouldUpdateContent = true;
+                    }
                   }
-                }
-                shouldUpdateContent = true;
-              }
-            } else if (msgParts) {
-              let newText = "";
-              msgParts.forEach((p) => {
-                if (p.type === "text" && p.text) newText += p.text;
-              });
-              if (newText) {
-                if (!this.streamingContent.endsWith(newText)) {
-                  this.streamingContent += newText;
-                }
-                shouldUpdateContent = true;
-              }
-            }
 
-            if (shouldUpdateContent) {
-              const updatedMessages = this.data.messages.map((m) => {
-                if (m.id === this.currentStreamingId) {
-                  const isLong = this.isLongAssistantText(
-                    this.streamingContent
-                  );
-                  return {
-                    ...m,
-                    contentParts: [
-                      {
-                        type: "text",
-                        content: this.formatTextToRichHtml(
+                  if (shouldUpdateContent) {
+                    const updatedMessages = this.data.messages.map((m) => {
+                      if (m.id === this.currentStreamingId) {
+                        const isLong = this.isLongAssistantText(
                           this.streamingContent
-                        ),
-                      },
-                    ],
-                    rawText: this.streamingContent,
-                    isLong,
-                    collapsed: false,
-                  };
-                }
-                return m;
-              });
-              this.setData({ messages: updatedMessages }, () =>
-                this.scheduleScrollToBottom(false, 0)
-              );
-            }
+                        );
+                        return {
+                          ...m,
+                          contentParts: [
+                            {
+                              type: "text",
+                              content: this.formatTextToRichHtml(
+                                this.streamingContent
+                              ),
+                            },
+                          ],
+                          rawText: this.streamingContent,
+                          isLong,
+                          collapsed: false,
+                        };
+                      }
+                      return m;
+                    });
+                    this.setData({ messages: updatedMessages }, () =>
+                      this.scheduleScrollToBottom(false, 0)
+                    );
+                  }
 
-            // 检查是否完成
-            if (
-              data?.result?.final ||
-              data?.result?.status?.state === "completed"
-            ) {
-              this.handleStreamingComplete(convId);
-            }
-          },
-          (err) => {
-            // onError
-            console.error("Streaming error:", err);
-            const updatedMessages = this.data.messages.map((m) => {
-              if (m.id === this.currentStreamingId) {
-                const finalText = this.streamingContent || "抱歉，出错了。";
-                const isLong = this.isLongAssistantText(finalText);
-                return {
-                  ...m,
-                  contentParts: [
-                    {
-                      type: "text",
-                      content: this.formatTextToRichHtml(finalText),
-                    },
-                  ],
-                  rawText: finalText,
-                  isLong,
-                  collapsed: isLong,
-                  isStreaming: false,
-                };
-              }
-              return m;
-            });
-            this.setData({ messages: updatedMessages, isSending: false }, () =>
-              this.scheduleScrollToBottom(false, 0)
-            );
-          },
-          () => {
-            // onComplete
-            this.handleStreamingComplete(convId);
-          }
-        );
+                  // 检查是否完成
+                  if (
+                    data?.result?.final ||
+                    data?.result?.status?.state === "completed"
+                  ) {
+                    this.handleStreamingComplete(convId);
+                  }
+                },
+                (err) => {
+                  // onError
+                  console.error("Streaming error:", err);
+                  const updatedMessages = this.data.messages.map((m) => {
+                    if (m.id === this.currentStreamingId) {
+                      const finalText =
+                        this.streamingContent || "抱歉，出错了。";
+                      const isLong = this.isLongAssistantText(finalText);
+                      return {
+                        ...m,
+                        contentParts: [
+                          {
+                            type: "text",
+                            content: this.formatTextToRichHtml(finalText),
+                          },
+                        ],
+                        rawText: finalText,
+                        isLong,
+                        collapsed: isLong,
+                        isStreaming: false,
+                      };
+                    }
+                    return m;
+                  });
+                  this.setData(
+                    { messages: updatedMessages, isSending: false },
+                    () => this.scheduleScrollToBottom(false, 0)
+                  );
+                },
+                () => {
+                  // onComplete
+                  this.handleStreamingComplete(convId);
+                }
+              )
+            : sendTaskStreaming(
+                this.data.agentUrl,
+                payload,
+                (data) => {
+                  // onMessage
+                  // 处理流式数据
+                  // 1. 思考过程 (Thinking)
+                  const statusParts = data?.result?.status?.message?.parts;
+                  if (statusParts) {
+                    let thinkingText = "";
+                    statusParts.forEach((p) => {
+                      if (p.type === "text" && p.text) thinkingText += p.text;
+                    });
+
+                    if (thinkingText) {
+                      const updatedMessages = this.data.messages.map((m) => {
+                        if (m.id === this.currentStreamingId) {
+                          return {
+                            ...m,
+                            thinking: (m.thinking || "") + thinkingText,
+                          };
+                        }
+                        return m;
+                      });
+                      this.setData({ messages: updatedMessages }, () =>
+                        this.scheduleScrollToBottom(false, 0)
+                      );
+                    }
+                  }
+
+                  // 2. 回复内容 (Artifact/Message)
+                  const artifact = data?.result?.artifact;
+                  const msgParts = data?.result?.message?.parts;
+                  let shouldUpdateContent = false;
+
+                  if (artifact && artifact.parts) {
+                    let artifactText = "";
+                    artifact.parts.forEach((p) => {
+                      if (p.type === "text" && p.text) artifactText += p.text;
+                    });
+
+                    if (artifactText) {
+                      const appendFlag = artifact.append;
+                      const lastChunk = artifact.lastChunk;
+
+                      if (!appendFlag) {
+                        this.streamingContent = artifactText;
+                      } else {
+                        if (
+                          lastChunk &&
+                          this.streamingContent &&
+                          artifactText.startsWith(this.streamingContent)
+                        ) {
+                          this.streamingContent = artifactText;
+                        } else if (
+                          this.streamingContent &&
+                          artifactText &&
+                          this.streamingContent.endsWith(artifactText)
+                        ) {
+                          // ignore duplicate delta
+                        } else {
+                          this.streamingContent += artifactText;
+                        }
+                      }
+                      shouldUpdateContent = true;
+                    }
+                  } else if (msgParts) {
+                    let newText = "";
+                    msgParts.forEach((p) => {
+                      if (p.type === "text" && p.text) newText += p.text;
+                    });
+                    if (newText) {
+                      if (!this.streamingContent.endsWith(newText)) {
+                        this.streamingContent += newText;
+                      }
+                      shouldUpdateContent = true;
+                    }
+                  }
+
+                  if (shouldUpdateContent) {
+                    const updatedMessages = this.data.messages.map((m) => {
+                      if (m.id === this.currentStreamingId) {
+                        const isLong = this.isLongAssistantText(
+                          this.streamingContent
+                        );
+                        return {
+                          ...m,
+                          contentParts: [
+                            {
+                              type: "text",
+                              content: this.formatTextToRichHtml(
+                                this.streamingContent
+                              ),
+                            },
+                          ],
+                          rawText: this.streamingContent,
+                          isLong,
+                          collapsed: false,
+                        };
+                      }
+                      return m;
+                    });
+                    this.setData({ messages: updatedMessages }, () =>
+                      this.scheduleScrollToBottom(false, 0)
+                    );
+                  }
+
+                  // 检查是否完成
+                  if (
+                    data?.result?.final ||
+                    data?.result?.status?.state === "completed"
+                  ) {
+                    this.handleStreamingComplete(convId);
+                  }
+                },
+                (err) => {
+                  // onError
+                  console.error("Streaming error:", err);
+                  const updatedMessages = this.data.messages.map((m) => {
+                    if (m.id === this.currentStreamingId) {
+                      const finalText =
+                        this.streamingContent || "抱歉，出错了。";
+                      const isLong = this.isLongAssistantText(finalText);
+                      return {
+                        ...m,
+                        contentParts: [
+                          {
+                            type: "text",
+                            content: this.formatTextToRichHtml(finalText),
+                          },
+                        ],
+                        rawText: finalText,
+                        isLong,
+                        collapsed: isLong,
+                        isStreaming: false,
+                      };
+                    }
+                    return m;
+                  });
+                  this.setData(
+                    { messages: updatedMessages, isSending: false },
+                    () => this.scheduleScrollToBottom(false, 0)
+                  );
+                },
+                () => {
+                  // onComplete
+                  this.handleStreamingComplete(convId);
+                }
+              );
       } else {
         // 默认通用模式 (Polling)
         // 2. 发送消息

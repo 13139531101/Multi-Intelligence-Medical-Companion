@@ -2,7 +2,7 @@
 # @Date  : 2025/1/20
 # @File  : reminder_tool.py
 # @Author: Health Assistant Team
-# @Desc  : 提醒工具 - 用于管理用药提醒和健康提醒（MySQL版本）
+# @Desc  : 提醒工具 - 用于管理用药提醒和健康提醒
 
 import os
 import json
@@ -511,14 +511,40 @@ def delete_reminder(user_id: str, reminder_id: int, reminder_type: str = "health
     :return: 删除结果
     """
     try:
-        if reminder_type == "medication":
-            table_name = "medication_reminders"
-        else:
-            table_name = "reminders"
+        rt = (reminder_type or "").strip().lower()
+        if rt not in ("health", "medication"):
+            return json.dumps(
+                {"success": False, "message": "无效的提醒类型"},
+                ensure_ascii=False,
+            )
 
         # 检查提醒是否存在
-        check_query = f"SELECT id FROM {table_name} WHERE id = %s AND user_id = %s AND is_deleted = 0"
-        existing_reminders = reminder_manager.db_manager.execute_query(check_query, (reminder_id, user_id))
+        if rt == "medication":
+            check_query = """
+                SELECT id
+                FROM medication_reminders
+                WHERE id = %s AND user_id = %s AND is_deleted = 0
+            """
+            update_query = """
+                UPDATE medication_reminders
+                SET is_deleted = 1, updated_at = NOW()
+                WHERE id = %s AND user_id = %s
+            """
+        else:
+            check_query = """
+                SELECT id
+                FROM reminders
+                WHERE id = %s AND user_id = %s AND is_deleted = 0
+            """
+            update_query = """
+                UPDATE reminders
+                SET is_deleted = 1, updated_at = NOW()
+                WHERE id = %s AND user_id = %s
+            """
+
+        existing_reminders = reminder_manager.db_manager.execute_query(
+            check_query, (reminder_id, user_id)
+        )
 
         if not existing_reminders:
             return json.dumps({
@@ -527,12 +553,6 @@ def delete_reminder(user_id: str, reminder_id: int, reminder_type: str = "health
             }, ensure_ascii=False)
 
         # 软删除提醒
-        update_query = f"""
-            UPDATE {table_name}
-            SET is_deleted = 1, updated_at = NOW()
-            WHERE id = %s AND user_id = %s
-        """
-
         affected_rows = reminder_manager.db_manager.execute_update(update_query, (reminder_id, user_id))
 
         if affected_rows > 0:

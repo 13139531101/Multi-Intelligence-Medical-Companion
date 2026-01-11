@@ -30,6 +30,11 @@ from psycopg.types.json import Json
 import jwt
 import re
 
+try:
+    from embedding_manager import EmbeddingService
+except Exception:
+    EmbeddingService = None  # type: ignore
+
 # 配置日志
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -231,6 +236,20 @@ class Consultation(BaseModel):
     created_at: datetime
 
 
+class DashboardActivity(BaseModel):
+    id: str
+    title: str
+    time: str
+    icon: str
+
+
+class DashboardStats(BaseModel):
+    health_records_count: int = 0
+    medication_count: int = 0
+    summary_count: int = 0
+    recent_activities: List[DashboardActivity] = Field(default_factory=list)
+
+
 MODULE_DIR = Path(__file__).resolve().parent
 UPLOAD_DIR = MODULE_DIR / "uploads"
 UPLOAD_DIR.mkdir(exist_ok=True)
@@ -244,6 +263,194 @@ DB_CONFIG = {
         "DB_NAME", os.getenv("POSTGRES_DB", "personal_health_assistant")
     ),
 }
+
+_RAG_VECTOR_DIM = int(os.getenv("RAG_VECTOR_DIM", "384"))
+_RAG_EMBEDDING_MODEL = os.getenv("RAG_EMBEDDING_MODEL") or os.getenv(
+    "EMBEDDING_MODEL", "all-MiniLM-L6-v2"
+)
+_rag_schema_ready = False
+_embedding_service = None
+
+def _get_embedding_service():
+    global _embedding_service
+    if _embedding_service is not None:
+        return _embedding_service
+    if EmbeddingService is None:
+        _embedding_service = None
+        return _embedding_service
+    try:
+        _embedding_service = EmbeddingService(model_name=_RAG_EMBEDDING_MODEL)
+        return _embedding_service
+    except Exception:
+        _embedding_service = None
+        return _embedding_service
+
+def _vector_literal(vec: list[float]) -> str:
+    return "[" + ",".join(f"{float(x):.8f}" for x in vec) + "]"
+
+def _split_text_for_rag(text: str, chunk_size: int = 650, overlap: int = 120) -> list[str]:
+    s = (text or "").strip()
+    if not s:
+        return []
+    if chunk_size <= 0:
+        chunk_size = 650
+    if overlap < 0:
+        overlap = 0
+    if overlap >= chunk_size:
+        overlap = max(0, chunk_size // 5)
+
+    chunks: list[str] = []
+    i = 0
+    n = len(s)
+    while i < n:
+        j = min(n, i + chunk_size)
+        chunk = s[i:j].strip()
+        if chunk:
+            chunks.append(chunk)
+        if j >= n:
+            break
+        i = max(0, j - overlap)
+    return chunks
+
+def _ensure_rag_schema(cursor) -> None:
+    global _rag_schema_ready
+    if _rag_schema_ready:
+        return
+    try:
+        try:
+            cursor.execute("CREATE EXTENSION IF NOT EXISTS vector")
+        except Exception:
+            pass
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS rag_chunks (
+                id UUID PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                source_type TEXT NOT NULL,
+                source_id TEXT NOT NULL,
+                record_type TEXT,
+                title TEXT,
+                chunk_index INTEGER NOT NULL,
+                chunk_text TEXT NOT NULL,
+                embedding_model TEXT NOT NULL,
+                embedding_dim INTEGER NOT NULL,
+                embedding vector(384) NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                UNIQUE (source_type, source_id, chunk_index, embedding_model)
+            );
+            """
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_rag_chunks_user ON rag_chunks(user_id);"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_rag_chunks_user_source ON rag_chunks(user_id, source_type);"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_rag_chunks_source ON rag_chunks(source_type, source_id);"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_rag_chunks_created ON rag_chunks(created_at);"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_rag_chunks_embedding ON rag_chunks USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);"
+        )
+        _rag_schema_ready = True
+    except Exception:
+        _rag_schema_ready = False
+
+def _make_rag_text(title: str | None, summary: str | None, content: str | None) -> str:
+    parts = []
+    if title and str(title).strip():
+        parts.append(f"标题: {str(title).strip()}")
+    if summary and str(summary).strip():
+        parts.append(f"摘要: {str(summary).strip()}")
+    if content and str(content).strip():
+        parts.append(f"内容: {str(content).strip()}")
+    return "\n".join(parts).strip()
+
+def _upsert_rag_document(
+    cursor,
+    user_id: str,
+    source_type: str,
+    source_id: str,
+    record_type: str | None,
+    title: str | None,
+    text: str,
+) -> int:
+    es = _get_embedding_service()
+    if es is None:
+        return 0
+    if not text or not text.strip():
+        return 0
+
+    _ensure_rag_schema(cursor)
+
+    chunks = _split_text_for_rag(text)
+    if not chunks:
+        return 0
+
+    embs = es.generate_batch_embeddings(chunks)
+    valid: list[tuple[int, str, list[float]]] = []
+    for idx, (ch, emb) in enumerate(zip(chunks, embs)):
+        if not emb:
+            continue
+        if len(emb) != _RAG_VECTOR_DIM:
+            continue
+        valid.append((idx, ch, emb))
+    if not valid:
+        return 0
+
+    cursor.execute(
+        """
+        DELETE FROM rag_chunks
+        WHERE source_type = %s AND source_id = %s AND embedding_model = %s
+        """,
+        (source_type, source_id, es.model_name),
+    )
+
+    inserted = 0
+    for chunk_index, chunk_text, emb in valid:
+        cursor.execute(
+            """
+            INSERT INTO rag_chunks (
+                id, user_id, source_type, source_id, record_type, title,
+                chunk_index, chunk_text, embedding_model, embedding_dim, embedding,
+                created_at, updated_at
+            ) VALUES (
+                %s, %s, %s, %s, %s, %s,
+                %s, %s, %s, %s, %s::vector(384),
+                %s, %s
+            )
+            ON CONFLICT (source_type, source_id, chunk_index, embedding_model)
+            DO UPDATE SET
+                user_id = EXCLUDED.user_id,
+                record_type = EXCLUDED.record_type,
+                title = EXCLUDED.title,
+                chunk_text = EXCLUDED.chunk_text,
+                embedding_dim = EXCLUDED.embedding_dim,
+                embedding = EXCLUDED.embedding,
+                updated_at = EXCLUDED.updated_at
+            """,
+            (
+                str(uuid.uuid4()),
+                user_id,
+                source_type,
+                source_id,
+                record_type,
+                title,
+                chunk_index,
+                chunk_text,
+                es.model_name,
+                len(emb),
+                _vector_literal(emb),
+                datetime.now(),
+                datetime.now(),
+            ),
+        )
+        inserted += 1
+    return inserted
 
 
 @contextmanager
@@ -261,6 +468,10 @@ def get_db_connection():
 def init_database():
     with get_db_connection() as conn:
         with conn.cursor() as cursor:
+            try:
+                cursor.execute("CREATE EXTENSION IF NOT EXISTS vector")
+            except Exception:
+                conn.rollback()
             cursor.execute(
                 """
                 CREATE TABLE IF NOT EXISTS health_records (
@@ -360,6 +571,41 @@ def init_database():
                     created_at TIMESTAMPTZ DEFAULT now()
                 )
                 """
+            )
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS rag_chunks (
+                    id UUID PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    source_type TEXT NOT NULL,
+                    source_id TEXT NOT NULL,
+                    record_type TEXT,
+                    title TEXT,
+                    chunk_index INTEGER NOT NULL,
+                    chunk_text TEXT NOT NULL,
+                    embedding_model TEXT NOT NULL,
+                    embedding_dim INTEGER NOT NULL,
+                    embedding vector(384) NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    UNIQUE (source_type, source_id, chunk_index, embedding_model)
+                )
+                """
+            )
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_rag_chunks_user ON rag_chunks(user_id)"
+            )
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_rag_chunks_user_source ON rag_chunks(user_id, source_type)"
+            )
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_rag_chunks_source ON rag_chunks(source_type, source_id)"
+            )
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_rag_chunks_created ON rag_chunks(created_at)"
+            )
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_rag_chunks_embedding ON rag_chunks USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100)"
             )
             cursor.execute(
                 """
@@ -1193,6 +1439,288 @@ async def get_api_status():
     return {"status": "healthy", "timestamp": datetime.now()}
 
 
+@app.get("/api/dashboard/stats", response_model=DashboardStats)
+async def get_dashboard_stats(
+    user_id: Optional[str] = Query(None),
+    request: Request = None,
+):
+    try:
+        uid = _resolve_user_id(request, user_id)
+        if not uid:
+            return DashboardStats()
+
+        health_records_count = 0
+        medication_count = 0
+        summary_count = 0
+
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                try:
+                    cursor.execute(
+                        "SELECT COUNT(1) FROM health_records WHERE user_id = %s",
+                        (uid,),
+                    )
+                    row = cursor.fetchone()
+                    health_records_count = int(row[0] or 0) if row else 0
+                except Exception:
+                    health_records_count = 0
+
+                try:
+                    cursor.execute(
+                        "SELECT COUNT(1) FROM visit_summaries WHERE user_id = %s AND COALESCE(is_deleted, 0) = 0",
+                        (uid,),
+                    )
+                    row = cursor.fetchone()
+                    summary_count = int(row[0] or 0) if row else 0
+                except Exception:
+                    summary_count = 0
+
+                try:
+                    cursor.execute(
+                        "SELECT COUNT(1) FROM user_medications WHERE user_id = %s AND COALESCE(is_deleted, 0) = 0",
+                        (uid,),
+                    )
+                    row = cursor.fetchone()
+                    medication_count = int(row[0] or 0) if row else 0
+                except Exception:
+                    medication_count = 0
+
+        recent_raw = await get_dashboard_recent_activities(limit=10, user_id=uid, request=request)  # type: ignore[arg-type]
+        activities: List[DashboardActivity] = []
+        try:
+            for item in recent_raw or []:
+                activities.append(
+                    DashboardActivity(
+                        id=str(item.get("id") or ""),
+                        title=str(item.get("title") or ""),
+                        time=str(item.get("time") or ""),
+                        icon=str(item.get("icon") or ""),
+                    )
+                )
+        except Exception:
+            activities = []
+
+        return DashboardStats(
+            health_records_count=health_records_count,
+            medication_count=medication_count,
+            summary_count=summary_count,
+            recent_activities=activities,
+        )
+    except Exception as e:
+        logger.error(f"获取仪表板统计失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/visit-summaries/count")
+async def get_visit_summary_count(
+    user_id: Optional[str] = Query(None),
+    request: Request = None,
+):
+    try:
+        uid = _resolve_user_id(request, user_id)
+        if not uid:
+            return {"count": 0}
+
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT COUNT(1) FROM visit_summaries WHERE user_id = %s",
+                    (uid,),
+                )
+                row = cursor.fetchone()
+                count = int(row[0] or 0) if row else 0
+        return {"count": count}
+    except Exception as e:
+        logger.error(f"获取就诊摘要数量失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/dashboard/recent-activities")
+async def get_dashboard_recent_activities(
+    limit: int = Query(10, ge=1, le=50),
+    user_id: Optional[str] = Query(None),
+    request: Request = None,
+):
+    def _format_time(dt: Any) -> str:
+        if not dt:
+            return ""
+        if isinstance(dt, str):
+            return dt[:16].replace("T", " ")
+        try:
+            if hasattr(dt, "astimezone"):
+                dt_local = dt.astimezone()
+            else:
+                dt_local = dt
+            now_local = datetime.now(dt_local.tzinfo) if getattr(dt_local, "tzinfo", None) else datetime.now()
+            if dt_local.date() == now_local.date():
+                return f"今天 {dt_local.strftime('%H:%M')}"
+            if dt_local.date() == (now_local.date() - timedelta(days=1)):
+                return f"昨天 {dt_local.strftime('%H:%M')}"
+            return dt_local.strftime("%m-%d %H:%M")
+        except Exception:
+            try:
+                return str(dt)
+            except Exception:
+                return ""
+
+    try:
+        uid = _resolve_user_id(request, user_id)
+        if not uid:
+            return []
+
+        activities: list[dict[str, Any]] = []
+
+        def _to_sort_ts(v: Any) -> float:
+            if not v:
+                return 0.0
+            if isinstance(v, datetime):
+                try:
+                    return float(v.timestamp())
+                except Exception:
+                    return 0.0
+            if isinstance(v, str):
+                s = v.strip()
+                if not s:
+                    return 0.0
+                try:
+                    return float(datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp())
+                except Exception:
+                    try:
+                        return float(datetime.fromisoformat(s.replace("T", " ").replace("Z", "+00:00")).timestamp())
+                    except Exception:
+                        return 0.0
+            try:
+                return float(v)
+            except Exception:
+                return 0.0
+
+        with get_db_connection() as conn:
+            with conn.cursor(row_factory=dict_row) as cursor:
+                try:
+                    cursor.execute(
+                        """
+                        SELECT id, record_type, title, created_at
+                        FROM health_records
+                        WHERE user_id = %s
+                        ORDER BY created_at DESC
+                        LIMIT %s
+                        """,
+                        (uid, limit),
+                    )
+                    for r in cursor.fetchall() or []:
+                        activities.append(
+                            {
+                                "id": f"health_record:{r.get('id')}",
+                                "title": "新增健康档案",
+                                "time": _format_time(r.get("created_at")),
+                                "icon": "📋",
+                                "_ts": r.get("created_at"),
+                            }
+                        )
+                except Exception:
+                    pass
+
+                try:
+                    cursor.execute(
+                        """
+                        SELECT id, created_at
+                        FROM visit_summaries
+                        WHERE user_id = %s AND COALESCE(is_deleted, 0) = 0
+                        ORDER BY created_at DESC
+                        LIMIT %s
+                        """,
+                        (uid, limit),
+                    )
+                    for r in cursor.fetchall() or []:
+                        activities.append(
+                            {
+                                "id": f"visit_summary:{r.get('id')}",
+                                "title": "生成就诊摘要",
+                                "time": _format_time(r.get("created_at")),
+                                "icon": "📝",
+                                "_ts": r.get("created_at"),
+                            }
+                        )
+                except Exception:
+                    pass
+
+                try:
+                    cursor.execute(
+                        """
+                        SELECT id, created_at
+                        FROM user_medications
+                        WHERE user_id = %s AND COALESCE(is_deleted, 0) = 0
+                        ORDER BY created_at DESC
+                        LIMIT %s
+                        """,
+                        (uid, limit),
+                    )
+                    for r in cursor.fetchall() or []:
+                        activities.append(
+                            {
+                                "id": f"medication:{r.get('id')}",
+                                "title": "新增用药记录",
+                                "time": _format_time(r.get("created_at")),
+                                "icon": "💊",
+                                "_ts": r.get("created_at"),
+                            }
+                        )
+                except Exception:
+                    pass
+
+                try:
+                    cursor.execute(
+                        """
+                        SELECT reminder_id, scheduled_time, completion_time, status
+                        FROM reminder_logs
+                        WHERE user_id = %s
+                        ORDER BY COALESCE(completion_time, created_at, scheduled_time) DESC NULLS LAST
+                        LIMIT %s
+                        """,
+                        (uid, limit),
+                    )
+                    for r in cursor.fetchall() or []:
+                        status = str(r.get("status") or "").lower()
+                        if status in ("completed", "taken"):
+                            title = "完成服药"
+                            icon = "✅"
+                        elif status in ("missed", "skipped"):
+                            title = "标记跳过用药"
+                            icon = "⏭️"
+                        else:
+                            title = "用药记录"
+                            icon = "💊"
+
+                        ts = r.get("completion_time") or r.get("scheduled_time")
+                        activities.append(
+                            {
+                                "id": f"reminder_log:{r.get('reminder_id')}:{r.get('scheduled_time')}",
+                                "title": title,
+                                "time": _format_time(ts),
+                                "icon": icon,
+                                "_ts": ts,
+                            }
+                        )
+                except Exception:
+                    pass
+
+        uniq: dict[str, dict[str, Any]] = {}
+        for a in activities:
+            aid = str(a.get("id") or "")
+            if not aid:
+                continue
+            uniq[aid] = a
+
+        merged = list(uniq.values())
+        merged.sort(key=lambda x: _to_sort_ts(x.get("_ts")), reverse=True)
+        for a in merged:
+            a.pop("_ts", None)
+        return merged[: int(limit)]
+    except Exception as e:
+        logger.error(f"获取最近活动失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/visit-summaries/history", response_model=List[VisitSummary])
 async def get_visit_summaries(
     skip: int = Query(0, ge=0),
@@ -1349,6 +1877,42 @@ async def create_visit_summary(
                             row[field] = []
                     elif row.get(field) is None:
                         row[field] = []
+
+                try:
+                    text = "\n".join(
+                        [
+                            f"标题: {row.get('title') or ''}",
+                            f"就诊日期: {row.get('visit_date') or ''}",
+                            f"医院: {row.get('hospital') or ''}",
+                            f"科室: {row.get('department') or ''}",
+                            f"医生: {row.get('doctor') or ''}",
+                            f"主诉: {row.get('chief_complaint') or ''}",
+                            f"症状: {row.get('symptoms') or ''}",
+                            f"检查: {row.get('examination') or ''}",
+                            f"诊断: {row.get('diagnosis') or ''}",
+                            f"治疗: {row.get('treatment') or ''}",
+                            f"处方: {row.get('prescription') or ''}",
+                            f"复查/随访: {row.get('follow_up') or ''}",
+                            f"摘要: {row.get('summary_content') or ''}",
+                            f"备注: {row.get('notes') or ''}",
+                        ]
+                    ).strip()
+                    _upsert_rag_document(
+                        cursor,
+                        user_id=uid,
+                        source_type="visit_summaries",
+                        source_id=str(row.get("id")),
+                        record_type="visit_summary",
+                        title=row.get("title"),
+                        text=text,
+                    )
+                    conn.commit()
+                except Exception as e:
+                    try:
+                        conn.rollback()
+                    except Exception:
+                        pass
+                    logger.warning(f"创建就诊摘要后RAG入库失败：{e}")
 
                 return VisitSummary(**row)
 
@@ -1844,6 +2408,42 @@ async def update_visit_summary(
                             row[field] = []
                     elif row.get(field) is None:
                         row[field] = []
+
+                try:
+                    text = "\n".join(
+                        [
+                            f"标题: {row.get('title') or ''}",
+                            f"就诊日期: {row.get('visit_date') or ''}",
+                            f"医院: {row.get('hospital') or ''}",
+                            f"科室: {row.get('department') or ''}",
+                            f"医生: {row.get('doctor') or ''}",
+                            f"主诉: {row.get('chief_complaint') or ''}",
+                            f"症状: {row.get('symptoms') or ''}",
+                            f"检查: {row.get('examination') or ''}",
+                            f"诊断: {row.get('diagnosis') or ''}",
+                            f"治疗: {row.get('treatment') or ''}",
+                            f"处方: {row.get('prescription') or ''}",
+                            f"复查/随访: {row.get('follow_up') or ''}",
+                            f"摘要: {row.get('summary_content') or ''}",
+                            f"备注: {row.get('notes') or ''}",
+                        ]
+                    ).strip()
+                    _upsert_rag_document(
+                        cursor,
+                        user_id=uid,
+                        source_type="visit_summaries",
+                        source_id=str(row.get("id")),
+                        record_type="visit_summary",
+                        title=row.get("title"),
+                        text=text,
+                    )
+                    conn.commit()
+                except Exception as e:
+                    try:
+                        conn.rollback()
+                    except Exception:
+                        pass
+                    logger.warning(f"更新就诊摘要后RAG入库失败：{e}")
 
                 return VisitSummary(**row)
 
@@ -2411,6 +3011,30 @@ async def create_health_record(
                 row = cursor.fetchone()
                 created = row_to_health_record(row)
 
+            try:
+                text = _make_rag_text(created.title, created.summary, created.content)
+                rt = (
+                    created.record_type.value
+                    if hasattr(created.record_type, "value")
+                    else str(created.record_type)
+                )
+                _upsert_rag_document(
+                    cursor,
+                    user_id=uid,
+                    source_type="health_records",
+                    source_id=str(created.id),
+                    record_type=rt,
+                    title=created.title,
+                    text=text,
+                )
+                conn.commit()
+            except Exception as e:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                logger.warning(f"创建记录后RAG入库失败：{e}")
+
             # 新增：写入HRM（PostgreSQL）以供Agent检索
             try:
                 _save_to_hrm(
@@ -2552,6 +3176,30 @@ async def update_health_record(
                     )
                 row = cursor.fetchone()
                 updated = row_to_health_record(row)
+
+                try:
+                    text = _make_rag_text(updated.title, updated.summary, updated.content)
+                    rt = (
+                        updated.record_type.value
+                        if hasattr(updated.record_type, "value")
+                        else str(updated.record_type)
+                    )
+                    _upsert_rag_document(
+                        cursor,
+                        user_id=uid,
+                        source_type="health_records",
+                        source_id=str(updated.id),
+                        record_type=rt,
+                        title=updated.title,
+                        text=text,
+                    )
+                    conn.commit()
+                except Exception as e:
+                    try:
+                        conn.rollback()
+                    except Exception:
+                        pass
+                    logger.warning(f"更新记录后RAG入库失败：{e}")
                 try:
                     _save_to_hrm(
                         user_id=uid,

@@ -628,6 +628,124 @@ const sendTaskStreaming = (
   return requestTask;
 };
 
+// 发送任务（流式）- 统一走 HostAPI，由 HostAPI 转发到目标智能体
+const sendTaskStreamingViaHost = (
+  targetAgentName,
+  payload,
+  onMessage,
+  onError,
+  onComplete
+) => {
+  const requestBody = {
+    jsonrpc: "2.0",
+    method: "tasks/sendSubscribe",
+    params: payload,
+    id: `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+  };
+
+  const userInfo = wx.getStorageSync("userInfo");
+  const token = userInfo ? userInfo.token : "";
+
+  const requestTask = wx.request({
+    url: `${SERVER_URL}/a2a`,
+    method: "POST",
+    data: requestBody,
+    enableChunked: true,
+    timeout: 300000,
+    header: {
+      "Content-Type": "application/json",
+      "X-Target-Agent": encodeURIComponent(targetAgentName || ""),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    success: (res) => {
+      if (res.statusCode >= 200 && res.statusCode < 300) {
+      } else {
+        if (onError) onError(res);
+      }
+    },
+    fail: (err) => {
+      if (onError) onError(err);
+    },
+    complete: () => {},
+  });
+
+  requestTask.onChunkReceived((response) => {
+    const arrayBuffer = response.data;
+    let uint8Array = new Uint8Array(arrayBuffer);
+
+    if (requestTask._pendingBuffer) {
+      const newBuffer = new Uint8Array(
+        requestTask._pendingBuffer.length + uint8Array.length
+      );
+      newBuffer.set(requestTask._pendingBuffer, 0);
+      newBuffer.set(uint8Array, requestTask._pendingBuffer.length);
+      uint8Array = newBuffer;
+      requestTask._pendingBuffer = null;
+    }
+
+    let safeEnd = uint8Array.length;
+    for (let k = 1; k <= 3 && safeEnd - k >= 0; k++) {
+      const b = uint8Array[safeEnd - k];
+      if ((b & 0xc0) === 0x80) {
+        continue;
+      }
+      let seqLen = 0;
+      if ((b & 0xe0) === 0xc0) seqLen = 2;
+      else if ((b & 0xf0) === 0xe0) seqLen = 3;
+      else if ((b & 0xf8) === 0xf0) seqLen = 4;
+
+      if (seqLen > 0) {
+        if (k < seqLen) {
+          safeEnd = safeEnd - k;
+          requestTask._pendingBuffer = uint8Array.slice(safeEnd);
+        }
+      }
+      break;
+    }
+
+    const validData = uint8Array.slice(0, safeEnd);
+    let text = "";
+
+    if (typeof TextDecoder !== "undefined") {
+      try {
+        text = new TextDecoder("utf-8").decode(validData);
+      } catch (e) {
+        console.error("TextDecoder failed:", e);
+        text = utf8ArrayToString(validData);
+      }
+    } else {
+      text = utf8ArrayToString(validData);
+    }
+
+    const fullText = (requestTask._pendingText || "") + text;
+    const lines = fullText.split("\n");
+
+    if (fullText.length > 0 && !fullText.endsWith("\n") && lines.length > 0) {
+      requestTask._pendingText = lines.pop();
+    } else {
+      requestTask._pendingText = "";
+    }
+
+    for (const line of lines) {
+      if (line.startsWith("data: ")) {
+        const jsonStr = line.substring(6).trim();
+        if (jsonStr === "[DONE]") {
+          if (onComplete) onComplete();
+          return;
+        }
+        try {
+          const data = JSON.parse(jsonStr);
+          if (onMessage) onMessage(data);
+        } catch (e) {
+          console.error("Parse error:", e, "JSON:", jsonStr);
+        }
+      }
+    }
+  });
+
+  return requestTask;
+};
+
 // Helper function for manual UTF-8 decoding
 function utf8ArrayToString(array) {
   let out = "";
@@ -730,6 +848,7 @@ module.exports = {
   uploadMedicationImage,
   getAgentCard,
   sendTaskStreaming,
+  sendTaskStreamingViaHost,
   resolveAgentUrl,
   SERVER_URL,
 };
