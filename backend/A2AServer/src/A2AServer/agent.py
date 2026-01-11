@@ -336,38 +336,38 @@ class BasicAgent:
 
                         tool_results_to_append = []
                         for tc in tool_calls:
-                             if tc.get("function", {}).get("name"):
-                                 result = await process_tool_call(tc, self.servers, self.quiet_mode)
-                                 if result:
-                                     new_res = copy.deepcopy(result)
-                                     if "data" in result:
-                                         result.pop("data")
-                                     tool_results_to_append.append(result)
-                                     tool_calls_processed = True
-                                     yield {"text": f"{json.dumps(new_res)}", "type": "tool_result"}
-                         if not tool_results_to_append:
-                             for tc in tool_calls:
-                                 tool_call_id = tc.get("id")
-                                 if tool_call_id:
-                                     tool_results_to_append.append(
-                                         {
-                                             "role": "tool",
-                                             "tool_call_id": tool_call_id,
-                                             "content": json.dumps({"error": "Tool call was not executed"}, ensure_ascii=False),
-                                         }
-                                     )
-                             tool_calls_processed = True
-                         if tool_calls_processed:
-                             self.session_conversations[sessionId].append(assistant_message)
-                             self.session_conversations[sessionId].extend(tool_results_to_append)
-                     else:
-                         assistant_message = {
-                             "role": "assistant",
-                             "content": chunk.get("assistant_text") or "",
-                         }
-                         self.session_conversations[sessionId].append(assistant_message)
-             if not tool_calls_processed:
-                 break
+                            if tc.get("function", {}).get("name"):
+                                result = await process_tool_call(tc, self.servers, self.quiet_mode)
+                                if result:
+                                    new_res = copy.deepcopy(result)
+                                    if "data" in result:
+                                        result.pop("data")
+                                    tool_results_to_append.append(result)
+                                    tool_calls_processed = True
+                                    yield {"text": f"{json.dumps(new_res)}", "type": "tool_result"}
+                        if not tool_results_to_append:
+                            for tc in tool_calls:
+                                tool_call_id = tc.get("id")
+                                if tool_call_id:
+                                    tool_results_to_append.append(
+                                        {
+                                            "role": "tool",
+                                            "tool_call_id": tool_call_id,
+                                            "content": json.dumps({"error": "Tool call was not executed"}, ensure_ascii=False),
+                                        }
+                                    )
+                            tool_calls_processed = True
+                        if tool_calls_processed:
+                            self.session_conversations[sessionId].append(assistant_message)
+                            self.session_conversations[sessionId].extend(tool_results_to_append)
+                    else:
+                        assistant_message = {
+                            "role": "assistant",
+                            "content": chunk.get("assistant_text") or "",
+                        }
+                        self.session_conversations[sessionId].append(assistant_message)
+            if not tool_calls_processed:
+                break
 
 
     async def _non_stream_response(self, sessionId):
