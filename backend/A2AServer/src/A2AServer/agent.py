@@ -302,25 +302,25 @@ class BasicAgent:
          print(f"发起的conversation: {self.session_conversations[sessionId]}")
 
     async def _stream_response_generator(self, sessionId):
-         """Handles the streaming response logic (async generator)."""
-         #分5种返回类型，1. reasoning, 2. normal,  4. tool_call, 5. tool_result
-         while True:
-             generator = await generate_text(self.session_conversations[sessionId], self.chosen_model, self.all_functions, stream=True)
-             accumulated_text = ""
-             tool_calls_processed = False
+        """Handles the streaming response logic (async generator)."""
+        #分5种返回类型，1. reasoning, 2. normal,  4. tool_call, 5. tool_result
+        while True:
+            generator = await generate_text(self.session_conversations[sessionId], self.chosen_model, self.all_functions, stream=True)
+            accumulated_text = ""
+            tool_calls_processed = False
 
-             async for chunk in generator: # AWAIT is used to iterate over the async generator
-                 if chunk.get("is_chunk", False):
-                     if chunk.get("token", False):
-                         if chunk.get("is_reasoning"):
-                             yield {"text": chunk["assistant_text"], "type": "reasoning"}
-                         else:
+            async for chunk in generator: # AWAIT is used to iterate over the async generator
+                if chunk.get("is_chunk", False):
+                    if chunk.get("token", False):
+                        if chunk.get("is_reasoning"):
+                            yield {"text": chunk["assistant_text"], "type": "reasoning"}
+                        else:
                             yield {"text": chunk["assistant_text"], "type": "normal"} # YIELD is used in a generator
-                     if not chunk.get("is_reasoning"):
+                    if not chunk.get("is_reasoning"):
                         accumulated_text += chunk["assistant_text"]
-                 else:
-                     remaining = chunk["assistant_text"][len(accumulated_text):]
-                     if remaining:
+                else:
+                    remaining = chunk["assistant_text"][len(accumulated_text):]
+                    if remaining:
                         yield {"text": remaining, "type": "reasoning"} # YIELD here as well 剩余文本
 
                     tool_calls = chunk.get("tool_calls", [])
