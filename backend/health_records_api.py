@@ -1350,89 +1350,6 @@ def _resolve_user_id(request: Request | None, user_id: str | None) -> str | None
     return None
 
 
-@app.post("/api/health-records/upload")
-async def upload_file(
-    file: UploadFile = File(...),
-    user_id: Optional[str] = Query(None),
-    request: Request = None,
-):
-    """上传健康档案文件并进行OCR识别"""
-    try:
-        uid = _resolve_user_id(request, user_id)
-        # 允许匿名上传用于OCR预览，但最好还是要求登录
-
-        file_ext = os.path.splitext(file.filename)[1]
-        new_filename = f"{uuid.uuid4()}{file_ext}"
-        file_path = UPLOAD_DIR / new_filename
-
-        content = await file.read()
-        with open(file_path, "wb") as buffer:
-            buffer.write(content)
-
-        # OCR处理
-        ocr_text = ""
-        ocr_info = {}
-        if extract_text_from_image:
-            try:
-                b64 = base64.b64encode(content).decode("utf-8")
-                # extract_text_from_image might be a Tool object or function
-                if hasattr(extract_text_from_image, "fn"):
-                    ocr_text = extract_text_from_image.fn(b64)
-                else:
-                    ocr_text = extract_text_from_image(b64)
-            except Exception as e:
-                logger.warning(f"OCR失败: {e}")
-
-        # 尝试结构化提取
-        if extract_medical_info and ocr_text:
-            try:
-                if hasattr(extract_medical_info, "fn"):
-                    ocr_info = extract_medical_info.fn(ocr_text)
-                else:
-                    ocr_info = extract_medical_info(ocr_text)
-                if isinstance(ocr_info, str):
-                    try:
-                        ocr_info = json.loads(ocr_info)
-                    except Exception:
-                        pass
-            except Exception as e:
-                logger.warning(f"结构化提取失败: {e}")
-
-        # 保存文件记录
-        file_id = str(uuid.uuid4())
-        file_size = len(content)
-        mime_type = file.content_type
-
-        with get_db_connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute(
-                    """
-                    INSERT INTO file_attachments (id, record_id, filename, original_filename, file_path, file_size, mime_type)
-                    VALUES (%s, NULL, %s, %s, %s, %s, %s)
-                    """,
-                    (
-                        file_id,
-                        new_filename,
-                        file.filename,
-                        str(file_path),
-                        file_size,
-                        mime_type,
-                    ),
-                )
-                conn.commit()
-
-        return {
-            "file_id": file_id,
-            "filename": new_filename,
-            "ocr_text": ocr_text,
-            "ocr_info": ocr_info,
-            "message": "上传成功",
-        }
-    except Exception as e:
-        logger.error(f"上传失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
 @app.get("/api/health-records/status")
 async def get_api_status():
     """检查API状态"""
@@ -2828,28 +2745,6 @@ async def create_health_record(
 ):
     """创建健康档案（按用户隔离）"""
     try:
-        # 后端保护：如请求体包含文件但未提供内容，返回400，避免产生空内容记录
-        try:
-            has_files = False
-            if record.metadata and isinstance(record.metadata, dict):
-                meta_files = record.metadata.get("files") or record.metadata.get(
-                    "uploaded_files"
-                )
-                if isinstance(meta_files, list) and len(meta_files) > 0:
-                    has_files = True
-            content_empty = (record.content is None) or (
-                isinstance(record.content, str) and record.content.strip() == ""
-            )
-            if has_files and content_empty:
-                raise HTTPException(
-                    status_code=400,
-                    detail="检测到文件ID但内容为空：请使用 /api/health-records/upload 进行上传与OCR，或在创建时提供内容",
-                )
-        except HTTPException:
-            raise
-        except Exception:
-            pass
-
         # 基于附件ID的去重：如提交的 metadata.files 或顶层 files 包含已生成OCR的附件，则改为更新既有记录而非新增
         file_ids: list[str] = []
         try:
@@ -3580,7 +3475,10 @@ async def get_health_insights(
 
 @app.post("/api/health-records/upload")
 async def upload_file(
-    file: UploadFile = File(...), user_id: str = Form(None), request: Request = None
+    file: UploadFile = File(...),
+    user_id: str = Form(None),
+    skip_ocr: str | None = Form(None),
+    request: Request = None,
 ):
     """上传文件"""
     try:
@@ -3650,6 +3548,13 @@ async def upload_file(
         except Exception:
             pass
 
+        skip_ocr_flag = str(skip_ocr or "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "y",
+        }
+
         # 生成文件名
         file_id = generate_id()
         file_extension = Path(file.filename).suffix
@@ -3685,6 +3590,20 @@ async def upload_file(
                 ocr_info = None
                 memory_id = None
                 record_id = None
+
+                if skip_ocr_flag:
+                    conn.commit()
+                    return {
+                        "file_id": file_id,
+                        "filename": filename,
+                        "original_filename": file.filename,
+                        "file_size": len(file_content),
+                        "mime_type": normalized_ct,
+                        "message": "文件上传成功",
+                        "ocr_info": None,
+                        "memory_id": None,
+                        "record_id": None,
+                    }
 
                 if normalized_ct.startswith("image/"):
                     image_base64 = base64.b64encode(file_content).decode("utf-8")

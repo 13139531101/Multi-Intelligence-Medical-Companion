@@ -41,16 +41,16 @@
         <view class="record-type">{{item.record_type_label}}</view>
         <view class="record-date">{{item.formatted_date}}</view>
       </view>
-      <view class="record-title">{{item.title}}</view>
-      <view class="record-desc" wx:if="{{item.description}}">{{item.description}}</view>
+      <view class="record-title">{{item.title || "健康档案"}}</view>
+      <view class="record-desc" wx:if="{{item.display_description}}">{{item.display_description}}</view>
       <view class="record-tags" wx:if="{{item.tags && item.tags.length}}">
         <view class="record-tag" wx:for="{{item.tags}}" wx:key="*this">{{item}}</view>
       </view>
       <view class="record-footer">
         <view class="record-hospital" wx:if="{{item.hospital}}">{{item.hospital}}</view>
         <view class="record-actions">
-          <view class="action-btn edit" bindtap="editRecord" data-id="{{item.id}}" catchtap="noop">编辑</view>
-          <view class="action-btn delete" bindtap="deleteRecord" data-id="{{item.id}}" catchtap="noop">删除</view>
+          <view class="action-btn edit" catchtap="editRecord" data-id="{{item.id}}">编辑</view>
+          <view class="action-btn delete" catchtap="deleteRecord" data-id="{{item.id}}">删除</view>
         </view>
       </view>
     </view>
@@ -102,11 +102,15 @@
         <textarea class="form-textarea" placeholder="请输入档案描述" bindinput="onDescInput" value="{{formData.description}}"></textarea>
       </view>
       <view class="form-group">
+        <view class="form-label">标签</view>
+        <input class="form-input" placeholder="用逗号分隔标签" bindinput="onTagsInput" value="{{formData.tagsText}}" />
+      </view>
+      <view class="form-group">
         <view class="form-label">上传文件</view>
         <view class="upload-section">
           <view class="upload-btn" bindtap="uploadFile">
             <view class="upload-icon">📎</view>
-            <view class="upload-text">选择文件</view>
+            <view class="upload-text">拍照/选择文件</view>
           </view>
           <view class="file-info" wx:if="{{formData.file_name}}">
             <view class="file-name">{{formData.file_name}}</view>
@@ -116,7 +120,7 @@
     </view>
     <view class="modal-footer">
       <button class="btn-cancel" bindtap="closeModal">取消</button>
-      <button class="btn-submit" bindtap="submitRecord">保存</button>
+      <button class="btn-submit" bindtap="saveRecord">保存</button>
     </view>
   </view>
 </view>

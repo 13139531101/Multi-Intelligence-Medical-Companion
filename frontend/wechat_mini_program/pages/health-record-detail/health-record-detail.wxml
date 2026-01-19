@@ -14,9 +14,9 @@
     </view>
   </view>
 
-  <view class="section" wx:if="{{record.description}}">
+  <view class="section" wx:if="{{record.display_description}}">
     <view class="section-title">摘要</view>
-    <view class="section-content">{{record.description}}</view>
+    <view class="section-content">{{record.display_description}}</view>
   </view>
 
   <view class="section" wx:if="{{record.content}}">

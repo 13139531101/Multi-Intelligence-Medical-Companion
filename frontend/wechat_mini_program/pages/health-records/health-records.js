@@ -23,8 +23,10 @@ Page({
       type: "",
       hospital: "",
       description: "",
-      file_url: "",
+      tagsText: "",
+      file_id: "",
       file_name: "",
+      record_id: "",
     },
     typeOptions: ["检查报告", "处方单", "病历", "化验单", "影像资料", "其他"],
     typeValues: [
@@ -77,11 +79,23 @@ Page({
         const formattedRecords = recordsData.map((record) => {
           const typeLabel = this.getTypeLabel(record.type);
           const createdAt = record.date || record.created_at;
+          const rawDesc =
+            record.description || record.summary || record.content || "";
+          const hasFiles =
+            Array.isArray(record.files) && record.files.length > 0;
+          const displayDesc =
+            rawDesc && rawDesc.trim()
+              ? rawDesc
+              : hasFiles
+                ? "已上传附件，内容待识别"
+                : "";
           return {
             ...record,
             record_type_label: typeLabel,
             formatted_date: this.formatDate(createdAt),
             tags: Array.isArray(record.tags) ? record.tags : [],
+            description: rawDesc,
+            display_description: displayDesc,
           };
         });
 
@@ -211,8 +225,10 @@ Page({
         type: "",
         hospital: "",
         description: "",
-        file_url: "",
+        tagsText: "",
+        file_id: "",
         file_name: "",
+        record_id: "",
       },
       typeIndex: 0,
     });
@@ -236,8 +252,12 @@ Page({
           type: record.type || "",
           hospital: record.hospital || "",
           description: record.description || "",
-          file_url: record.file_url || "",
-          file_name: record.file_name || "",
+          tagsText: Array.isArray(record.tags) ? record.tags.join("，") : "",
+          file_id: Array.isArray(record.files) ? record.files[0] || "" : "",
+          file_name:
+            record.file_name ||
+            (Array.isArray(record.files) ? record.files[0] || "" : ""),
+          record_id: record.id || "",
         },
         typeIndex: typeIndex >= 0 ? typeIndex : 0,
       });
@@ -299,30 +319,64 @@ Page({
     });
   },
 
+  onTagsInput(e) {
+    this.setData({
+      "formData.tagsText": e.detail.value,
+    });
+  },
+
   // 上传文件
   async uploadFile() {
     try {
+      const actionRes = await wx.showActionSheet({
+        itemList: ["拍照", "从相册选择"],
+      });
+      const sourceType = actionRes.tapIndex === 0 ? ["camera"] : ["album"];
       const res = await wx.chooseMedia({
         count: 1,
         mediaType: ["image"],
-        sourceType: ["album", "camera"],
+        sourceType,
         maxDuration: 30,
         camera: "back",
       });
 
-      if (res.tempFiles && res.tempFiles.length > 0) {
-        const tempFilePath = res.tempFiles[0].tempFilePath;
-
+      const tempFilePath =
+        (res.tempFiles && res.tempFiles[0] && res.tempFiles[0].tempFilePath) ||
+        (res.tempFilePaths && res.tempFilePaths[0]) ||
+        "";
+      if (tempFilePath) {
         wx.showLoading({
           title: "上传中...",
         });
 
-        const uploadResult = await uploadFile(tempFilePath);
+        const uploadResult = await uploadFile(
+          tempFilePath,
+          "/api/health-records/upload",
+          { skip_ocr: "1" },
+        );
+        let parsedResult = uploadResult;
+        if (typeof parsedResult === "string") {
+          try {
+            parsedResult = JSON.parse(parsedResult);
+          } catch (e) {
+            parsedResult = null;
+          }
+        }
+        if (parsedResult && parsedResult.result !== undefined) {
+          parsedResult = parsedResult.result;
+        }
+        const fileId =
+          parsedResult && (parsedResult.file_id || parsedResult.file_url);
 
-        if (uploadResult && uploadResult.file_url) {
+        if (fileId) {
           this.setData({
-            "formData.file_url": uploadResult.file_url,
-            "formData.file_name": uploadResult.file_name || "上传的文件",
+            "formData.file_id": fileId,
+            "formData.file_name":
+              parsedResult.original_filename ||
+              parsedResult.file_name ||
+              parsedResult.filename ||
+              "上传的文件",
+            "formData.record_id": parsedResult.record_id || "",
           });
 
           wx.showToast({
@@ -334,6 +388,9 @@ Page({
         }
       }
     } catch (error) {
+      if (error && error.errMsg && error.errMsg.includes("cancel")) {
+        return;
+      }
       console.error("上传文件失败:", error);
       wx.showToast({
         title: "上传失败",
@@ -347,26 +404,19 @@ Page({
   // 移除文件
   removeFile() {
     this.setData({
-      "formData.file_url": "",
+      "formData.file_id": "",
       "formData.file_name": "",
+      "formData.record_id": "",
     });
   },
 
   // 保存档案
   async saveRecord() {
-    const { title, type, hospital, description, file_url } = this.data.formData;
-
-    if (!title.trim()) {
+    const { title, type, hospital, description, file_id, tagsText, record_id } =
+      this.data.formData;
+    if (!file_id && !record_id && !this.data.isEditing) {
       wx.showToast({
-        title: "请输入档案标题",
-        icon: "none",
-      });
-      return;
-    }
-
-    if (!type) {
-      wx.showToast({
-        title: "请选择档案类型",
+        title: "请先上传图片",
         icon: "none",
       });
       return;
@@ -377,16 +427,41 @@ Page({
         title: this.data.isEditing ? "保存中..." : "添加中...",
       });
 
-      const data = {
-        title: title.trim(),
-        type,
-        hospital: hospital.trim(),
-        description: description.trim(),
-        file_url,
-      };
+      const tags = String(tagsText || "")
+        .split(/[,，\s]+/g)
+        .map((t) => t.trim())
+        .filter((t) => t);
 
-      if (this.data.isEditing) {
-        await request(`/api/health-records/${this.data.currentRecordId}`, {
+      const data = { tags };
+      const cleanTitle = (title || "").trim();
+      if (cleanTitle) {
+        data.title = cleanTitle;
+      } else if (this.data.isEditing || record_id) {
+        data.title = "";
+      }
+      if (type) {
+        data.type = type;
+      } else if (!record_id && !this.data.isEditing) {
+        data.type = this.data.typeValues[this.data.typeIndex] || "other";
+      }
+      if (hospital && hospital.trim()) {
+        data.hospital = hospital.trim();
+      }
+      if (description && description.trim()) {
+        if (this.data.isEditing || record_id) {
+          data.summary = description.trim();
+        } else {
+          data.description = description.trim();
+        }
+      }
+      if (file_id) {
+        data.files = [file_id];
+      }
+
+      if (this.data.isEditing || record_id) {
+        const targetId =
+          (this.data.isEditing && this.data.currentRecordId) || record_id;
+        await request(`/api/health-records/${targetId}`, {
           method: "PUT",
           data,
         });

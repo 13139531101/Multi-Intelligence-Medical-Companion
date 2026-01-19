@@ -24,9 +24,15 @@ Page({
       const formattedDate = this.formatDate(createdAt);
       const tags = Array.isArray(record.tags) ? record.tags : [];
       const files = Array.isArray(record.files) ? record.files : [];
-      const fileUrls = files
-        .map((f) => this.resolveFileUrl(f))
-        .filter(Boolean);
+      const rawDesc =
+        record.description || record.summary || record.content || "";
+      const displayDesc =
+        rawDesc && rawDesc.trim()
+          ? rawDesc
+          : files.length
+            ? "已上传附件，内容待识别"
+            : "";
+      const fileUrls = files.map((f) => this.resolveFileUrl(f)).filter(Boolean);
 
       this.setData({
         record: {
@@ -34,6 +40,8 @@ Page({
           record_type_label: typeLabel,
           formatted_date: formattedDate,
           tags,
+          description: rawDesc,
+          display_description: displayDesc,
         },
         fileUrls,
       });
