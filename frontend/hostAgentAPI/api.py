@@ -690,6 +690,19 @@ try:
         user_id = _get_user_id(user)
         return await health_api.get_visit_summaries(skip=skip, limit=limit, user_id=user_id, request=request)
 
+    @health_router.get("/api/visit-summaries/{summary_id}")
+    async def get_visit_summary_detail_proxy(
+        summary_id: str,
+        user: dict = Depends(get_current_user),
+        request: Request = None,
+    ):
+        user_id = _get_user_id(user)
+        return await health_api.get_visit_summary_detail(
+            summary_id=summary_id,
+            user_id=user_id,
+            request=request,
+        )
+
     @health_router.post("/api/visit-summaries/create")
     async def create_visit_summary_proxy(
         request: Request,

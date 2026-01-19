@@ -4,6 +4,7 @@
     "pages/register/register",
     "pages/index/index",
     "pages/health-records/health-records",
+    "pages/health-record-detail/health-record-detail",
     "pages/profile/profile",
     "pages/agent_chat/agent_chat",
     "pages/consultation/consultation",

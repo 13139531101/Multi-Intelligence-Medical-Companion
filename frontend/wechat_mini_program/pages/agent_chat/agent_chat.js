@@ -13,6 +13,7 @@ const {
   saveConsultationMessage,
   getConsultationMessages,
   getConsultationHistory,
+  getWeChatTemplateIds,
   resolveAgentUrl,
   SERVER_URL,
 } = require("../../utils/api");
@@ -39,6 +40,7 @@ Page({
     sessionId: "",
     suggestions: [],
     isHistorySynced: false,
+    hasRequestedSubscribe: false,
   },
 
   // 在页面实例上维护已处理的事件ID集合
@@ -101,6 +103,46 @@ Page({
     html = html.replace(/^\s*-\s+/gm, "&bull; ");
     html = html.replace(/\n/g, "<br/>");
     return `<div style="word-break: break-word;">${html}</div>`;
+  },
+
+  async ensureTaskSubscribeAuth() {
+    const cached = wx.getStorageSync("taskSubscribeAccepted");
+    if (cached) return true;
+
+    let templateId = "";
+    try {
+      const ids = await getWeChatTemplateIds();
+      templateId = (ids && (ids.task_complete || ids.taskComplete)) || "";
+    } catch (e) {
+      templateId = "";
+    }
+    if (!templateId) return false;
+
+    return await new Promise((resolve) => {
+      wx.requestSubscribeMessage({
+        tmplIds: [templateId],
+        success: (res) => {
+          const state = res ? res[templateId] : "";
+          if (state === "accept") {
+            try {
+              wx.setStorageSync("taskSubscribeAccepted", true);
+            } catch (e) {}
+            resolve(true);
+            return;
+          }
+          resolve(false);
+        },
+        fail: () => resolve(false),
+      });
+    });
+  },
+
+  async tryRequestTaskSubscribe() {
+    if (this.data.hasRequestedSubscribe) return;
+    this.setData({ hasRequestedSubscribe: true });
+    try {
+      await this.ensureTaskSubscribeAuth();
+    } catch (e) {}
   },
 
   isLongAssistantText(text) {
@@ -885,6 +927,15 @@ Page({
                     }
                   }
 
+                  const statusState = data?.result?.status?.state;
+                  if (
+                    statusState === "processing" ||
+                    statusState === "pending" ||
+                    statusState === "running"
+                  ) {
+                    this.tryRequestTaskSubscribe();
+                  }
+
                   // 2. 回复内容 (Artifact/Message)
                   const artifact = data?.result?.artifact;
                   const msgParts = data?.result?.message?.parts;
@@ -1031,6 +1082,15 @@ Page({
                         this.scheduleScrollToBottom(false, 0)
                       );
                     }
+                  }
+
+                  const statusState = data?.result?.status?.state;
+                  if (
+                    statusState === "processing" ||
+                    statusState === "pending" ||
+                    statusState === "running"
+                  ) {
+                    this.tryRequestTaskSubscribe();
                   }
 
                   // 2. 回复内容 (Artifact/Message)

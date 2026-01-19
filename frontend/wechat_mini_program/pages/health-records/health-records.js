@@ -7,6 +7,8 @@ Page({
     filteredRecords: [],
     searchKeyword: "",
     activeFilter: "all",
+    activeTag: "all",
+    tagOptions: [],
     loading: false,
     hasMore: true,
     page: 1,
@@ -18,13 +20,21 @@ Page({
     currentRecordId: null,
     formData: {
       title: "",
-      record_type: "",
+      type: "",
       hospital: "",
       description: "",
       file_url: "",
       file_name: "",
     },
     typeOptions: ["检查报告", "处方单", "病历", "化验单", "影像资料", "其他"],
+    typeValues: [
+      "examination",
+      "prescription",
+      "diagnosis",
+      "examination",
+      "examination",
+      "other",
+    ],
     typeIndex: 0,
   },
 
@@ -64,19 +74,33 @@ Page({
       }
 
       if (recordsData) {
-        const formattedRecords = recordsData.map((record) => ({
-          ...record,
-          formatted_date: this.formatDate(record.created_at),
-        }));
+        const formattedRecords = recordsData.map((record) => {
+          const typeLabel = this.getTypeLabel(record.type);
+          const createdAt = record.date || record.created_at;
+          return {
+            ...record,
+            record_type_label: typeLabel,
+            formatted_date: this.formatDate(createdAt),
+            tags: Array.isArray(record.tags) ? record.tags : [],
+          };
+        });
 
         const records = refresh
           ? formattedRecords
           : [...this.data.records, ...formattedRecords];
 
+        const tagSet = new Set();
+        records.forEach((r) => {
+          (r.tags || []).forEach((t) => {
+            if (t) tagSet.add(t);
+          });
+        });
+
         this.setData({
           records,
           page: page + 1,
           hasMore: recordsData.length === this.data.limit,
+          tagOptions: Array.from(tagSet),
         });
 
         this.filterRecords();
@@ -115,6 +139,14 @@ Page({
     this.filterRecords();
   },
 
+  setTagFilter(e) {
+    const tag = e.currentTarget.dataset.tag;
+    this.setData({
+      activeTag: tag,
+    });
+    this.filterRecords();
+  },
+
   // 筛选档案
   filterRecords() {
     let filtered = [...this.data.records];
@@ -122,21 +154,25 @@ Page({
     // 按类型筛选
     if (this.data.activeFilter !== "all") {
       const filterMap = {
-        report: "检查报告",
-        prescription: "处方单",
-        other: ["病历", "化验单", "影像资料", "其他"],
+        report: ["examination"],
+        prescription: ["prescription"],
+        other: ["other", "diagnosis", "surgery"],
       };
 
       const filterType = filterMap[this.data.activeFilter];
       if (Array.isArray(filterType)) {
         filtered = filtered.filter((record) =>
-          filterType.includes(record.record_type)
+          filterType.includes(record.type),
         );
       } else {
-        filtered = filtered.filter(
-          (record) => record.record_type === filterType
-        );
+        filtered = filtered.filter((record) => record.type === filterType);
       }
+    }
+
+    if (this.data.activeTag !== "all") {
+      filtered = filtered.filter((record) =>
+        (record.tags || []).includes(this.data.activeTag),
+      );
     }
 
     // 按关键词搜索
@@ -147,7 +183,7 @@ Page({
           record.title.toLowerCase().includes(keyword) ||
           (record.description &&
             record.description.toLowerCase().includes(keyword)) ||
-          (record.hospital && record.hospital.toLowerCase().includes(keyword))
+          (record.hospital && record.hospital.toLowerCase().includes(keyword)),
       );
     }
 
@@ -172,7 +208,7 @@ Page({
       currentRecordId: null,
       formData: {
         title: "",
-        record_type: "",
+        type: "",
         hospital: "",
         description: "",
         file_url: "",
@@ -188,7 +224,8 @@ Page({
     const record = this.data.records.find((r) => r.id === id);
 
     if (record) {
-      const typeIndex = this.data.typeOptions.indexOf(record.record_type);
+      const typeLabel = this.getTypeLabel(record.type);
+      const typeIndex = this.data.typeOptions.indexOf(typeLabel);
 
       this.setData({
         showModal: true,
@@ -196,7 +233,7 @@ Page({
         currentRecordId: id,
         formData: {
           title: record.title || "",
-          record_type: record.record_type || "",
+          type: record.type || "",
           hospital: record.hospital || "",
           description: record.description || "",
           file_url: record.file_url || "",
@@ -217,7 +254,7 @@ Page({
       success: async (res) => {
         if (res.confirm) {
           try {
-            await request(`/api/health-records/${id}`, "DELETE");
+            await request(`/api/health-records/${id}`, { method: "DELETE" });
             wx.showToast({
               title: "删除成功",
               icon: "success",
@@ -246,7 +283,7 @@ Page({
     const index = parseInt(e.detail.value);
     this.setData({
       typeIndex: index,
-      "formData.record_type": this.data.typeOptions[index],
+      "formData.type": this.data.typeValues[index],
     });
   },
 
@@ -317,8 +354,7 @@ Page({
 
   // 保存档案
   async saveRecord() {
-    const { title, record_type, hospital, description, file_url } =
-      this.data.formData;
+    const { title, type, hospital, description, file_url } = this.data.formData;
 
     if (!title.trim()) {
       wx.showToast({
@@ -328,7 +364,7 @@ Page({
       return;
     }
 
-    if (!record_type) {
+    if (!type) {
       wx.showToast({
         title: "请选择档案类型",
         icon: "none",
@@ -343,24 +379,23 @@ Page({
 
       const data = {
         title: title.trim(),
-        record_type,
+        type,
         hospital: hospital.trim(),
         description: description.trim(),
         file_url,
       };
 
       if (this.data.isEditing) {
-        await request(
-          `/api/health-records/${this.data.currentRecordId}`,
-          "PUT",
-          data
-        );
+        await request(`/api/health-records/${this.data.currentRecordId}`, {
+          method: "PUT",
+          data,
+        });
         wx.showToast({
           title: "保存成功",
           icon: "success",
         });
       } else {
-        await request("/api/health-records", "POST", data);
+        await request("/api/health-records", { method: "POST", data });
         wx.showToast({
           title: "添加成功",
           icon: "success",
@@ -397,6 +432,17 @@ Page({
     const day = String(date.getDate()).padStart(2, "0");
 
     return `${year}-${month}-${day}`;
+  },
+
+  getTypeLabel(type) {
+    const mapping = {
+      examination: "检查报告",
+      prescription: "处方单",
+      diagnosis: "病历",
+      surgery: "病历",
+      other: "其他",
+    };
+    return mapping[type] || "其他";
   },
 
   // 下拉刷新

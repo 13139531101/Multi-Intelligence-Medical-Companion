@@ -26,17 +26,26 @@
         其他
       </view>
     </view>
+    <view class="tag-filters" wx:if="{{tagOptions.length > 0}}">
+      <view class="tag-filter {{activeTag === 'all' ? 'active' : ''}}" bindtap="setTagFilter" data-tag="all">全部标签</view>
+      <view class="tag-filter {{activeTag === item ? 'active' : ''}}" wx:for="{{tagOptions}}" wx:key="*this" bindtap="setTagFilter" data-tag="{{item}}">
+        {{item}}
+      </view>
+    </view>
   </view>
 
   <!-- 档案列表 -->
   <view class="records-list" wx:if="{{filteredRecords.length > 0}}">
     <view class="record-item" wx:for="{{filteredRecords}}" wx:key="id" bindtap="viewRecord" data-id="{{item.id}}">
       <view class="record-header">
-        <view class="record-type">{{item.record_type}}</view>
+        <view class="record-type">{{item.record_type_label}}</view>
         <view class="record-date">{{item.formatted_date}}</view>
       </view>
       <view class="record-title">{{item.title}}</view>
       <view class="record-desc" wx:if="{{item.description}}">{{item.description}}</view>
+      <view class="record-tags" wx:if="{{item.tags && item.tags.length}}">
+        <view class="record-tag" wx:for="{{item.tags}}" wx:key="*this">{{item}}</view>
+      </view>
       <view class="record-footer">
         <view class="record-hospital" wx:if="{{item.hospital}}">{{item.hospital}}</view>
         <view class="record-actions">

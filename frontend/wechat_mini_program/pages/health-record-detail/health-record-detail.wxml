@@ -1,0 +1,39 @@
+<view class="container">
+  <view class="header">
+    <view class="title">{{record.title || "健康档案"}}</view>
+    <view class="meta-row">
+      <view class="type">{{record.record_type_label}}</view>
+      <view class="date">{{record.formatted_date}}</view>
+    </view>
+    <view class="meta-row" wx:if="{{record.hospital || record.doctor}}">
+      <view class="meta-item" wx:if="{{record.hospital}}">医院：{{record.hospital}}</view>
+      <view class="meta-item" wx:if="{{record.doctor}}">医生：{{record.doctor}}</view>
+    </view>
+    <view class="tags" wx:if="{{record.tags && record.tags.length}}">
+      <view class="tag" wx:for="{{record.tags}}" wx:key="*this">{{item}}</view>
+    </view>
+  </view>
+
+  <view class="section" wx:if="{{record.description}}">
+    <view class="section-title">摘要</view>
+    <view class="section-content">{{record.description}}</view>
+  </view>
+
+  <view class="section" wx:if="{{record.content}}">
+    <view class="section-title">档案内容</view>
+    <view class="section-content">{{record.content}}</view>
+  </view>
+
+  <view class="section" wx:if="{{fileUrls.length}}">
+    <view class="section-title">附件</view>
+    <view class="files">
+      <view class="file-item" wx:for="{{fileUrls}}" wx:key="*this" bindtap="onFileTap" data-url="{{item}}">
+        附件 {{index + 1}}
+      </view>
+    </view>
+  </view>
+
+  <view class="empty" wx:if="{{!isLoading && !record}}">
+    暂无详情内容
+  </view>
+</view>

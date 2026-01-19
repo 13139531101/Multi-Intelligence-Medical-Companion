@@ -1795,6 +1795,77 @@ async def get_visit_summaries(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/visit-summaries/{summary_id}", response_model=VisitSummary)
+async def get_visit_summary_detail(
+    summary_id: str,
+    user_id: Optional[str] = Query(None),
+    request: Request = None,
+):
+    try:
+        uid = _resolve_user_id(request, user_id)
+        if not uid:
+            raise HTTPException(status_code=401, detail="未认证用户")
+
+        with get_db_connection() as conn:
+            with conn.cursor(row_factory=dict_row) as cursor:
+                cursor.execute(
+                    "SELECT * FROM visit_summaries WHERE id = %s AND user_id = %s",
+                    (summary_id, uid),
+                )
+                row = cursor.fetchone()
+                if not row:
+                    raise HTTPException(status_code=404, detail="就诊摘要不存在或无权访问")
+
+                for k in list(row.keys()):
+                    row[k] = _sanitize_json_value(row.get(k))
+
+                for field in ["files", "tests"]:
+                    if isinstance(row.get(field), str):
+                        try:
+                            row[field] = json.loads(row[field])
+                        except Exception:
+                            row[field] = []
+                    elif row.get(field) is None:
+                        row[field] = []
+
+                if not (row.get("diagnosis") or "").strip():
+                    for src in (row.get("summary_content"), row.get("notes")):
+                        s = (src or "").strip()
+                        if not s:
+                            continue
+                        m = re.search(
+                            r"(?:诊断印象|诊断意见|临床诊断|初步诊断|入院诊断|出院诊断|诊断|印象)\s*[:：]?\s*([^\n；;。]{2,80})",
+                            s,
+                        )
+                        if m:
+                            v = (m.group(1) or "").strip()
+                            if v:
+                                row["diagnosis"] = v
+                                break
+
+                if not (row.get("hospital") or "").strip():
+                    for src in (row.get("summary_content"), row.get("notes")):
+                        s = (src or "").strip()
+                        if not s:
+                            continue
+                        m = re.search(
+                            r"(?:医院|医疗机构名称|医疗机构|机构名称)\s*[:：]?\s*([^\n；;。]{2,80})",
+                            s,
+                        )
+                        if m:
+                            v = (m.group(1) or "").strip()
+                            if v:
+                                row["hospital"] = v
+                                break
+
+                return VisitSummary(**row)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取就诊摘要详情失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/api/visit-summaries/create", response_model=VisitSummary)
 async def create_visit_summary(
     summary: VisitSummaryCreate,
