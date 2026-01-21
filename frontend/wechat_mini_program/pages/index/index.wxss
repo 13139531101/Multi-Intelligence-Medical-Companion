@@ -110,6 +110,10 @@
 }
 
 /* 最近活动区域 */
+.activity-scroll {
+  max-height: 360rpx;
+}
+
 .activity-list {
   display: flex;
   flex-direction: column;

@@ -19,15 +19,17 @@
       <view class="section-title">最近活动</view>
       <view class="section-more" bindtap="viewMoreActivities">查看全部</view>
     </view>
-    <view class="activity-list" wx:if="{{recentActivities.length > 0}}">
-      <view class="activity-item" wx:for="{{recentActivities}}" wx:key="id">
-        <view class="activity-icon">{{item.icon}}</view>
-        <view class="activity-content">
-          <view class="activity-title">{{item.title}}</view>
-          <view class="activity-time">{{item.time}}</view>
+    <scroll-view class="activity-scroll" scroll-y="true" wx:if="{{recentActivities.length > 0}}">
+      <view class="activity-list">
+        <view class="activity-item" wx:for="{{recentActivities}}" wx:key="id">
+          <view class="activity-icon">{{item.icon}}</view>
+          <view class="activity-content">
+            <view class="activity-title">{{item.title}}</view>
+            <view class="activity-time">{{item.time}}</view>
+          </view>
         </view>
       </view>
-    </view>
+    </scroll-view>
     <view class="empty-state" wx:else>
       <view class="empty-icon">📝</view>
       <view class="empty-text">暂无最近活动</view>

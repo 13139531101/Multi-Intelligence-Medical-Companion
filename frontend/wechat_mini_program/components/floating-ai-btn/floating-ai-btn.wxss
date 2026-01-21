@@ -1,18 +1,27 @@
-.floating-ai-btn {
+.floating-area {
   position: fixed;
-  right: 30rpx;
-  bottom: 180rpx; /* Adjusted to be above TabBar */
+  left: 0;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: 1000;
+  pointer-events: none;
+}
+
+.floating-ai-btn {
   width: 110rpx;
   height: 110rpx;
-  background: #007AFF;
+  background: #007aff;
   border-radius: 50%;
   display: flex;
   flex-direction: column;
   justify-content: center;
   align-items: center;
   box-shadow: 0 4rpx 16rpx rgba(0, 122, 255, 0.4);
-  z-index: 1000;
   transition: all 0.3s ease;
+  pointer-events: auto;
 }
 
 .floating-ai-btn:active {

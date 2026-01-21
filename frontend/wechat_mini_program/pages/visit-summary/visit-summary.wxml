@@ -28,19 +28,9 @@
     <view class="summary-items" wx:if="{{summaries.length > 0}}">
       <view class="summary-item" wx:for="{{summaries}}" wx:key="id">
         <view class="item-header">
-          <view class="hospital-name {{item.expanded ? 'expanded' : 'collapsed'}}">{{item.expanded ? (item.hospital || item.hospitalDisplay || '未知医院') : (item.hospitalDisplay || item.hospital || '未知医院')}}</view>
           <text class="visit-date">{{item.visit_date}}</text>
         </view>
         <view class="item-body">
-          <view class="diagnosis-row">
-            <text class="label">诊断：</text>
-            <view class="value diagnosis-value {{item.expanded ? 'expanded' : 'collapsed'}}">{{item.expanded ? (item.diagnosis || item.diagnosisDisplay || '未识别') : (item.diagnosisDisplay || item.diagnosis || '未识别')}}</view>
-          </view>
-          <view class="tags-row" wx:if="{{item.medTags && item.medTags.length}}">
-            <view class="tag" wx:for="{{item.medTags}}" wx:key="*this" wx:for-item="tag">
-              {{tag}}
-            </view>
-          </view>
           <view class="summary-row" wx:if="{{item.summaryText}}">
             <text class="label">摘要：</text>
             <view class="summary-text {{item.expanded ? 'expanded' : 'collapsed'}}">{{item.expanded ? item.summaryText : item.summaryPreview}}</view>

@@ -79,16 +79,30 @@ Page({
         const formattedRecords = recordsData.map((record) => {
           const typeLabel = this.getTypeLabel(record.type);
           const createdAt = record.date || record.created_at;
-          const rawDesc =
-            record.description || record.summary || record.content || "";
+          const structuredDesc = this.buildStructuredSummary(record);
+          const rawDesc = record.description || record.summary || "";
+          const contentText = record.content ? String(record.content) : "";
+          const rawTrimmed = String(rawDesc || "").trim();
+          const contentTrimmed = contentText.trim();
+          const useContentForSummary =
+            rawTrimmed &&
+            contentTrimmed &&
+            contentTrimmed.startsWith(rawTrimmed) &&
+            contentTrimmed.length > rawTrimmed.length;
           const hasFiles =
             Array.isArray(record.files) && record.files.length > 0;
           const displayDesc =
-            rawDesc && rawDesc.trim()
-              ? rawDesc
-              : hasFiles
-                ? "已上传附件，内容待识别"
-                : "";
+            structuredDesc && structuredDesc.trim()
+              ? structuredDesc
+              : rawDesc && rawDesc.trim()
+                ? useContentForSummary
+                  ? contentTrimmed
+                  : rawDesc
+                : contentTrimmed
+                  ? contentTrimmed
+                  : hasFiles
+                    ? "已上传附件，内容待识别"
+                    : "";
           return {
             ...record,
             record_type_label: typeLabel,
@@ -134,6 +148,123 @@ Page({
   loadMore() {
     if (!this.data.hasMore || this.data.loading) return;
     this.loadRecords(false);
+  },
+
+  buildStructuredSummary(record) {
+    const metadata =
+      record && record.metadata && typeof record.metadata === "object"
+        ? record.metadata
+        : {};
+    const storedSummary =
+      typeof metadata.structured_summary === "string"
+        ? metadata.structured_summary.trim()
+        : "";
+    if (storedSummary) return storedSummary;
+    let info = metadata.extracted_info || metadata.extracted_data || {};
+    if (typeof info === "string") {
+      try {
+        info = JSON.parse(info);
+      } catch (e) {
+        info = {};
+      }
+    }
+    if (!info || typeof info !== "object") return "";
+
+    const parts = [];
+    const diagnosis = this.normalizeTextField(
+      info.diagnosis || info.diagnoses,
+      5,
+    );
+    if (diagnosis) parts.push(`诊断：${diagnosis}`);
+    const meds = this.normalizeMedications(info.medications, 5);
+    if (meds) parts.push(`用药：${meds}`);
+    const tests = this.normalizeTests(info.test_results || info.tests, 5);
+    if (tests) parts.push(`检查：${tests}`);
+    const advice = this.normalizeTextField(
+      info.medical_advice || info.advice,
+      5,
+    );
+    if (advice) parts.push(`医嘱：${advice}`);
+    return parts.join("；");
+  },
+
+  normalizeTextField(value, limit = 5) {
+    if (Array.isArray(value)) {
+      const items = value.map((v) => String(v || "").trim()).filter((v) => v);
+      return items.slice(0, limit).join("；");
+    }
+    if (typeof value === "string") {
+      return value.trim();
+    }
+    return "";
+  },
+
+  normalizeMedications(value, limit = 5) {
+    if (Array.isArray(value)) {
+      const items = value
+        .map((item) => {
+          if (!item) return "";
+          if (typeof item === "string") return item.trim();
+          if (typeof item === "object") {
+            const name = String(item.name || "").trim();
+            const dosage = String(item.dosage || "").trim();
+            const frequency = String(item.frequency || "").trim();
+            const duration = String(item.duration || "").trim();
+            const usage = String(item.usage_instruction || "").trim();
+            const pieces = [name, dosage, frequency, duration, usage].filter(
+              (v) => v,
+            );
+            return pieces.join(" ");
+          }
+          return "";
+        })
+        .filter((v) => v);
+      return items.slice(0, limit).join("、");
+    }
+    if (typeof value === "string") {
+      return value.trim();
+    }
+    return "";
+  },
+
+  normalizeTests(value, limit = 5) {
+    if (Array.isArray(value)) {
+      const items = value
+        .map((item) => {
+          if (!item) return "";
+          if (typeof item === "string") return item.trim();
+          if (typeof item === "object") {
+            const name = String(item.name || item.test_name || "").trim();
+            const val = String(item.value || "").trim();
+            const unit = String(item.unit || "").trim();
+            const pieces = [name, val, unit].filter((v) => v);
+            return pieces.join(" ");
+          }
+          return "";
+        })
+        .filter((v) => v);
+      return items.slice(0, limit).join("、");
+    }
+    if (value && typeof value === "object") {
+      const entries = Object.entries(value)
+        .map(([k, v]) => {
+          if (!v || typeof v !== "object") return "";
+          const val = String(v.value || "").trim();
+          const unit = String(v.unit || "").trim();
+          const parts = [String(k || "").trim(), val, unit].filter((x) => x);
+          return parts.join(" ");
+        })
+        .filter((v) => v);
+      return entries.slice(0, limit).join("、");
+    }
+    return "";
+  },
+
+  truncateText(text, maxLen) {
+    const s = String(text || "").trim();
+    if (!s) return "";
+    if (!maxLen || s.length <= maxLen) return s;
+    return `${s.slice(0, maxLen)}...`;
   },
 
   // 搜索输入

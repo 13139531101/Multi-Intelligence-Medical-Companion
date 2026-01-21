@@ -3387,6 +3387,49 @@ async def generate_ai_summary(request: Request, user: dict = Depends(get_current
             "userId": str(user.get("id")),
         }
 
+    try:
+        dbm = get_db_manager()
+        _ensure_visit_summaries_table(dbm)
+        dbm.execute_update(
+            """
+            INSERT INTO visit_summaries (
+                id, user_id, title, visit_date, doctor, hospital, department,
+                chief_complaint, symptoms, examination, diagnosis, treatment,
+                prescription, follow_up, notes, files, tests, is_deleted, created_at, updated_at
+            ) VALUES (
+                %s, %s, %s, %s, %s, %s, %s,
+                %s, %s, %s, %s, %s,
+                %s, %s, %s, %s::jsonb, %s::jsonb, 0, now(), now()
+            )
+            """,
+            (
+                generated.get("id"),
+                _get_user_id(user),
+                generated.get("title") or "就诊摘要",
+                _normalize_date(generated.get("visitDate")),
+                generated.get("doctor") or "",
+                generated.get("hospital") or "",
+                generated.get("department") or "",
+                generated.get("chiefComplaint") or "",
+                generated.get("symptoms") or "",
+                generated.get("examination") or "",
+                generated.get("diagnosis") or "",
+                generated.get("treatment") or "",
+                generated.get("prescription") or "",
+                generated.get("followUp") or "",
+                generated.get("notes") or "",
+                json.dumps(generated.get("files") or []),
+                json.dumps(generated.get("tests") or []),
+            ),
+        )
+    except Exception:
+        pass
+    try:
+        items = _load_user_summaries(_get_user_id(user))
+        items.append(generated)
+        _save_user_summaries(_get_user_id(user), items)
+    except Exception:
+        pass
     return generated
 
 

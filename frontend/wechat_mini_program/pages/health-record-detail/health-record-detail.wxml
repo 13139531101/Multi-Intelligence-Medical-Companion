@@ -19,17 +19,10 @@
     <view class="section-content">{{record.display_description}}</view>
   </view>
 
-  <view class="section" wx:if="{{record.content}}">
-    <view class="section-title">档案内容</view>
-    <view class="section-content">{{record.content}}</view>
-  </view>
-
   <view class="section" wx:if="{{fileUrls.length}}">
-    <view class="section-title">附件</view>
-    <view class="files">
-      <view class="file-item" wx:for="{{fileUrls}}" wx:key="*this" bindtap="onFileTap" data-url="{{item}}">
-        附件 {{index + 1}}
-      </view>
+    <view class="section-title">图片</view>
+    <view class="image-grid">
+      <image class="thumb" wx:for="{{fileUrls}}" wx:key="*this" src="{{item}}" mode="aspectFill" catchtap="previewImage" data-urls="{{fileUrls}}" data-current="{{item}}"></image>
     </view>
   </view>
 

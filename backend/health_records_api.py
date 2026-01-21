@@ -743,6 +743,32 @@ def _normalize_ocr_text(raw: str | None) -> str:
         return (raw or "").strip()
 
 
+def _is_ocr_placeholder_text(text: str | None) -> bool:
+    s = (text or "").strip()
+    if not s:
+        return True
+    low = s.lower()
+    if low == "test":
+        return True
+    if s in ("OCR识别结果", "识别结果"):
+        return True
+    ocr_err_prefixes = (
+        "阿里云OCR(2021)调用失败",
+        "阿里云OCR(2021)配置缺失",
+        "阿里云OCR(2021) SDK未安装",
+        "阿里云OCR调用失败",
+        "阿里云OCR配置缺失",
+        "阿里云OCR SDK未安装",
+        "图片Base64数据不合法",
+        "本地OCR兜底不可用",
+        "本地OCR兜底失败",
+        "本地OCR兜底异常",
+        "OCR识别失败",
+        "不支持的OCR服务提供商",
+    )
+    return s.startswith(ocr_err_prefixes)
+
+
 def _generate_ai_summary(ocr_text: str, extracted: dict | None) -> str:
     try:
         text_clean = (ocr_text or "").strip().replace("\n", " ")
@@ -772,7 +798,7 @@ def _generate_ai_summary(ocr_text: str, extracted: dict | None) -> str:
             if tests:
                 parts.append(f"检查：{str(tests)}")
 
-        # 优先使用OCR正文；若OCR文本足够（>=50字），直接截断为摘要
+        # 优先使用OCR正文；若OCR文本足够（>=50字），使用全文作为摘要
         if len(text_clean) >= 50:
             summary = text_clean
         else:
@@ -789,6 +815,86 @@ def _generate_ai_summary(ocr_text: str, extracted: dict | None) -> str:
         t = ocr_text or ""
         t = t.strip().replace("\n", " ")
         return t
+
+
+def _build_structured_summary(extracted: dict | None) -> str | None:
+    if not isinstance(extracted, dict):
+        return None
+    parts: list[str] = []
+    doc_type = str(extracted.get("document_type") or "").strip()
+    if doc_type:
+        parts.append(f"类型：{doc_type}")
+    date_val = extracted.get("date") or extracted.get("record_date")
+    date_str = str(date_val or "").strip()
+    if date_str:
+        parts.append(f"日期：{date_str}")
+    diagnosis = extracted.get("diagnosis")
+    if isinstance(diagnosis, list):
+        diag_list = [str(x).strip() for x in diagnosis if str(x).strip()]
+        if diag_list:
+            parts.append(f"诊断：{'；'.join(diag_list[:5])}")
+    elif isinstance(diagnosis, str) and diagnosis.strip():
+        parts.append(f"诊断：{diagnosis.strip()}")
+
+    medications = extracted.get("medications")
+    if isinstance(medications, list) and medications:
+        med_items: list[str] = []
+        for m in medications[:5]:
+            if isinstance(m, str) and m.strip():
+                med_items.append(m.strip())
+            elif isinstance(m, dict):
+                name = str(m.get("name") or "").strip()
+                dosage = str(m.get("dosage") or "").strip()
+                frequency = str(m.get("frequency") or "").strip()
+                duration = str(m.get("duration") or "").strip()
+                usage = str(m.get("usage_instruction") or "").strip()
+                segs = [name, dosage, frequency, duration, usage]
+                text = " ".join([s for s in segs if s])
+                if text:
+                    med_items.append(text)
+        if med_items:
+            parts.append(f"用药：{'、'.join(med_items)}")
+
+    test_results = extracted.get("test_results")
+    if isinstance(test_results, dict) and test_results:
+        test_items: list[str] = []
+        for k, v in list(test_results.items())[:5]:
+            if not k:
+                continue
+            if isinstance(v, dict):
+                val = str(v.get("value") or "").strip()
+                unit = str(v.get("unit") or "").strip()
+                segs = [str(k).strip(), val, unit]
+                text = " ".join([s for s in segs if s])
+                if text:
+                    test_items.append(text)
+            else:
+                text = f"{str(k).strip()} {str(v).strip()}".strip()
+                if text:
+                    test_items.append(text)
+        if test_items:
+            parts.append(f"检查：{'、'.join(test_items)}")
+
+    doctor_info = extracted.get("doctor_info")
+    if isinstance(doctor_info, dict):
+        hospital = str(doctor_info.get("hospital") or "").strip()
+        doctor = str(doctor_info.get("doctor") or "").strip()
+        dept = str(doctor_info.get("department") or "").strip()
+        doc_parts = [p for p in [hospital, dept, doctor] if p]
+        if doc_parts:
+            parts.append(f"就诊：{'、'.join(doc_parts)}")
+
+    advice = extracted.get("medical_advice")
+    if isinstance(advice, list):
+        adv_list = [str(x).strip() for x in advice if str(x).strip()]
+        if adv_list:
+            parts.append(f"医嘱：{'；'.join(adv_list[:5])}")
+    elif isinstance(advice, str) and advice.strip():
+        parts.append(f"医嘱：{advice.strip()}")
+
+    if not parts:
+        return None
+    return "；".join(parts)
 
 
 def _try_generate_visit_summary_with_agent(
@@ -1033,9 +1139,34 @@ def _sanitize_json_value(v: Any) -> Any:
     return v
 
 
+def _sanitize_text_value(v: Any) -> Any:
+    if v is None:
+        return None
+    if isinstance(v, str):
+        return v.replace("\x00", "")
+    return v
+
+
+def _ensure_jsonable(obj: Any) -> Any:
+    if obj is None:
+        return None
+    try:
+        json.dumps(obj, ensure_ascii=False)
+        return obj
+    except Exception:
+        try:
+            return {"raw": str(obj)}
+        except Exception:
+            return None
+
+
 async def _maybe_llm_summary(ocr_text: str, extracted: dict | None) -> str | None:
     try:
-        use_llm = str(os.getenv("USE_LLM_SUMMARY", "0")).lower() in ("1", "true", "yes")
+        raw_flag = os.getenv("USE_LLM_SUMMARY")
+        if raw_flag is None:
+            use_llm = True
+        else:
+            use_llm = str(raw_flag).lower() in ("1", "true", "yes")
         logger.info(f"LLM_SUMMARY_FLAG={use_llm}")
         if not use_llm:
             logger.info("LLM 摘要未开启，跳过")
@@ -2173,6 +2304,21 @@ async def analyze_visit_summary_image(
                 notes_val = f"{notes_val}\n\n{summary_content}"
             else:
                 notes_val = summary_content
+        summary_content = _sanitize_text_value(summary_content)
+        notes_val = _sanitize_text_value(notes_val)
+        agent_raw = _ensure_jsonable(agent_raw)
+        cleaned_fields = {
+            "doctor": _sanitize_text_value(extracted.get("doctor")),
+            "hospital": _sanitize_text_value(extracted.get("hospital")),
+            "department": _sanitize_text_value(extracted.get("department")),
+            "chief_complaint": _sanitize_text_value(extracted.get("chief_complaint")),
+            "symptoms": _sanitize_text_value(extracted.get("symptoms")),
+            "examination": _sanitize_text_value(extracted.get("examination")),
+            "diagnosis": _sanitize_text_value(diagnosis_val),
+            "treatment": _sanitize_text_value(extracted.get("treatment")),
+            "prescription": _sanitize_text_value(extracted.get("prescription")),
+            "follow_up": _sanitize_text_value(extracted.get("follow_up")),
+        }
 
         with get_db_connection() as conn:
             with conn.cursor(row_factory=dict_row) as cursor:
@@ -2195,16 +2341,16 @@ async def analyze_visit_summary_image(
                         uid,
                         summary_title,
                         extracted.get("visit_date"),
-                        extracted.get("doctor"),
-                        extracted.get("hospital"),
-                        extracted.get("department"),
-                        extracted.get("chief_complaint"),
-                        extracted.get("symptoms"),
-                        extracted.get("examination"),
-                        diagnosis_val,
-                        extracted.get("treatment"),
-                        extracted.get("prescription"),
-                        extracted.get("follow_up"),
+                        cleaned_fields["doctor"],
+                        cleaned_fields["hospital"],
+                        cleaned_fields["department"],
+                        cleaned_fields["chief_complaint"],
+                        cleaned_fields["symptoms"],
+                        cleaned_fields["examination"],
+                        cleaned_fields["diagnosis"],
+                        cleaned_fields["treatment"],
+                        cleaned_fields["prescription"],
+                        cleaned_fields["follow_up"],
                         summary_content,
                         notes_val,
                         Json([file_id]),
@@ -2219,10 +2365,6 @@ async def analyze_visit_summary_image(
                     ),
                 )
                 new_id = cursor.fetchone()["id"]
-                cursor.execute(
-                    "UPDATE file_attachments SET record_id = %s WHERE id = %s",
-                    (new_id, file_id),
-                )
                 conn.commit()
                 cursor.execute("SELECT * FROM visit_summaries WHERE id = %s", (new_id,))
                 row = cursor.fetchone()
@@ -3611,6 +3753,7 @@ async def upload_file(
                     document_type = "unknown"
                     confidence = 0.0
                     _used_paddle = False
+                    used_external = False
                     try:
                         from paddleocr import PaddleOCR  # type: ignore
                         import tempfile
@@ -3653,7 +3796,24 @@ async def upload_file(
                             if hasattr(extract_text_from_image, "fn")
                             else extract_text_from_image(image_base64)
                         )
+                        used_external = True
                     ocr_text = _normalize_ocr_text(ocr_text)
+                    if (
+                        _is_ocr_placeholder_text(ocr_text)
+                        and extract_text_from_image
+                        and _used_paddle
+                        and not used_external
+                    ):
+                        ocr_text = (
+                            extract_text_from_image.fn(image_base64)
+                            if hasattr(extract_text_from_image, "fn")
+                            else extract_text_from_image(image_base64)
+                        )
+                        used_external = True
+                        ocr_text = _normalize_ocr_text(ocr_text)
+                    if _is_ocr_placeholder_text(ocr_text):
+                        conn.rollback()
+                        raise HTTPException(status_code=422, detail="OCR识别结果无效")
 
                     if validate_medical_document:
                         try:
@@ -3904,7 +4064,15 @@ async def upload_file(
                     except Exception:
                         pass
 
-                    # 生成摘要：优先使用大模型；失败则回退规则摘要
+                    structured_summary = _build_structured_summary(
+                        metadata.get("extracted_info")
+                        if isinstance(metadata, dict)
+                        else None
+                    )
+                    if structured_summary and isinstance(metadata, dict):
+                        metadata["structured_summary"] = structured_summary
+
+                    llm_summary = None
                     try:
                         llm_summary = await _maybe_llm_summary(
                             ocr_text_str,
@@ -3919,15 +4087,21 @@ async def upload_file(
                         llm_summary = None
                     if llm_summary is not None:
                         logger.info("使用 LLM 摘要")
+                    elif structured_summary:
+                        logger.info("使用结构化摘要")
                     else:
                         logger.info("使用规则摘要")
-                    final_summary = llm_summary or _generate_ai_summary(
-                        ocr_text_str,
-                        (
-                            metadata.get("extracted_info")
-                            if isinstance(metadata, dict)
-                            else None
-                        ),
+                    final_summary = (
+                        llm_summary
+                        or structured_summary
+                        or _generate_ai_summary(
+                            ocr_text_str,
+                            (
+                                metadata.get("extracted_info")
+                                if isinstance(metadata, dict)
+                                else None
+                            ),
+                        )
                     )
 
                     cursor.execute(
