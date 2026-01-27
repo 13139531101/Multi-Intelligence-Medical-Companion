@@ -40,14 +40,70 @@
   <view class="section">
     <view class="section-header">
       <view class="section-title">健康趋势</view>
-      <view class="section-more" bindtap="viewDetailedTrends">详细报告</view>
+      <view class="section-more" bindtap="refreshTrends">刷新</view>
     </view>
-    <view class="trend-chart">
-      <view class="trend-icon">📈</view>
-      <view class="trend-content">
-        <view class="trend-title">您的健康数据正在稳步改善</view>
-        <view class="trend-desc">基于最近30天的数据分析</view>
+    <view wx:if="{{trendLoading}}" class="trend-empty">趋势加载中</view>
+    <view wx:elif="{{trendIndicators.length === 0}}" class="trend-empty">
+      {{trendError || '暂无趋势数据'}}
+    </view>
+    <scroll-view wx:else class="trend-scroll" scroll-y="true">
+      <view class="trend-list">
+        <view
+          class="trend-item {{trendSelectedName === item.name ? 'trend-item-active' : ''}}"
+          wx:for="{{trendIndicators}}"
+          wx:for-item="item"
+          wx:key="name"
+          data-name="{{item.name}}"
+          bindtap="selectTrendIndicator"
+        >
+          <view class="trend-item-main">
+            <view class="trend-item-name">{{item.name}}</view>
+            <view class="trend-item-latest">{{item.latestText}}</view>
+          </view>
+          <view class="trend-item-meta">
+            <view class="trend-item-count">共{{item.count}}条</view>
+            <view class="trend-item-stats" wx:if="{{item.statsText}}">
+              {{item.statsText}}
+            </view>
+          </view>
+        </view>
       </view>
+    </scroll-view>
+
+    <view wx:if="{{trendSelected}}" class="trend-detail">
+      <view class="trend-detail-title">{{trendSelected.name}}趋势明细</view>
+      <view class="trend-detail-sub" wx:if="{{trendSelected.stats}}">
+        均值 {{trendSelected.stats.avg}} ｜ 最低 {{trendSelected.stats.min}} ｜ 最高 {{trendSelected.stats.max}}
+      </view>
+      <view wx:if="{{trendSelected.chartEnabled}}" class="trend-chart-canvas-wrap">
+        <canvas
+          canvas-id="trendChart"
+          id="trendChart"
+          class="trend-chart-canvas"
+          style="width: {{trendChartW}}px; height: {{trendChartH}}px;"
+          width="{{trendChartW}}"
+          height="{{trendChartH}}"
+        ></canvas>
+      </view>
+      <view wx:elif="{{trendSelected.count > 0}}" class="trend-chart-empty">
+        数据点不足，暂无法绘制趋势图
+      </view>
+      <scroll-view class="trend-detail-scroll" scroll-y="true">
+        <view class="trend-point-list">
+          <view
+            class="trend-point-item"
+            wx:for="{{trendSelected.points}}"
+            wx:for-item="point"
+            wx:key="id"
+          >
+            <view class="trend-point-value">{{point.valueText}}</view>
+            <view class="trend-point-meta">
+              <text>{{point.date}}</text>
+              <text wx:if="{{point.source}}"> · {{point.source}}</text>
+            </view>
+          </view>
+        </view>
+      </scroll-view>
     </view>
   </view>
 

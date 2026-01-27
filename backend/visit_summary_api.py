@@ -23,6 +23,11 @@ except ImportError:
     def call_aliyun_ocr(img): return "Mock OCR Result: 无法加载阿里云OCR工具"
 
 try:
+    from HealthRecordsManager.mcpserver.data_extraction_tool import extract_test_results
+except Exception:
+    extract_test_results = None
+
+try:
     # Try to import database manager from health_records_api or similar
     from health_records_api import get_db_connection, get_db_manager
 except ImportError:
@@ -47,6 +52,67 @@ class VisitSummaryResponse(BaseModel):
     prescription: List[str]
     advice: str
     original_text: str
+
+def _extract_numeric_value(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value).strip()
+    if not text:
+        return None
+    import re
+    match = re.search(r"\d+(?:\.\d+)?", text)
+    return float(match.group(0)) if match else None
+
+def _extract_feature_value(feature: str, tests: Any) -> Optional[float]:
+    key = (feature or "").strip().lower()
+    if not key:
+        return None
+    alias_map = {
+        "blood_pressure": ["血压", "收缩压", "舒张压", "bp", "blood pressure"],
+        "blood_sugar": ["血糖", "葡萄糖", "glu", "glucose"],
+        "heart_rate": ["心率", "脉搏", "hr", "heart rate"],
+        "temperature": ["体温", "temp", "temperature"],
+        "weight": ["体重", "weight"],
+        "spo2": ["血氧", "spo2", "氧饱和度"],
+    }
+    aliases = alias_map.get(key, [key])
+    if isinstance(tests, dict):
+        for name, detail in tests.items():
+            name_key = str(name or "").lower()
+            if not any(alias.lower() in name_key for alias in aliases):
+                continue
+            if isinstance(detail, dict):
+                value = detail.get("value")
+            else:
+                value = detail
+            value_text = str(value or "").strip()
+            if "/" in value_text and key == "blood_pressure":
+                parts = [p.strip() for p in value_text.split("/") if p.strip()]
+                if "舒张压" in name_key and len(parts) > 1:
+                    return _extract_numeric_value(parts[1])
+                return _extract_numeric_value(parts[0])
+            return _extract_numeric_value(value)
+    if isinstance(tests, list):
+        for item in tests:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or item.get("test_name") or "").strip()
+            if not name:
+                continue
+            name_key = name.lower()
+            if not any(alias.lower() in name_key for alias in aliases):
+                continue
+            value = item.get("value")
+            value_text = str(value or "").strip()
+            if "/" in value_text and key == "blood_pressure":
+                parts = [p.strip() for p in value_text.split("/") if p.strip()]
+                if "舒张压" in name_key and len(parts) > 1:
+                    return _extract_numeric_value(parts[1])
+                return _extract_numeric_value(parts[0])
+            return _extract_numeric_value(value)
+    return None
 
 def _structure_text_with_llm(text: str) -> Dict[str, Any]:
     """
@@ -242,18 +308,29 @@ async def get_health_trends(user_id: str, feature: str, days: int = 90):
                 if not date_val:
                     continue
 
-                # Extract value - Very basic extraction
-                # Look for number near the feature name
                 text = (row["content"] or "") + " " + str(row["metadata"] or "")
-                import re
-                # Regex to find "Feature: 123" or "Feature 123"
-                pattern = rf"{re.escape(feature)}[:\s]*(\d+(?:\.\d+)?)"
-                match = re.search(pattern, text)
-                if match:
-                    val = float(match.group(1))
+                metadata = row.get("metadata") or {}
+                if isinstance(metadata, str):
+                    try:
+                        metadata = json.loads(metadata)
+                    except Exception:
+                        metadata = {}
+                extracted = metadata.get("extracted_info") or metadata.get("extracted_data") or {}
+                if isinstance(extracted, str):
+                    try:
+                        extracted = json.loads(extracted)
+                    except Exception:
+                        extracted = {}
+                tests = None
+                if isinstance(extracted, dict):
+                    tests = extracted.get("test_results") or extracted.get("tests")
+                if not tests and extract_test_results:
+                    tests = extract_test_results(text)
+                value = _extract_feature_value(feature, tests)
+                if value is not None:
                     data_points.append({
                         "date": str(date_val),
-                        "value": val
+                        "value": value
                     })
 
             return {

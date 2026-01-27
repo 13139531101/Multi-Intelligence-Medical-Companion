@@ -29,7 +29,7 @@
     <view class="tag-filters" wx:if="{{tagOptions.length > 0}}">
       <view class="tag-filter {{activeTag === 'all' ? 'active' : ''}}" bindtap="setTagFilter" data-tag="all">全部标签</view>
       <view class="tag-filter {{activeTag === item ? 'active' : ''}}" wx:for="{{tagOptions}}" wx:key="*this" bindtap="setTagFilter" data-tag="{{item}}">
-        {{item}}
+        {{tagLabelMap[item] || item}}
       </view>
     </view>
   </view>
@@ -41,10 +41,10 @@
         <view class="record-type">{{item.record_type_label}}</view>
         <view class="record-date">{{item.formatted_date}}</view>
       </view>
-      <view class="record-title">{{item.title || "健康档案"}}</view>
+      <view class="record-title">{{item.display_title || item.title || "健康档案"}}</view>
       <view class="record-desc" wx:if="{{item.display_description}}">{{item.display_description}}</view>
       <view class="record-tags" wx:if="{{item.tags && item.tags.length}}">
-        <view class="record-tag" wx:for="{{item.tags}}" wx:key="*this">{{item}}</view>
+        <view class="record-tag" wx:for="{{item.tags}}" wx:key="*this">{{tagLabelMap[item] || item}}</view>
       </view>
       <view class="record-footer">
         <view class="record-hospital" wx:if="{{item.hospital}}">{{item.hospital}}</view>

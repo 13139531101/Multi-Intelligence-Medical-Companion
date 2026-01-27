@@ -440,6 +440,9 @@ try:
         mapping = {
             "medical_report": "examination",
             "lab_result": "examination",
+            "inspection_report": "examination",
+            "test_report": "examination",
+            "medical_record": "diagnosis",
             "prescription": "prescription",
             "surgery": "surgery",
             "symptom": "diagnosis",
@@ -753,6 +756,53 @@ try:
     ):
         user_id = _get_user_id(user)
         return await health_api.get_dashboard_stats(
+            user_id=user_id,
+            request=request,
+        )
+
+    @health_router.get("/api/health-trends/indicators")
+    async def get_health_trend_indicators_proxy(
+        days: int = 180,
+        include_points: bool = True,
+        user: dict = Depends(get_current_user),
+        request: Request = None,
+    ):
+        user_id = _get_user_id(user)
+        return await health_api.get_health_trend_indicators(
+            days=days,
+            include_points=include_points,
+            user_id=user_id,
+            request=request,
+        )
+
+    @health_router.get("/api/health-trends/indicator")
+    async def get_health_trend_indicator_proxy(
+        name: str,
+        days: int = 180,
+        user: dict = Depends(get_current_user),
+        request: Request = None,
+    ):
+        user_id = _get_user_id(user)
+        return await health_api.get_health_trend_indicator(
+            name=name,
+            days=days,
+            user_id=user_id,
+            request=request,
+        )
+
+    @health_router.post("/api/health-trends/backfill")
+    async def backfill_health_trends_proxy(
+        days: int = 365,
+        limit: int = 200,
+        dry_run: bool = True,
+        user: dict = Depends(get_current_user),
+        request: Request = None,
+    ):
+        user_id = _get_user_id(user)
+        return await health_api.backfill_health_trends(
+            days=days,
+            limit=limit,
+            dry_run=dry_run,
             user_id=user_id,
             request=request,
         )

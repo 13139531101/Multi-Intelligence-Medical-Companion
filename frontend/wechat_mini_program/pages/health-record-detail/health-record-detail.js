@@ -5,6 +5,20 @@ Page({
     record: null,
     isLoading: false,
     fileUrls: [],
+    tagLabelMap: {
+      test_report: "检查报告",
+      inspection_report: "检查报告",
+      lab_result: "检查报告",
+      medical_record: "病历",
+      hospital_record: "住院记录",
+      vaccination_record: "疫苗记录",
+      prescription: "处方单",
+      surgery: "手术记录",
+      imaging: "影像资料",
+      radiology: "影像资料",
+      ocr: "OCR",
+      auto_import: "自动导入",
+    },
   },
 
   onLoad(options) {
@@ -22,31 +36,25 @@ Page({
       const typeLabel = this.getTypeLabel(record.type);
       const createdAt = record.date || record.created_at;
       const formattedDate = this.formatDate(createdAt);
-      const tags = Array.isArray(record.tags) ? record.tags : [];
+      const tags = this.normalizeTags(record.tags);
       const files = Array.isArray(record.files) ? record.files : [];
-      const structuredDesc = this.buildStructuredSummary(record);
-      const rawDesc = record.description || record.summary || "";
+      const rawDesc = this.sanitizeSummary(
+        record,
+        record.description || record.summary || "",
+      );
       const contentText = record.content ? String(record.content) : "";
-      const rawTrimmed = String(rawDesc || "").trim();
       const contentTrimmed = contentText.trim();
-      const useContentForSummary =
-        rawTrimmed &&
-        contentTrimmed &&
-        contentTrimmed.startsWith(rawTrimmed) &&
-        contentTrimmed.length > rawTrimmed.length;
-      const displayDesc =
-        structuredDesc && structuredDesc.trim()
-          ? structuredDesc
-          : rawDesc && rawDesc.trim()
-            ? useContentForSummary
-              ? contentTrimmed
-              : rawDesc
-            : record.content && String(record.content).trim()
-              ? String(record.content).trim()
-              : files.length
-                ? "已上传附件，内容待识别"
-                : "暂无摘要";
+      const rawTrimmed = String(rawDesc || "").trim();
+      const displayDesc = contentTrimmed
+        ? contentTrimmed
+        : rawTrimmed
+          ? rawTrimmed
+          : files.length
+            ? "已上传附件，内容待识别"
+            : "暂无内容";
       const fileUrls = files.map((f) => this.resolveFileUrl(f)).filter(Boolean);
+
+      const displayTitle = this.getDisplayTitle(record);
 
       this.setData({
         record: {
@@ -56,6 +64,7 @@ Page({
           tags,
           description: rawDesc,
           display_description: displayDesc,
+          display_title: displayTitle,
         },
         fileUrls,
       });
@@ -85,7 +94,9 @@ Page({
       typeof metadata.structured_summary === "string"
         ? metadata.structured_summary.trim()
         : "";
-    if (storedSummary) return storedSummary;
+    const cleanedStored = this.sanitizeSummaryText(storedSummary);
+    if (cleanedStored && !this.isDocTypeToken(cleanedStored))
+      return cleanedStored;
     let info = metadata.extracted_info || metadata.extracted_data || {};
     if (typeof info === "string") {
       try {
@@ -111,7 +122,7 @@ Page({
       8,
     );
     if (advice) parts.push(`医嘱：${advice}`);
-    return parts.join("\n");
+    return this.sanitizeSummaryText(parts.join("\n"));
   },
 
   normalizeTextField(value, limit = 8) {
@@ -123,6 +134,76 @@ Page({
       return value.trim();
     }
     return "";
+  },
+
+  isDocTypeToken(value) {
+    const key = String(value || "")
+      .trim()
+      .toLowerCase();
+    if (!key) return false;
+    const tokens = new Set([
+      "test_report",
+      "inspection_report",
+      "lab_result",
+      "medical_record",
+      "hospital_record",
+      "vaccination_record",
+      "prescription",
+      "surgery",
+      "imaging",
+      "radiology",
+      "ocr",
+      "auto_import",
+      "检查报告",
+      "病历",
+      "住院记录",
+      "疫苗记录",
+      "处方单",
+      "手术记录",
+      "影像资料",
+      "自动导入",
+    ]);
+    return tokens.has(key);
+  },
+
+  sanitizeSummaryText(value) {
+    const text = String(value || "");
+    if (!text.trim()) return "";
+    const cleaned = text
+      .replace(/test_report/gi, "")
+      .replace(/\btest\b/gi, "")
+      .replace(/[；;，,、]\s*(?=[；;，,、])/g, "")
+      .replace(/\s{2,}/g, " ")
+      .trim();
+    return cleaned.replace(/^[\s；;，,、]+|[\s；;，,、]+$/g, "").trim();
+  },
+
+  sanitizeSummary(record, value) {
+    const text = this.sanitizeSummaryText(value);
+    if (!text) return "";
+    if (this.isDocTypeToken(text)) return "";
+    const metadata =
+      record && record.metadata && typeof record.metadata === "object"
+        ? record.metadata
+        : {};
+    const docType =
+      metadata.document_type ||
+      metadata.doc_type ||
+      (metadata.extracted_info || {}).document_type ||
+      (metadata.extracted_data || {}).document_type ||
+      "";
+    if (docType && text === String(docType).trim()) return "";
+    return text;
+  },
+
+  normalizeTags(tags) {
+    const items = Array.isArray(tags) ? tags : [];
+    return items.filter((tag) => {
+      const key = String(tag || "")
+        .trim()
+        .toLowerCase();
+      return key && key !== "test";
+    });
   },
 
   normalizeMedications(value, limit = 8) {
@@ -184,6 +265,68 @@ Page({
       return entries.slice(0, limit).join("、");
     }
     return "";
+  },
+
+  getDocTypeLabel(value) {
+    const key = String(value || "")
+      .trim()
+      .toLowerCase();
+    const mapping = {
+      test_report: "检查报告",
+      inspection_report: "检查报告",
+      lab_result: "检查报告",
+      medical_record: "病历",
+      hospital_record: "住院记录",
+      vaccination_record: "疫苗记录",
+      prescription: "处方单",
+      surgery: "手术记录",
+      imaging: "影像资料",
+      radiology: "影像资料",
+    };
+    return mapping[key] || "";
+  },
+
+  getRecordDocumentType(record) {
+    const metadata =
+      record && record.metadata && typeof record.metadata === "object"
+        ? record.metadata
+        : {};
+    const ocrInfo =
+      metadata.ocr_info && typeof metadata.ocr_info === "object"
+        ? metadata.ocr_info
+        : {};
+    const docType =
+      ocrInfo.document_type ||
+      metadata.document_type ||
+      metadata.doc_type ||
+      "";
+    if (docType) return docType;
+    const tags = Array.isArray(record && record.tags) ? record.tags : [];
+    const match = tags.find((t) => this.getDocTypeLabel(t));
+    return match || "";
+  },
+
+  getDisplayTitle(record) {
+    const title = String((record && record.title) || "").trim();
+    if (!title) return "";
+    const docType = this.getRecordDocumentType(record);
+    const label = this.getDocTypeLabel(docType);
+    if (!label) return title;
+    const lowerTitle = title.toLowerCase();
+    const lowerDoc = String(docType || "").toLowerCase();
+    if (!lowerDoc) return title;
+    if (lowerTitle === lowerDoc) return label;
+    if (lowerTitle.startsWith(lowerDoc)) {
+      const rest = title.slice(lowerDoc.length);
+      const restTrim = rest.trim();
+      if (!restTrim) return label;
+      const sepMatch = restTrim.match(/^[-—－]+/);
+      if (sepMatch) {
+        const restContent = restTrim.replace(/^[-—－]+/, "").trim();
+        return restContent ? `${label} - ${restContent}` : label;
+      }
+    }
+    return title;
   },
 
   previewImage(e) {

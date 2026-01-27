@@ -428,7 +428,7 @@ def validate_medical_document(text: str) -> str:
         if any(kw in text for kw in ['处方', '药品', '用法', '用量']):
             document_type = "prescription"
         elif any(kw in text for kw in ['检查报告', '化验单', '检验结果']):
-            document_type = "test_report"
+            document_type = "inspection_report"
         elif any(kw in text for kw in ['病历', '诊断', '主诉', '病史']):
             document_type = "medical_record"
         elif any(kw in text for kw in ['住院', '出院', '手术']):

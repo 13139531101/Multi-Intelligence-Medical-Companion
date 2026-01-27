@@ -75,6 +75,22 @@ def save_health_record(user_id: str, record_type: str, title: str, content: str,
     :return: 保存结果
     """
     try:
+        rt_raw = str(record_type or "").strip().lower()
+        rt_map = {
+            "test_report": "lab_result",
+            "inspection_report": "lab_result",
+            "lab_report": "lab_result",
+            "lab_result": "lab_result",
+            "medical_report": "medical_record",
+            "medical_record": "medical_record",
+            "hospital_record": "hospital_record",
+            "vaccination_record": "vaccination",
+            "vaccination": "vaccination",
+            "prescription": "prescription",
+            "surgery": "surgery",
+            "other": "other",
+        }
+        record_type = rt_map.get(rt_raw, rt_raw or "other")
         # 计算文件哈希（存入 metadata）
         file_hash = storage.calculate_file_hash(content)
 

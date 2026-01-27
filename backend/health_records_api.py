@@ -52,12 +52,19 @@ try:
         )
     except Exception:
         extract_medical_info = None  # 非必需
+    try:
+        from HealthRecordsManager.mcpserver.data_extraction_tool import (
+            extract_test_results,
+        )
+    except Exception:
+        extract_test_results = None  # 非必需
     from HealthRecordsManager.memory_service import health_records_memory_service
 except Exception as _import_err:
     logger.warning(f"可选OCR/记忆模块加载失败，将跳过OCR与入库: {_import_err}")
     extract_text_from_image = None
     validate_medical_document = None
     extract_medical_info = None
+    extract_test_results = None
     health_records_memory_service = None
 
 # 独立：导入HRM存储工具（不受记忆系统导入失败影响）
@@ -652,6 +659,507 @@ def deserialize_metadata(metadata_str: str) -> Dict[str, Any]:
         return json.loads(metadata_str) if metadata_str else {}
     except json.JSONDecodeError:
         return {}
+
+
+def _coerce_float_value(value: Any) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    s = str(value).strip()
+    if not s:
+        return None
+    m = re.search(r"[-+]?\d+(?:\.\d+)?", s)
+    if not m:
+        return None
+    try:
+        return float(m.group(0))
+    except Exception:
+        return None
+
+
+def _split_bp_value(value: Any) -> tuple[float, float] | None:
+    if value is None:
+        return None
+    s = str(value).strip()
+    if not s:
+        return None
+    m = re.search(r"(\d{2,3})\s*/\s*(\d{2,3})", s)
+    if not m:
+        return None
+    try:
+        return float(m.group(1)), float(m.group(2))
+    except Exception:
+        return None
+
+
+def _format_date_value(value: Any) -> str:
+    if not value:
+        return ""
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    s = str(value)
+    return s[:10] if len(s) >= 10 else s
+
+
+def _ensure_dict_value(value: Any) -> dict:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            v = json.loads(value)
+            return v if isinstance(v, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def _ensure_list_value(value: Any) -> list:
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str):
+        try:
+            v = json.loads(value)
+            return v if isinstance(v, list) else []
+        except Exception:
+            return []
+    return []
+
+
+def _is_valid_test_name(name: str, unit: str = "") -> bool:
+    text = (name or "").strip()
+    if not text:
+        return False
+    if len(text) > 24:
+        return False
+    blacklist = [
+        "test",
+        "测试",
+        "姓名",
+        "性别",
+        "年龄",
+        "电话",
+        "地址",
+        "医生",
+        "医师",
+        "科室",
+        "医院",
+        "病区",
+        "床号",
+        "编号",
+        "条码",
+        "报告",
+        "检验",
+        "检查",
+        "结果",
+        "结论",
+        "意见",
+        "建议",
+        "提示",
+        "诊断",
+        "病史",
+        "处方",
+        "药品",
+        "用药",
+        "主诉",
+        "入院",
+        "出院",
+        "日期",
+        "时间",
+    ]
+    for bad in blacklist:
+        if bad in text:
+            return False
+    lower = text.lower()
+    allowed_keywords = [
+        "血压",
+        "收缩压",
+        "舒张压",
+        "血糖",
+        "空腹血糖",
+        "餐后血糖",
+        "糖化血红蛋白",
+        "心率",
+        "脉搏",
+        "体温",
+        "血氧",
+        "呼吸",
+        "体重",
+        "身高",
+        "尿酸",
+        "肌酐",
+        "尿素氮",
+        "转氨酶",
+        "胆固醇",
+        "甘油三酯",
+        "低密度",
+        "高密度",
+        "总胆固醇",
+        "血红蛋白",
+        "白细胞",
+        "红细胞",
+        "血小板",
+    ]
+    if any(kw in text for kw in allowed_keywords):
+        return True
+    allowed_abbr = {
+        "hba1c",
+        "hdl",
+        "ldl",
+        "hgb",
+        "wbc",
+        "rbc",
+        "plt",
+        "alt",
+        "ast",
+        "glu",
+        "tg",
+        "tc",
+        "spo2",
+        "bmi",
+        "crp",
+        "tsh",
+        "ft3",
+        "ft4",
+    }
+    if lower in allowed_abbr:
+        return True
+    if re.fullmatch(r"[a-z]{2,6}\d{0,2}", lower):
+        return True
+    unit_text = (unit or "").strip()
+    if unit_text and len(unit_text) <= 12:
+        return True
+    return False
+
+
+def _filter_test_results(tests: Any) -> dict | None:
+    if not isinstance(tests, dict):
+        return None
+    cleaned: dict = {}
+    for k, v in tests.items():
+        if not k:
+            continue
+        unit = ""
+        if isinstance(v, dict):
+            unit = str(v.get("unit") or "").strip()
+        if not _is_valid_test_name(str(k), unit):
+            continue
+        cleaned[str(k).strip()] = v
+    return cleaned
+
+
+def _normalize_unit_text(unit: str | None) -> str:
+    s = (unit or "").strip()
+    if not s:
+        return ""
+    s = s.replace("（", "(").replace("）", ")")
+    s = s.replace("μ", "μ").replace("µ", "μ")
+    s = re.sub(r"\s+", "", s)
+    low = s.lower()
+    if low == "mmhg":
+        return "mmHg"
+    if low in {"mmol/l", "mmol\\l"}:
+        return "mmol/L"
+    if low in {"μmol/l", "umol/l"}:
+        return "μmol/L"
+    if low in {"mg/dl", "mg\\dl"}:
+        return "mg/dL"
+    if low in {"g/dl", "g\\dl"}:
+        return "g/dL"
+    if low in {"g/l", "g\\l"}:
+        return "g/L"
+    if low in {"%", "％"}:
+        return "%"
+    return s
+
+
+def _canonicalize_indicator_name(name: str | None) -> str:
+    raw = (name or "").strip()
+    if not raw:
+        return ""
+    s = raw.replace("（", "(").replace("）", ")")
+    s = re.sub(r"\s+", "", s)
+    suffix = ""
+    if "-" in s:
+        left, right = s.rsplit("-", 1)
+        if right in {"收缩压", "舒张压"}:
+            s = left
+            suffix = "-" + right
+    base = s
+    paren = ""
+    if "(" in s and s.endswith(")"):
+        i = s.rfind("(")
+        if i >= 0:
+            base = s[:i].strip()
+            paren = s[i + 1 : -1].strip()
+    low = (paren or base).lower()
+    mapping = {
+        "hgb": "血红蛋白",
+        "hb": "血红蛋白",
+        "wbc": "白细胞",
+        "rbc": "红细胞",
+        "plt": "血小板",
+        "mch": "平均红细胞血红蛋白量",
+        "mcv": "平均红细胞体积",
+        "hct": "红细胞压积",
+        "rdw": "红细胞分布宽度",
+        "glu": "血糖",
+        "glucose": "血糖",
+        "hba1c": "糖化血红蛋白",
+        "alt": "谷丙转氨酶",
+        "ast": "谷草转氨酶",
+        "cr": "肌酐",
+        "crea": "肌酐",
+        "creatinine": "肌酐",
+        "ua": "尿酸",
+        "bun": "尿素氮",
+        "tc": "总胆固醇",
+        "tg": "甘油三酯",
+        "hdl": "高密度脂蛋白",
+        "ldl": "低密度脂蛋白",
+        "crp": "C反应蛋白",
+        "tsh": "促甲状腺激素",
+        "ft3": "游离三碘甲状腺原氨酸",
+        "ft4": "游离甲状腺素",
+        "spo2": "血氧饱和度",
+        "bp": "血压",
+    }
+    if low in mapping:
+        return mapping[low] + suffix
+    if base and any(ch.isalpha() for ch in base) and base.lower() in mapping:
+        return mapping[base.lower()] + suffix
+    if paren and paren.lower() in mapping:
+        return mapping[paren.lower()] + suffix
+    if base:
+        normalized = base
+        normalized = normalized.replace("血红蛋白浓度", "血红蛋白")
+        normalized = normalized.replace("糖化血红蛋白(hba1c)", "糖化血红蛋白")
+        return normalized + suffix
+    return s + suffix
+
+
+def _convert_value_for_indicator(
+    name: str,
+    value: float | None,
+    unit: str,
+) -> tuple[float | None, str]:
+    if value is None:
+        return None, unit
+    u = _normalize_unit_text(unit)
+    n = (name or "").strip()
+    if n in {"血红蛋白", "HGB"} and u == "g/dL":
+        return round(value * 10.0, 2), "g/L"
+    if n in {"血糖", "空腹血糖", "餐后血糖"} and u == "mg/dL":
+        return round(value / 18.0, 2), "mmol/L"
+    if n in {"肌酐"} and u == "mg/dL":
+        return round(value * 88.4, 1), "μmol/L"
+    if n in {"尿酸"} and u == "mg/dL":
+        return round(value * 59.48, 1), "μmol/L"
+    return value, u
+
+
+def _prepare_metadata_with_tests(content: str | None, metadata: Dict[str, Any] | None) -> Dict[str, Any]:
+    meta = metadata if isinstance(metadata, dict) else {}
+    extracted = _ensure_dict_value(meta.get("extracted_info") or meta.get("extracted_data"))
+    tests = extracted.get("test_results") or extracted.get("tests")
+    text = (content or "").strip()
+    if (not tests) and text and extract_test_results:
+        try:
+            tests = (
+                extract_test_results.fn(text)
+                if hasattr(extract_test_results, "fn")
+                else extract_test_results(text)
+            )
+        except Exception:
+            tests = None
+    if (not tests) and text and extract_medical_info:
+        try:
+            info_json = (
+                extract_medical_info.fn(text)
+                if hasattr(extract_medical_info, "fn")
+                else extract_medical_info(text)
+            )
+            info_obj = json.loads(info_json) if isinstance(info_json, str) else info_json
+            if isinstance(info_obj, dict):
+                tests = info_obj.get("test_results") or tests
+        except Exception:
+            tests = tests
+    filtered = _filter_test_results(tests)
+    if filtered is not None:
+        if filtered:
+            extracted["test_results"] = filtered
+        else:
+            extracted.pop("test_results", None)
+        extracted.pop("tests", None)
+    if extracted:
+        meta["extracted_info"] = extracted
+        meta.pop("extracted_data", None)
+    return meta
+
+
+def _append_indicator_point(
+    store: dict,
+    name: str,
+    unit: str | None,
+    date_val: Any,
+    value_raw: Any,
+    source: str,
+    record_id: str | None,
+):
+    normalized_name = _canonicalize_indicator_name(name)
+    if not normalized_name:
+        return
+    item = store.get(normalized_name)
+    if not item:
+        item = {"name": normalized_name, "unit": "", "points": []}
+        store[normalized_name] = item
+    normalized_unit = _normalize_unit_text(unit)
+    date_str = _format_date_value(date_val)
+    value_text = "" if value_raw is None else str(value_raw).strip()
+    value_num = (
+        _coerce_float_value(value_raw)
+        if value_raw is not None and "/" not in value_text
+        else None
+    )
+    value_num, normalized_unit = _convert_value_for_indicator(
+        normalized_name, value_num, normalized_unit
+    )
+    if normalized_unit and not item.get("unit"):
+        item["unit"] = normalized_unit
+    item["points"].append(
+        {
+            "date": date_str,
+            "value": value_num,
+            "value_text": value_text,
+            "unit": normalized_unit,
+            "source": source,
+            "record_id": record_id,
+        }
+    )
+
+
+def _collect_test_points(
+    store: dict,
+    tests: Any,
+    date_val: Any,
+    source: str,
+    record_id: str | None,
+):
+    if isinstance(tests, dict):
+        for k, v in tests.items():
+            if not k:
+                continue
+            key_text = str(k).strip().lower()
+            if key_text in {"test", "test_report"}:
+                continue
+            if isinstance(v, dict):
+                val = v.get("value")
+                unit = v.get("unit") or ""
+                bp = _split_bp_value(val)
+                if bp:
+                    _append_indicator_point(
+                        store,
+                        f"{k}-收缩压",
+                        unit or "mmHg",
+                        date_val,
+                        bp[0],
+                        source,
+                        record_id,
+                    )
+                    _append_indicator_point(
+                        store,
+                        f"{k}-舒张压",
+                        unit or "mmHg",
+                        date_val,
+                        bp[1],
+                        source,
+                        record_id,
+                    )
+                else:
+                    _append_indicator_point(
+                        store, str(k).strip(), unit, date_val, val, source, record_id
+                    )
+            else:
+                bp = _split_bp_value(v)
+                if bp:
+                    _append_indicator_point(
+                        store,
+                        f"{k}-收缩压",
+                        "mmHg",
+                        date_val,
+                        bp[0],
+                        source,
+                        record_id,
+                    )
+                    _append_indicator_point(
+                        store,
+                        f"{k}-舒张压",
+                        "mmHg",
+                        date_val,
+                        bp[1],
+                        source,
+                        record_id,
+                    )
+                else:
+                    _append_indicator_point(
+                        store, str(k).strip(), "", date_val, v, source, record_id
+                    )
+        return
+    items = _ensure_list_value(tests)
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or item.get("test_name") or "").strip()
+        if name and name.lower() in {"test", "test_report"}:
+            continue
+        val = item.get("value")
+        unit = str(item.get("unit") or "").strip()
+        dt = item.get("date") or date_val
+        bp = _split_bp_value(val)
+        if bp and name:
+            _append_indicator_point(
+                store, f"{name}-收缩压", unit or "mmHg", dt, bp[0], source, record_id
+            )
+            _append_indicator_point(
+                store, f"{name}-舒张压", unit or "mmHg", dt, bp[1], source, record_id
+            )
+        else:
+            _append_indicator_point(store, name, unit, dt, val, source, record_id)
+
+
+def _finalize_indicator_items(store: dict, include_points: bool) -> list:
+    indicators = []
+    for item in store.values():
+        points = item.get("points") or []
+        points = [p for p in points if p.get("date")]
+        points.sort(key=lambda x: x.get("date") or "")
+        item["count"] = len(points)
+        item["points"] = points[-200:]
+        nums = [p.get("value") for p in points if isinstance(p.get("value"), (int, float))]
+        if nums:
+            nums_sorted = sorted(float(x) for x in nums)
+            mid = len(nums_sorted) // 2
+            median = (
+                nums_sorted[mid]
+                if len(nums_sorted) % 2 == 1
+                else (nums_sorted[mid - 1] + nums_sorted[mid]) / 2
+            )
+            item["stats"] = {
+                "min": round(min(nums_sorted), 2),
+                "max": round(max(nums_sorted), 2),
+                "avg": round(sum(nums) / len(nums), 2),
+                "median": round(median, 2),
+            }
+        else:
+            item["stats"] = None
+        item["latest"] = points[-1] if points else None
+        if not include_points:
+            item.pop("points", None)
+        indicators.append(item)
+    indicators.sort(key=lambda x: (x.get("latest") or {}).get("date") or "", reverse=True)
+    return indicators
 
 
 def _normalize_ocr_text(raw: str | None) -> str:
@@ -1262,6 +1770,18 @@ async def _maybe_llm_summary(ocr_text: str, extracted: dict | None) -> str | Non
         return None
 
 
+def _normalize_document_type(value: str | None) -> str:
+    s = str(value or "").strip()
+    if not s:
+        return "unknown"
+    lower = s.lower()
+    if lower in {"test_report", "lab_report", "lab_result", "inspection_report"}:
+        return "inspection_report"
+    if s in {"检查报告", "化验单", "检验报告"}:
+        return "inspection_report"
+    return s
+
+
 def row_to_health_record(row) -> HealthRecord:
     rid = str(row["id"]) if "id" in row else str(row[0])
     created = row.get("created_at")
@@ -1361,7 +1881,7 @@ def _map_record_type_for_hrm(rt: str) -> str:
     try:
         r = (rt or "").lower()
         if r in {"lab_result", "inspection_report"}:
-            return "test_report"
+            return "lab_result"
         if r == "prescription":
             return "prescription"
         if r in {"medical_report", "medical_record"}:
@@ -2940,6 +3460,13 @@ async def create_health_record(
                                     old_meta = {}
                                 new_meta = record.metadata or {}
                                 merged_meta = {**(old_meta or {}), **(new_meta or {})}
+                                merged_meta = _prepare_metadata_with_tests(
+                                    record.content
+                                    or record.summary
+                                    or linked[3]
+                                    or "",
+                                    merged_meta,
+                                )
                                 update_fields = [
                                     "title = %s",
                                     "record_type = %s",
@@ -3051,6 +3578,14 @@ async def create_health_record(
                                     pass
                                 if isinstance(record.metadata, dict):
                                     merged_meta.update(record.metadata)
+                                merged_meta = _prepare_metadata_with_tests(
+                                    record.content
+                                    or record.summary
+                                    or recent.get("content")
+                                    or recent.get("summary")
+                                    or "",
+                                    merged_meta,
+                                )
                                 update_fields = [
                                     "title = %s",
                                     "record_type = %s",
@@ -3090,6 +3625,9 @@ async def create_health_record(
                 except Exception:
                     pass
 
+                record.metadata = _prepare_metadata_with_tests(
+                    record.content or record.summary, record.metadata
+                )
                 cursor.execute(
                     """
                     INSERT INTO health_records (
@@ -3250,13 +3788,43 @@ async def update_health_record(
                     update_fields.append("tags = %s")
                     params.append(Json(record_update.tags))
 
-                if record_update.metadata is not None:
-                    update_fields.append("metadata = %s")
-                    params.append(Json(record_update.metadata))
+                existing_meta = existing_record.get("metadata")
+                if isinstance(existing_meta, str):
+                    existing_meta = deserialize_metadata(existing_meta)
+                if not isinstance(existing_meta, dict):
+                    existing_meta = {}
+                incoming_meta = (
+                    record_update.metadata
+                    if isinstance(record_update.metadata, dict)
+                    else None
+                )
 
                 if record_update.record_date is not None:
                     update_fields.append("record_date = %s")
                     params.append(record_update.record_date)
+
+                if (
+                    record_update.metadata is not None
+                    or record_update.content is not None
+                    or record_update.summary is not None
+                ):
+                    merged_meta = (
+                        {**existing_meta, **incoming_meta}
+                        if incoming_meta is not None
+                        else dict(existing_meta)
+                    )
+                    content_for_extract = record_update.content
+                    if content_for_extract is None:
+                        content_for_extract = existing_record.get("content")
+                    if not content_for_extract:
+                        content_for_extract = record_update.summary
+                    if not content_for_extract:
+                        content_for_extract = existing_record.get("summary")
+                    prepared_meta = _prepare_metadata_with_tests(
+                        content_for_extract, merged_meta
+                    )
+                    update_fields.append("metadata = %s")
+                    params.append(Json(prepared_meta))
 
                 if not update_fields:
                     return row_to_health_record(existing_record)
@@ -3550,6 +4118,284 @@ async def get_health_statistics():
 
     except Exception as e:
         logger.error(f"获取健康统计数据失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/health-trends/backfill")
+async def backfill_health_trends(
+    days: int = Query(365),
+    limit: int = Query(200),
+    dry_run: bool = Query(True),
+    user_id: Optional[str] = Query(None),
+    request: Request = None,
+):
+    try:
+        uid = _resolve_user_id(request, user_id)
+        if not uid:
+            raise HTTPException(status_code=401, detail="未认证用户")
+        total = 0
+        updated = 0
+        skipped = 0
+        updated_ids: list[str] = []
+        with get_db_connection() as conn:
+            with conn.cursor(row_factory=dict_row) as cursor:
+                interval = f"{days} days"
+                cursor.execute(
+                    """
+                    SELECT id, content, metadata, record_date, created_at
+                    FROM health_records
+                    WHERE user_id = %s
+                    AND (record_date >= now() - %s::interval OR created_at >= now() - %s::interval)
+                    ORDER BY created_at DESC
+                    LIMIT %s
+                    """,
+                    (uid, interval, interval, limit),
+                )
+                rows = cursor.fetchall() or []
+                for row in rows:
+                    total += 1
+                    meta_val = row.get("metadata")
+                    if isinstance(meta_val, str):
+                        meta_val = deserialize_metadata(meta_val)
+                    elif not isinstance(meta_val, dict):
+                        meta_val = {}
+                    extracted = _ensure_dict_value(
+                        meta_val.get("extracted_info") or meta_val.get("extracted_data")
+                    )
+                    tests = extracted.get("test_results") or extracted.get("tests")
+                    if tests:
+                        skipped += 1
+                        continue
+                    text = row.get("content") or ""
+                    if not text and isinstance(extracted, dict):
+                        text = extracted.get("original_content") or ""
+                    if not text:
+                        skipped += 1
+                        continue
+                    test_results = None
+                    if extract_test_results:
+                        try:
+                            test_results = (
+                                extract_test_results.fn(text)
+                                if hasattr(extract_test_results, "fn")
+                                else extract_test_results(text)
+                            )
+                        except Exception:
+                            test_results = None
+                    if not test_results and extract_medical_info:
+                        try:
+                            info_json = (
+                                extract_medical_info.fn(text)
+                                if hasattr(extract_medical_info, "fn")
+                                else extract_medical_info(text)
+                            )
+                            info_obj = (
+                                json.loads(info_json)
+                                if isinstance(info_json, str)
+                                else info_json
+                            )
+                            if isinstance(info_obj, dict):
+                                test_results = info_obj.get("test_results")
+                        except Exception:
+                            test_results = None
+                    if not test_results:
+                        skipped += 1
+                        continue
+                    if not isinstance(test_results, dict):
+                        skipped += 1
+                        continue
+                    filtered_results = _filter_test_results(test_results)
+                    if filtered_results is None or not filtered_results:
+                        skipped += 1
+                        continue
+                    test_results = filtered_results
+                    extracted["test_results"] = test_results
+                    meta_val["extracted_info"] = extracted
+                    updated += 1
+                    if not dry_run:
+                        cursor.execute(
+                            """
+                            UPDATE health_records
+                            SET metadata = %s, updated_at = %s
+                            WHERE id = %s AND user_id = %s
+                            """,
+                            (Json(meta_val), datetime.now(), row.get("id"), uid),
+                        )
+                    updated_ids.append(str(row.get("id")))
+                if not dry_run and updated:
+                    conn.commit()
+        return {
+            "dry_run": dry_run,
+            "days": days,
+            "limit": limit,
+            "total_scanned": total,
+            "updated": updated,
+            "skipped": skipped,
+            "updated_ids": updated_ids[:50],
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"回填健康趋势失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/health-trends/indicators")
+async def get_health_trend_indicators(
+    days: int = Query(180),
+    include_points: bool = Query(True),
+    user_id: Optional[str] = Query(None),
+    request: Request = None,
+):
+    try:
+        uid = _resolve_user_id(request, user_id)
+        if not uid:
+            raise HTTPException(status_code=401, detail="未认证用户")
+        store: dict = {}
+        with get_db_connection() as conn:
+            with conn.cursor(row_factory=dict_row) as cursor:
+                interval = f"{days} days"
+                cursor.execute(
+                    """
+                    SELECT id, record_date, created_at, metadata, content
+                    FROM health_records
+                    WHERE user_id = %s
+                    AND (record_date >= now() - %s::interval OR created_at >= now() - %s::interval)
+                    """,
+                    (uid, interval, interval),
+                )
+                rows = cursor.fetchall() or []
+                for row in rows:
+                    meta_val = row.get("metadata")
+                    if isinstance(meta_val, str):
+                        meta_val = deserialize_metadata(meta_val)
+                    elif not isinstance(meta_val, dict):
+                        meta_val = {}
+                    meta_val = _prepare_metadata_with_tests(
+                        row.get("content"), meta_val
+                    )
+                    extracted = _ensure_dict_value(
+                        meta_val.get("extracted_info") or meta_val.get("extracted_data")
+                    )
+                    tests = extracted.get("test_results") or extracted.get("tests")
+                    if tests:
+                        _collect_test_points(
+                            store,
+                            tests,
+                            row.get("record_date") or row.get("created_at"),
+                            "health_records",
+                            str(row.get("id")) if row.get("id") is not None else None,
+                        )
+                cursor.execute(
+                    """
+                    SELECT id, visit_date, created_at, tests
+                    FROM visit_summaries
+                    WHERE user_id = %s AND COALESCE(is_deleted, 0) = 0
+                    AND (visit_date >= now() - %s::interval OR created_at >= now() - %s::interval)
+                    """,
+                    (uid, interval, interval),
+                )
+                rows = cursor.fetchall() or []
+                for row in rows:
+                    tests = row.get("tests")
+                    if isinstance(tests, str):
+                        tests = _ensure_list_value(tests) or _ensure_dict_value(tests)
+                    if tests:
+                        _collect_test_points(
+                            store,
+                            tests,
+                            row.get("visit_date") or row.get("created_at"),
+                            "visit_summaries",
+                            str(row.get("id")) if row.get("id") is not None else None,
+                        )
+        indicators = _finalize_indicator_items(store, include_points)
+        return {"days": days, "indicators": indicators}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取健康趋势指标失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/health-trends/indicator")
+async def get_health_trend_indicator(
+    name: str = Query(...),
+    days: int = Query(180),
+    user_id: Optional[str] = Query(None),
+    request: Request = None,
+):
+    try:
+        uid = _resolve_user_id(request, user_id)
+        if not uid:
+            raise HTTPException(status_code=401, detail="未认证用户")
+        store: dict = {}
+        with get_db_connection() as conn:
+            with conn.cursor(row_factory=dict_row) as cursor:
+                interval = f"{days} days"
+                cursor.execute(
+                    """
+                    SELECT id, record_date, created_at, metadata, content
+                    FROM health_records
+                    WHERE user_id = %s
+                    AND (record_date >= now() - %s::interval OR created_at >= now() - %s::interval)
+                    """,
+                    (uid, interval, interval),
+                )
+                rows = cursor.fetchall() or []
+                for row in rows:
+                    meta_val = row.get("metadata")
+                    if isinstance(meta_val, str):
+                        meta_val = deserialize_metadata(meta_val)
+                    elif not isinstance(meta_val, dict):
+                        meta_val = {}
+                    meta_val = _prepare_metadata_with_tests(
+                        row.get("content"), meta_val
+                    )
+                    extracted = _ensure_dict_value(
+                        meta_val.get("extracted_info") or meta_val.get("extracted_data")
+                    )
+                    tests = extracted.get("test_results") or extracted.get("tests")
+                    if tests:
+                        _collect_test_points(
+                            store,
+                            tests,
+                            row.get("record_date") or row.get("created_at"),
+                            "health_records",
+                            str(row.get("id")) if row.get("id") is not None else None,
+                        )
+                cursor.execute(
+                    """
+                    SELECT id, visit_date, created_at, tests
+                    FROM visit_summaries
+                    WHERE user_id = %s AND COALESCE(is_deleted, 0) = 0
+                    AND (visit_date >= now() - %s::interval OR created_at >= now() - %s::interval)
+                    """,
+                    (uid, interval, interval),
+                )
+                rows = cursor.fetchall() or []
+                for row in rows:
+                    tests = row.get("tests")
+                    if isinstance(tests, str):
+                        tests = _ensure_list_value(tests) or _ensure_dict_value(tests)
+                    if tests:
+                        _collect_test_points(
+                            store,
+                            tests,
+                            row.get("visit_date") or row.get("created_at"),
+                            "visit_summaries",
+                            str(row.get("id")) if row.get("id") is not None else None,
+                        )
+        indicators = _finalize_indicator_items(store, True)
+        selected = None
+        for item in indicators:
+            if item.get("name") == name:
+                selected = item
+                break
+        return {"days": days, "indicator": selected}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取健康趋势详情失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -3867,7 +4713,9 @@ async def upload_file(
                         )
                     except Exception:
                         validation_data = {"raw": validation}
-                    document_type = validation_data.get("document_type") or "unknown"
+                    document_type = _normalize_document_type(
+                        validation_data.get("document_type")
+                    )
                     try:
                         confidence = float(validation_data.get("confidence", 0.5))
                     except Exception:
@@ -3890,6 +4738,15 @@ async def upload_file(
                         except Exception as e:
                             logger.warning(f"信息抽取失败，已忽略: {e}")
                             extracted_info = {}
+                    if isinstance(extracted_info, dict):
+                        tests_val = extracted_info.get("test_results") or extracted_info.get("tests")
+                        filtered = _filter_test_results(tests_val)
+                        if filtered is not None:
+                            if filtered:
+                                extracted_info["test_results"] = filtered
+                            else:
+                                extracted_info.pop("test_results", None)
+                            extracted_info.pop("tests", None)
 
                     # 存入记忆系统（可选，不影响事务）
                     if health_records_memory_service is not None:
