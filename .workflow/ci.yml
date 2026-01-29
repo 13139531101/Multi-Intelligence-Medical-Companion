@@ -1,0 +1,86 @@
+name: a2aserver-ci
+displayName: "A2AServer CI"
+triggers:
+  push:
+    - matchType: PRECISE
+      branch: master
+    - matchType: PRECISE
+      branch: dev
+stages:
+  - stage:
+      name: docker-smoke
+      displayName: "Docker 构建与冒烟"
+      failFast: false
+      steps:
+        - step: shell@agent
+          name: docker_compose_smoke
+          displayName: "docker compose build + healthcheck"
+          hostGroupID: gitee-go
+          script: |
+            set -e
+
+            if docker compose version >/dev/null 2>&1; then
+              dc() { docker compose "$@"; }
+            else
+              dc() { docker-compose "$@"; }
+            fi
+
+            services="postgres health_records health_advisor medication_reminder visit_summary hostapi"
+
+            dc -f docker-compose.yml build $services
+            dc -f docker-compose.yml up -d $services
+
+            timeout_seconds=600
+            start_ts=$(date +%s)
+            while true; do
+              all_ok=1
+              for s in $services; do
+                cid=$(dc -f docker-compose.yml ps -q "$s" | head -n 1 || true)
+                if [ -z "$cid" ]; then
+                  all_ok=0
+                  continue
+                fi
+                status=$(docker inspect -f '{{.State.Status}}' "$cid" 2>/dev/null || echo unknown)
+                health=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$cid" 2>/dev/null || echo unknown)
+
+                if [ "$status" != "running" ]; then
+                  all_ok=0
+                fi
+                if [ "$health" != "healthy" ] && [ "$health" != "none" ]; then
+                  all_ok=0
+                fi
+              done
+
+              if [ "$all_ok" = "1" ]; then
+                break
+              fi
+
+              now_ts=$(date +%s)
+              if [ $((now_ts - start_ts)) -ge "$timeout_seconds" ]; then
+                echo "Timed out waiting for services to become healthy."
+                dc -f docker-compose.yml ps
+                dc -f docker-compose.yml logs --no-color --tail=200 || true
+                exit 1
+              fi
+              sleep 5
+            done
+
+            python - <<'PY'
+            import urllib.request
+
+            urls = [
+              "http://localhost:10010/.well-known/agent.json",
+              "http://localhost:10011/.well-known/agent.json",
+              "http://localhost:10012/.well-known/agent.json",
+              "http://localhost:10013/.well-known/agent.json",
+            ]
+
+            for u in urls:
+              with urllib.request.urlopen(u, timeout=5) as r:
+                if getattr(r, "status", 200) != 200:
+                  raise SystemExit(f"Non-200 for {u}: {getattr(r, 'status', None)}")
+
+            print("Smoke test OK")
+            PY
+
+            dc -f docker-compose.yml down -v
