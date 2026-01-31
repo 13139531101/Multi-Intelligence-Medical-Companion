@@ -1,6 +1,7 @@
 import logging
 import uuid
 import asyncio
+import anyio
 import os
 import sys
 import psycopg
@@ -1105,6 +1106,19 @@ except Exception as e:
 
 meds_router = APIRouter()
 
+_med_ocr_limiter: anyio.CapacityLimiter | None = None
+
+
+def _get_med_ocr_limiter() -> anyio.CapacityLimiter:
+    global _med_ocr_limiter
+    if _med_ocr_limiter is None:
+        try:
+            n = int(os.getenv("HOSTAPI_MED_OCR_MAX_CONCURRENCY", "8"))
+        except Exception:
+            n = 8
+        _med_ocr_limiter = anyio.CapacityLimiter(max(n, 1))
+    return _med_ocr_limiter
+
 # 调试：查看当前绑定的 add_medication_reminder 函数签名与来源
 @meds_router.get("/debug/reminder-signature")
 async def debug_reminder_signature():
@@ -1935,8 +1949,33 @@ async def get_medication_stats(days: int = 7, date: str = "", user: dict = Depen
 
 @meds_router.post("/api/medications/ocr")
 async def recognize_medication_image(file: UploadFile = File(...), user: dict = Depends(get_current_user)):
+    limiter = _get_med_ocr_limiter()
+    await limiter.acquire()
     try:
-        content = await file.read()
+        max_size = int(
+            os.getenv("HOSTAPI_MED_OCR_MAX_UPLOAD_BYTES", str(10 * 1024 * 1024))
+        )
+        chunk_size = int(
+            os.getenv("HOSTAPI_MED_OCR_UPLOAD_CHUNK_BYTES", str(1024 * 1024))
+        )
+        file_size = 0
+        buf = bytearray()
+        try:
+            while True:
+                chunk = await file.read(chunk_size)
+                if not chunk:
+                    break
+                file_size += len(chunk)
+                if file_size > max_size:
+                    return {"success": False, "message": "文件大小超过限制"}
+                buf.extend(chunk)
+        finally:
+            try:
+                await file.close()
+            except Exception:
+                pass
+
+        content = bytes(buf)
         if not content:
             return {"success": False, "message": "文件为空"}
 
@@ -1973,6 +2012,8 @@ async def recognize_medication_image(file: UploadFile = File(...), user: dict = 
     except Exception as e:
         logging.error(f"药物图片识别失败: {e}")
         return {"success": False, "message": f"处理失败: {str(e)}"}
+    finally:
+        limiter.release()
 
 app.include_router(meds_router)
 
