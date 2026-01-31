@@ -8,6 +8,7 @@ import uuid
 import json
 import mimetypes
 from typing import Any, Optional, Dict, List
+import anyio
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi import Request, Response, UploadFile, File
 from fastapi.responses import FileResponse
@@ -34,6 +35,18 @@ from ServiceTypes import (
     QueryEventResponse,
     QueryEventRequest
 )
+
+_upload_limiter: anyio.CapacityLimiter | None = None
+
+def _get_upload_limiter() -> anyio.CapacityLimiter:
+  global _upload_limiter
+  if _upload_limiter is None:
+    try:
+      n = int(os.getenv("HOSTAPI_UPLOAD_MAX_CONCURRENCY", "8"))
+    except Exception:
+      n = 8
+    _upload_limiter = anyio.CapacityLimiter(max(n, 1))
+  return _upload_limiter
 
 class ConversationServer:
   """ConversationServer is the backend to serve the agent interactions in the UI
@@ -218,6 +231,7 @@ class ConversationServer:
         alias = {
           '就诊摘要生成器': '就诊摘要生成',
           '就诊摘要': '就诊摘要生成',
+          '就诊摘要助手': '就诊摘要生成',
           '健康档案': '健康档案管理员',
           '健康档案管理': '健康档案管理员',
           '档案管理员': '健康档案管理员'
@@ -458,24 +472,48 @@ class ConversationServer:
 
   # ====== 文件上传/下载功能 ======
   async def _upload_file(self, file: UploadFile = File(...), current_user: Optional[Dict[str, Any]] = Depends(get_current_user_optional)):
+    limiter = _get_upload_limiter()
+    await limiter.acquire()
     try:
       file_ext = os.path.splitext(file.filename)[1]
       file_id = f"{uuid.uuid4().hex}{file_ext}"
       save_path = os.path.join(self._upload_dir, file_id)
-      content = await file.read()
-      with open(save_path, 'wb') as f:
-        f.write(content)
+      max_size = int(os.getenv("HOSTAPI_MAX_UPLOAD_BYTES", str(50 * 1024 * 1024)))
+      chunk_size = int(os.getenv("HOSTAPI_UPLOAD_CHUNK_BYTES", str(1024 * 1024)))
+      total = 0
+      with open(save_path, "wb") as out:
+        while True:
+          chunk = await file.read(chunk_size)
+          if not chunk:
+            break
+          total += len(chunk)
+          if total > max_size:
+            try:
+              out.close()
+            except Exception:
+              pass
+            try:
+              os.remove(save_path)
+            except Exception:
+              pass
+            raise HTTPException(status_code=400, detail="文件大小超过限制")
+          await anyio.to_thread.run_sync(out.write, chunk)
       url_path = f"/files/{file_id}"
       return {
         "fileId": file_id,
         "filename": file.filename,
         "mimeType": file.content_type,
-        "size": len(content),
+        "size": total,
         "url": url_path
       }
     except Exception as e:
       logging.exception("上传文件失败")
       raise HTTPException(status_code=500, detail=str(e))
+    finally:
+      try:
+        limiter.release()
+      except Exception:
+        pass
 
   async def _upload_multiple_files(self, files: List[UploadFile] = File(...), current_user: Optional[Dict[str, Any]] = Depends(get_current_user_optional)):
     results = []

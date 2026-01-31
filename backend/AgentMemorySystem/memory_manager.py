@@ -89,7 +89,11 @@ class MemoryManager:
             return 0.0
         finally:
             if connection:
-                connection.close()
+                try:
+                    connection.rollback()
+                except Exception:
+                    pass
+                self.db_config.put_connection(connection)
     
     def _calculate_importance_score(self, memory: Dict[str, Any]) -> float:
         """计算记忆重要性评分的内部方法"""
@@ -174,7 +178,11 @@ class MemoryManager:
             return 0
         finally:
             if connection:
-                connection.close()
+                try:
+                    connection.rollback()
+                except Exception:
+                    pass
+                self.db_config.put_connection(connection)
     
     def cleanup_expired(self) -> int:
         """清理过期记忆
@@ -204,7 +212,11 @@ class MemoryManager:
             return 0
         finally:
             if connection:
-                connection.close()
+                try:
+                    connection.rollback()
+                except Exception:
+                    pass
+                self.db_config.put_connection(connection)
     
     def cleanup_low_importance(self, agent_id: str, user_id: str, 
                               threshold: float = 0.2, max_age_days: int = 30) -> int:
@@ -251,7 +263,11 @@ class MemoryManager:
             return 0
         finally:
             if connection:
-                connection.close()
+                try:
+                    connection.rollback()
+                except Exception:
+                    pass
+                self.db_config.put_connection(connection)
     
     def build_associations(self, memory_id: str) -> List[str]:
         """为记忆构建关联关系
@@ -297,7 +313,11 @@ class MemoryManager:
             return []
         finally:
             if connection:
-                connection.close()
+                try:
+                    connection.rollback()
+                except Exception:
+                    pass
+                self.db_config.put_connection(connection)
     
     def analyze_memory_patterns(self, agent_id: str, user_id: str, 
                                days: int = 30) -> Dict[str, Any]:
@@ -376,7 +396,11 @@ class MemoryManager:
             return {}
         finally:
             if connection:
-                connection.close()
+                try:
+                    connection.rollback()
+                except Exception:
+                    pass
+                self.db_config.put_connection(connection)
     
     def _get_compression_candidates(self, cursor, agent_id: str, user_id: str, 
                                    memory_type: str) -> List[Dict[str, Any]]:

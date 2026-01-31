@@ -6,8 +6,11 @@ import uuid
 from datetime import datetime
 from typing import List, Optional, Dict, Any
 
+import anyio
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends
 from pydantic import BaseModel
+from contextlib import contextmanager
+from psycopg.rows import dict_row
 
 # Ensure backend is in path
 backend_dir = os.path.dirname(os.path.abspath(__file__))
@@ -34,15 +37,68 @@ except ImportError:
     # Define a simple DB manager if not found
     import psycopg
     from psycopg.rows import dict_row
+    from psycopg_pool import ConnectionPool
 
+    _db_pool: ConnectionPool | None = None
+    _db_pool_init_attempted = False
+
+    def _get_pool() -> ConnectionPool | None:
+        global _db_pool, _db_pool_init_attempted
+        if _db_pool is not None:
+            return _db_pool
+        if _db_pool_init_attempted:
+            return None
+        _db_pool_init_attempted = True
+        try:
+            dsn = os.environ.get(
+                "DATABASE_URL",
+                "postgresql://pha:pha_pass@localhost:5432/personal_health_assistant",
+            )
+            _db_pool = ConnectionPool(dsn, max_size=max(int(os.getenv("DB_POOL_MAX_SIZE", "20")), 1))
+            return _db_pool
+        except Exception:
+            _db_pool = None
+            return None
+
+    @contextmanager
     def get_db_connection():
-        return psycopg.connect(
-            os.environ.get("DATABASE_URL", "postgresql://pha:pha_pass@localhost:5432/personal_health_assistant"),
-            row_factory=dict_row
+        pool = _get_pool()
+        if pool is not None:
+            with pool.connection() as conn:
+                try:
+                    conn.autocommit = False
+                except Exception:
+                    pass
+                yield conn
+            return
+        conn = psycopg.connect(
+            os.environ.get(
+                "DATABASE_URL",
+                "postgresql://pha:pha_pass@localhost:5432/personal_health_assistant",
+            ),
+            row_factory=dict_row,
         )
+        try:
+            yield conn
+        finally:
+            conn.close()
 
 router = APIRouter(prefix="/visit-summary", tags=["Visit Summary"])
 logger = logging.getLogger(__name__)
+
+_upload_limiter: anyio.CapacityLimiter | None = None
+
+
+def _get_upload_limiter() -> anyio.CapacityLimiter:
+    global _upload_limiter
+    if _upload_limiter is None:
+        try:
+            n = int(os.getenv("VISIT_SUMMARY_UPLOAD_MAX_CONCURRENCY", "8"))
+        except Exception:
+            n = 8
+        _upload_limiter = anyio.CapacityLimiter(max(n, 1))
+    return _upload_limiter
+
 
 class VisitSummaryResponse(BaseModel):
     summary_id: str
@@ -152,11 +208,33 @@ async def upload_visit_record(
     """
     Upload a visit record photo, OCR it, structure it, and save it.
     """
+    limiter = _get_upload_limiter()
+    await limiter.acquire()
     try:
-        # 1. Read File
-        contents = await file.read()
+        max_size = int(os.getenv("VISIT_SUMMARY_MAX_UPLOAD_BYTES", str(10 * 1024 * 1024)))
+        chunk_size = int(
+            os.getenv("VISIT_SUMMARY_UPLOAD_CHUNK_BYTES", str(1024 * 1024))
+        )
+        file_size = 0
+        buf = bytearray()
+        try:
+            while True:
+                chunk = await file.read(chunk_size)
+                if not chunk:
+                    break
+                file_size += len(chunk)
+                if file_size > max_size:
+                    raise HTTPException(status_code=400, detail="文件大小超过限制")
+                buf.extend(chunk)
+        finally:
+            try:
+                await file.close()
+            except Exception:
+                pass
+
+        contents = bytes(buf)
         import base64
-        img_b64 = base64.b64encode(contents).decode('utf-8')
+        img_b64 = base64.b64encode(contents).decode("utf-8")
 
         # 2. OCR
         # Try Aliyun first if configured, else Local
@@ -183,9 +261,8 @@ async def upload_visit_record(
         # 'visit_summaries' table structure from previous search:
         # (user_id, summary_id, visit_date, summary_content, generated_by, diagnosis)
 
-        conn = get_db_connection()
-        try:
-            with conn.cursor() as cur:
+        with get_db_connection() as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
                 # Ensure table exists
                 cur.execute("""
                     CREATE TABLE IF NOT EXISTS visit_summaries (
@@ -218,8 +295,6 @@ async def upload_visit_record(
                     ocr_text
                 ))
                 conn.commit()
-        finally:
-            conn.close()
 
         return VisitSummaryResponse(
             summary_id=summary_id,
@@ -234,15 +309,16 @@ async def upload_visit_record(
     except Exception as e:
         logger.error(f"Error processing visit record: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        limiter.release()
 
 @router.get("/list")
 async def list_visit_summaries(user_id: str):
     """
     List all visit summaries for a user.
     """
-    conn = get_db_connection()
-    try:
-        with conn.cursor() as cur:
+    with get_db_connection() as conn:
+        with conn.cursor(row_factory=dict_row) as cur:
             cur.execute("""
                 SELECT summary_id, visit_date, hospital, diagnosis, prescription, advice, original_text
                 FROM visit_summaries
@@ -273,8 +349,6 @@ async def list_visit_summaries(user_id: str):
                     "original_text": row["original_text"]
                 })
             return {"data": results}
-    finally:
-        conn.close()
 
 # === Health Trends API ===
 
@@ -287,9 +361,8 @@ async def get_health_trends(user_id: str, feature: str, days: int = 90):
     # The existing ai_analysis_tool.py takes a list of visits.
     # We will query health_records and extract values.
 
-    conn = get_db_connection()
-    try:
-        with conn.cursor() as cur:
+    with get_db_connection() as conn:
+        with conn.cursor(row_factory=dict_row) as cur:
             # Query health records that might contain this feature
             # This is a simplified search. In production, use vector search or structured extraction.
             cur.execute("""
@@ -338,5 +411,3 @@ async def get_health_trends(user_id: str, feature: str, days: int = 90):
                 "data": data_points,
                 "message": f"Found {len(data_points)} records for {feature}"
             }
-    finally:
-        conn.close()

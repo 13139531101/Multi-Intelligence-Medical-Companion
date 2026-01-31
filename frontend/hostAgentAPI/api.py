@@ -60,6 +60,39 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 app = FastAPI()
 
+def _env_int(name: str, default: int) -> int:
+    try:
+        v = int(str(os.getenv(name, "")).strip())
+        return v if v > 0 else default
+    except Exception:
+        return default
+
+_A2A_PROXY_MAX_CONCURRENCY = _env_int("A2A_PROXY_MAX_CONCURRENCY", 64)
+_A2A_PROXY_MAX_CONNECTIONS = _env_int("A2A_PROXY_MAX_CONNECTIONS", 200)
+_A2A_PROXY_MAX_KEEPALIVE = _env_int("A2A_PROXY_MAX_KEEPALIVE", 50)
+
+_a2a_proxy_timeout = httpx.Timeout(connect=10.0, read=None, write=10.0, pool=10.0)
+_a2a_proxy_client: httpx.AsyncClient | None = None
+_a2a_proxy_semaphore: asyncio.Semaphore | None = None
+
+def _get_a2a_proxy_client() -> httpx.AsyncClient:
+    global _a2a_proxy_client
+    if _a2a_proxy_client is not None:
+        return _a2a_proxy_client
+    limits = httpx.Limits(
+        max_connections=_A2A_PROXY_MAX_CONNECTIONS,
+        max_keepalive_connections=min(_A2A_PROXY_MAX_KEEPALIVE, _A2A_PROXY_MAX_CONNECTIONS),
+        keepalive_expiry=30.0,
+    )
+    _a2a_proxy_client = httpx.AsyncClient(timeout=_a2a_proxy_timeout, limits=limits)
+    return _a2a_proxy_client
+
+def _get_a2a_proxy_semaphore() -> asyncio.Semaphore:
+    global _a2a_proxy_semaphore
+    if _a2a_proxy_semaphore is None:
+        _a2a_proxy_semaphore = asyncio.Semaphore(_A2A_PROXY_MAX_CONCURRENCY)
+    return _a2a_proxy_semaphore
+
 def _get_user_id(user: dict) -> str:
     return str(user.get("id") or user.get("user_id") or user.get("uid") or "")
 
@@ -165,6 +198,21 @@ async def _host_api_startup_warmup():
     except Exception as e:
         logging.warning(f"[HostAPI] 启动预热过程出现异常（忽略继续启动）: {e}")
 
+@app.on_event("startup")
+async def _init_a2a_proxy_http_client():
+    _get_a2a_proxy_client()
+    _get_a2a_proxy_semaphore()
+
+@app.on_event("shutdown")
+async def _close_a2a_proxy_http_client():
+    global _a2a_proxy_client
+    if _a2a_proxy_client is None:
+        return
+    try:
+        await _a2a_proxy_client.aclose()
+    finally:
+        _a2a_proxy_client = None
+
 @app.middleware("http")
 async def log_request_body(request: Request, call_next):
     try:
@@ -263,10 +311,10 @@ async def a2a_streaming_proxy(request: Request):
     if isinstance(auth, str) and auth.strip():
         headers["Authorization"] = auth.strip()
 
-    timeout = httpx.Timeout(connect=10.0, read=None, write=10.0, pool=10.0)
-
     async def _iter():
-        async with httpx.AsyncClient(timeout=timeout) as client:
+        sem = _get_a2a_proxy_semaphore()
+        async with sem:
+            client = _get_a2a_proxy_client()
             async with client.stream(
                 "POST",
                 agent_url.rstrip("/"),
@@ -1825,9 +1873,11 @@ async def get_medication_stats(days: int = 7, date: str = "", user: dict = Depen
         missed_ids = set()
         on_time_ids = set()
         try:
+            start_dt = datetime(d.year, d.month, d.day)
+            end_dt = start_dt + timedelta(days=1)
             logs = dbm.execute_query(
-                "SELECT reminder_id, scheduled_time, actual_time, status FROM reminder_logs WHERE user_id = %s AND scheduled_time::date = %s",
-                (user_id, d),
+                "SELECT reminder_id, scheduled_time, actual_time, status FROM reminder_logs WHERE user_id = %s AND scheduled_time >= %s AND scheduled_time < %s",
+                (user_id, start_dt, end_dt),
             )
             for l in logs or []:
                 rid = l.get("reminder_id")
@@ -2516,7 +2566,6 @@ async def _debug_init_med_tables():
         "CREATE INDEX IF NOT EXISTS idx_reminder_logs_reminder ON reminder_logs(reminder_id)",
         "CREATE INDEX IF NOT EXISTS idx_reminder_logs_reminder_scheduled ON reminder_logs(reminder_id, scheduled_time)",
         "CREATE INDEX IF NOT EXISTS idx_reminder_logs_user_scheduled ON reminder_logs(user_id, scheduled_time)",
-        "CREATE INDEX IF NOT EXISTS idx_reminder_logs_user_scheduled_date ON reminder_logs(user_id, (scheduled_time::date))",
         "CREATE INDEX IF NOT EXISTS idx_reminder_logs_status ON reminder_logs(status)",
         "CREATE INDEX IF NOT EXISTS idx_reminder_logs_created ON reminder_logs(created_at)",
         "ALTER TABLE consultations ADD COLUMN IF NOT EXISTS question TEXT",

@@ -8,7 +8,7 @@ import requests
 import json
 
 # API基础URL
-BASE_URL = "http://127.0.0.1:13000"
+BASE_URL = "http://127.0.0.1:13002"
 
 def test_register_response_format():
     """测试注册接口的响应格式"""

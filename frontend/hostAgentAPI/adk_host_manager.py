@@ -62,6 +62,7 @@ class ADKHostManager(ApplicationManager):
         self._pending_message_ids = []
         self._agents = []
         self._artifact_chunks = {}
+        self._streaming_message_ids = {}
         self._session_service = InMemorySessionService()
         self._artifact_service = InMemoryArtifactService()
         self._memory_service = InMemoryMemoryService()
@@ -428,6 +429,10 @@ class ADKHostManager(ApplicationManager):
             current_task = self.add_or_get_task(task)
             self.process_artifact_event(current_task, task)
             self.update_task(current_task)
+            try:
+                self._upsert_streaming_message(task, current_task)
+            except Exception:
+                pass
             return current_task
         # Otherwise this is a Task, either new or updated
         if not any(filter(lambda x: x.id == task.id, self._tasks)):
@@ -439,6 +444,49 @@ class ADKHostManager(ApplicationManager):
         self.insert_id_trace(task.status.message)
         self.update_task(task)
         return task
+
+    def _upsert_streaming_message(
+        self, task_update_event: TaskArtifactUpdateEvent, current_task: Task
+    ):
+        conversation_id = get_conversation_id(task_update_event)
+        if not conversation_id:
+            return
+        conversation = self.get_conversation(conversation_id)
+        if not conversation:
+            return
+
+        message_id = self._streaming_message_ids.get(current_task.id)
+        if not message_id:
+            last_message_id = (
+                get_message_id(conversation.messages[-1])
+                if conversation.messages
+                else None
+            )
+            msg = Message(
+                role='agent',
+                parts=list(task_update_event.artifact.parts or []),
+                metadata={
+                    'conversation_id': conversation_id,
+                    'message_id': str(uuid.uuid4()),
+                    'last_message_id': last_message_id,
+                    'task_id': current_task.id,
+                },
+            )
+            self._streaming_message_ids[current_task.id] = msg.metadata[
+                'message_id'
+            ]
+            self._messages.append(msg)
+            conversation.messages.append(msg)
+            return
+
+        for m in reversed(conversation.messages):
+            if m.metadata and m.metadata.get('message_id') == message_id:
+                incoming_parts = task_update_event.artifact.parts or []
+                if incoming_parts:
+                    if m.parts is None:
+                        m.parts = []
+                    m.parts.extend(incoming_parts)
+                return
 
     def emit_event(self, task: TaskCallbackArg, agent_card: AgentCard):
         content = None
@@ -512,10 +560,8 @@ class ADKHostManager(ApplicationManager):
         ]:
             task.history.append(task.status.message)
         else:
-            print(
-                'Message id already in history',
-                get_message_id(task.status.message),
-                task.history,
+            logging.debug(
+                "Message id already in history: %s", get_message_id(task.status.message)
             )
 
     def add_or_get_task(self, task: TaskCallbackArg):
@@ -544,41 +590,63 @@ class ADKHostManager(ApplicationManager):
         self, current_task: Task, task_update_event: TaskArtifactUpdateEvent
     ):
         artifact = task_update_event.artifact
-        print(f"Task: {Task}, 收到artifact事件: {artifact}")
+        task_id = task_update_event.id
+        artifact_index = artifact.index
+
         if not artifact.append:
-            # received the first chunk or entire payload for an artifact
             if artifact.lastChunk is None or artifact.lastChunk:
-                # lastChunk bit is missing or is set to true, so this is the entire payload
-                # add this to artifacts
-                if not current_task.artifacts:
+                if current_task.artifacts is None:
                     current_task.artifacts = []
                 current_task.artifacts.append(artifact)
-            else:
-                # this is a chunk of an artifact, stash it in temp store for assembling
-                if task_update_event.id not in self._artifact_chunks:
-                    self._artifact_chunks[task_update_event.id] = {}
-                self._artifact_chunks[task_update_event.id][artifact.index] = (
-                    artifact
-                )
+                try:
+                    if (
+                        task_id in self._artifact_chunks
+                        and artifact_index in self._artifact_chunks[task_id]
+                    ):
+                        del self._artifact_chunks[task_id][artifact_index]
+                        if not self._artifact_chunks[task_id]:
+                            del self._artifact_chunks[task_id]
+                except Exception:
+                    pass
+                return
+
+            if task_id not in self._artifact_chunks:
+                self._artifact_chunks[task_id] = {}
+            self._artifact_chunks[task_id][artifact_index] = artifact
+            return
+
+        if task_id not in self._artifact_chunks:
+            self._artifact_chunks[task_id] = {}
+
+        current_temp_artifact = self._artifact_chunks[task_id].get(artifact_index)
+        if current_temp_artifact is None:
+            logging.debug(
+                "Missing initial artifact chunk, starting from append chunk. task_id=%s index=%s",
+                task_id,
+                artifact_index,
+            )
+            current_temp_artifact = Artifact(
+                name=artifact.name,
+                description=artifact.description,
+                parts=list(artifact.parts or []),
+                metadata=artifact.metadata,
+                index=artifact_index,
+            )
+            self._artifact_chunks[task_id][artifact_index] = current_temp_artifact
         else:
-            # we received an append chunk, add to the existing temp artifact
-            print(f"尝试获取临时 artifact，id: {task_update_event.id}, index: {artifact.index}")
-            current_temp_artifact = self._artifact_chunks.get(task_update_event.id, {}).get(artifact.index)
-            print(f"获取到的 current_temp_artifact: {current_temp_artifact}")
-            if current_temp_artifact is None:
-                print(f"警告：current_temp_artifact 为 None，id: {task_update_event.id}, index: {artifact.index}")
-                return  # 或者抛出异常，以便更好地追踪问题
-            current_temp_artifact.parts.extend(artifact.parts)
-            print(f"追加 parts 后的 current_temp_artifact: {current_temp_artifact}")
-            if artifact.lastChunk:
-                print(f"接收到最后一个 chunk，准备添加到 current_task.artifacts: {current_temp_artifact}")
-                if not current_task.artifacts:
-                    # 添加成列表，我自己加的，防止报错
-                    current_task.artifacts = []
-                current_task.artifacts.append(current_temp_artifact)
-                del self._artifact_chunks[task_update_event.id][artifact.index]
-                print(
-                    f"已添加到 artifacts 并从 _artifact_chunks 中删除，id: {task_update_event.id}, index: {artifact.index}")
+            if artifact.parts:
+                current_temp_artifact.parts.extend(artifact.parts)
+
+        if artifact.lastChunk:
+            if current_task.artifacts is None:
+                current_task.artifacts = []
+            current_task.artifacts.append(current_temp_artifact)
+            try:
+                del self._artifact_chunks[task_id][artifact_index]
+                if not self._artifact_chunks[task_id]:
+                    del self._artifact_chunks[task_id]
+            except Exception:
+                pass
 
     def add_event(self, event: Event):
         self._events[event.id] = event

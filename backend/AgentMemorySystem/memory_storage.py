@@ -187,7 +187,11 @@ class MemoryStorage:
             raise
         finally:
             if connection:
-                connection.close()
+                try:
+                    connection.rollback()
+                except Exception:
+                    pass
+                self.db_config.put_connection(connection)
     
     def update_memory(self, memory_id: str, content: Dict[str, Any] = None,
                      importance: float = None, tags: List[str] = None) -> bool:
@@ -255,7 +259,11 @@ class MemoryStorage:
             return False
         finally:
             if connection:
-                connection.close()
+                try:
+                    connection.rollback()
+                except Exception:
+                    pass
+                self.db_config.put_connection(connection)
     
     def delete_memory(self, memory_id: str) -> bool:
         """删除记忆
@@ -286,7 +294,11 @@ class MemoryStorage:
             return False
         finally:
             if connection:
-                connection.close()
+                try:
+                    connection.rollback()
+                except Exception:
+                    pass
+                self.db_config.put_connection(connection)
     
     def get_memory(self, memory_id: str) -> Optional[Dict[str, Any]]:
         """获取单个记忆
@@ -332,7 +344,11 @@ class MemoryStorage:
             return None
         finally:
             if connection:
-                connection.close()
+                try:
+                    connection.rollback()
+                except Exception:
+                    pass
+                self.db_config.put_connection(connection)
     
     def batch_store_memories(self, memories: List[Dict[str, Any]]) -> List[str]:
         """批量存储记忆

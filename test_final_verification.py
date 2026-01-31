@@ -10,7 +10,7 @@ import time
 import random
 
 # API基础URL
-BASE_URL = "http://127.0.0.1:13000"
+BASE_URL = "http://127.0.0.1:13002"
 
 def simulate_frontend_register():
     """模拟前端注册流程"""

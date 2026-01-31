@@ -209,10 +209,6 @@ def init_database():
             "ON reminder_logs(user_id, scheduled_time)"
         )
         cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_reminder_logs_user_scheduled_date "
-            "ON reminder_logs(user_id, (scheduled_time::date))"
-        )
-        cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_reminder_logs_status "
             "ON reminder_logs(status)"
         )

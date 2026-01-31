@@ -115,7 +115,6 @@ def init_database():
             cur.execute("CREATE INDEX IF NOT EXISTS idx_reminder_logs_reminder ON reminder_logs(reminder_id)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_reminder_logs_reminder_scheduled ON reminder_logs(reminder_id, scheduled_time)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_reminder_logs_user_scheduled ON reminder_logs(user_id, scheduled_time)")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_reminder_logs_user_scheduled_date ON reminder_logs(user_id, (scheduled_time::date))")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_reminder_logs_status ON reminder_logs(status)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_reminder_logs_created ON reminder_logs(created_at)")
 
@@ -275,8 +274,8 @@ def get_medication_reminders(user_id: str, date: Optional[str] = None, active_on
     try:
         with get_pg_conn() as conn:
             with conn.cursor() as cur:
+                target_date = datetime.strptime(date, "%Y-%m-%d").date() if date else datetime.now().date()
                 if active_only:
-                    target_date = datetime.strptime(date, "%Y-%m-%d").date() if date else datetime.now().date()
                     cur.execute(
                         """
                         SELECT id, user_id, medication_name, dosage, frequency, start_date, end_date,
@@ -320,14 +319,17 @@ def get_medication_reminders(user_id: str, date: Optional[str] = None, active_on
                 reminders = cur.fetchall()
 
                 # 获取当天的服药记录
+                start_dt = datetime.combine(target_date, time.min)
+                end_dt = start_dt + timedelta(days=1)
                 cur.execute(
                     """
                     SELECT reminder_id, scheduled_time, actual_time, status
                     FROM reminder_logs
                     WHERE user_id = %s
-                      AND scheduled_time::date = %s
+                      AND scheduled_time >= %s
+                      AND scheduled_time < %s
                     """,
-                    (user_id, target_date)
+                    (user_id, start_dt, end_dt)
                 )
                 logs = cur.fetchall()
 
@@ -414,14 +416,17 @@ def get_today_reminders(user_id: str) -> Dict[str, Any]:
                 reminders = cur.fetchall()
 
                 # 获取当天的服药记录
+                start_dt = datetime.combine(today, time.min)
+                end_dt = start_dt + timedelta(days=1)
                 cur.execute(
                     """
                     SELECT reminder_id, scheduled_time, status
                     FROM reminder_logs
                     WHERE user_id = %s
-                      AND scheduled_time::date = %s
+                      AND scheduled_time >= %s
+                      AND scheduled_time < %s
                     """,
-                    (user_id, today)
+                    (user_id, start_dt, end_dt)
                 )
                 logs = cur.fetchall()
 

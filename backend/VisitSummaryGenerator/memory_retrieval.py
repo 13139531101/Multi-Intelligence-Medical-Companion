@@ -137,7 +137,11 @@ class MemoryRetrieval:
             return []
         finally:
             if connection:
-                connection.close()
+                try:
+                    connection.rollback()
+                except Exception:
+                    pass
+                self.db_config.put_connection(connection)
     
     def search_by_time_range(self, start_time: datetime, end_time: datetime,
                            agent_id: str, user_id: str, memory_types: List[str] = None,
@@ -198,7 +202,11 @@ class MemoryRetrieval:
             return []
         finally:
             if connection:
-                connection.close()
+                try:
+                    connection.rollback()
+                except Exception:
+                    pass
+                self.db_config.put_connection(connection)
     
     def search_by_tags(self, tags: List[str], agent_id: str, user_id: str,
                       match_all: bool = False, memory_types: List[str] = None,
@@ -281,7 +289,11 @@ class MemoryRetrieval:
             return []
         finally:
             if connection:
-                connection.close()
+                try:
+                    connection.rollback()
+                except Exception:
+                    pass
+                self.db_config.put_connection(connection)
     
     def get_recent_memories(self, agent_id: str, user_id: str, hours: int = 24,
                           memory_types: List[str] = None, limit: int = 20) -> List[Dict[str, Any]]:
@@ -362,7 +374,11 @@ class MemoryRetrieval:
             return []
         finally:
             if connection:
-                connection.close()
+                try:
+                    connection.rollback()
+                except Exception:
+                    pass
+                self.db_config.put_connection(connection)
     
     def search_related_memories(self, memory_id: str, limit: int = 10) -> List[Dict[str, Any]]:
         """搜索相关记忆
@@ -408,7 +424,11 @@ class MemoryRetrieval:
             return []
         finally:
             if connection:
-                connection.close()
+                try:
+                    connection.rollback()
+                except Exception:
+                    pass
+                self.db_config.put_connection(connection)
     
     def _search_by_text_match(self, query: str, agent_id: str, user_id: str,
                              memory_types: List[str] = None, limit: int = 10) -> List[Dict[str, Any]]:
@@ -455,7 +475,11 @@ class MemoryRetrieval:
             return []
         finally:
             if connection:
-                connection.close()
+                try:
+                    connection.rollback()
+                except Exception:
+                    pass
+                self.db_config.put_connection(connection)
     
     def _parse_memory_json_fields(self, memory: Dict[str, Any]) -> Dict[str, Any]:
         """解析记忆的JSON字段"""

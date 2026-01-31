@@ -27,8 +27,10 @@ import mimetypes
 import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import Json
+from psycopg_pool import ConnectionPool
 import jwt
 import re
+import anyio
 
 try:
     from embedding_manager import EmbeddingService
@@ -278,6 +280,50 @@ _RAG_EMBEDDING_MODEL = os.getenv("RAG_EMBEDDING_MODEL") or os.getenv(
 _rag_schema_ready = False
 _embedding_service = None
 
+_db_pool: ConnectionPool | None = None
+_db_pool_init_attempted = False
+
+def _build_db_dsn() -> str:
+    dsn = os.getenv("DATABASE_URL")
+    if isinstance(dsn, str) and dsn.strip():
+        return dsn.strip()
+    user = DB_CONFIG.get("user") or "pha"
+    password = DB_CONFIG.get("password") or ""
+    host = DB_CONFIG.get("host") or "localhost"
+    port = DB_CONFIG.get("port") or 5432
+    dbname = DB_CONFIG.get("dbname") or "personal_health_assistant"
+    auth = f"{user}:{password}" if password else f"{user}"
+    return f"postgresql://{auth}@{host}:{port}/{dbname}"
+
+def _get_db_pool() -> ConnectionPool | None:
+    global _db_pool, _db_pool_init_attempted
+    if _db_pool is not None:
+        return _db_pool
+    if _db_pool_init_attempted:
+        return None
+    _db_pool_init_attempted = True
+    try:
+        max_size = int(os.getenv("DB_POOL_MAX_SIZE", "20"))
+        timeout = float(os.getenv("DB_POOL_TIMEOUT", "5"))
+        _db_pool = ConnectionPool(_build_db_dsn(), max_size=max(max_size, 1), timeout=timeout)
+        return _db_pool
+    except Exception as e:
+        logger.warning(f"DB连接池初始化失败，将回退为直连: {e}")
+        _db_pool = None
+        return None
+
+_upload_limiter: anyio.CapacityLimiter | None = None
+
+def _get_upload_limiter() -> anyio.CapacityLimiter:
+    global _upload_limiter
+    if _upload_limiter is None:
+        try:
+            n = int(os.getenv("HEALTH_RECORDS_UPLOAD_MAX_CONCURRENCY", "8"))
+        except Exception:
+            n = 8
+        _upload_limiter = anyio.CapacityLimiter(max(n, 1))
+    return _upload_limiter
+
 def _get_embedding_service():
     global _embedding_service
     if _embedding_service is not None:
@@ -462,6 +508,16 @@ def _upsert_rag_document(
 
 @contextmanager
 def get_db_connection():
+    pool = _get_db_pool()
+    if pool is not None:
+        with pool.connection() as conn:
+            try:
+                conn.autocommit = False
+            except Exception:
+                pass
+            yield conn
+        return
+
     conn = psycopg.connect(**DB_CONFIG)
     try:
         yield conn
@@ -2704,6 +2760,8 @@ async def analyze_visit_summary_image(
     visit_date: str = Form(None),
     request: Request = None,
 ):
+    limiter = _get_upload_limiter()
+    await limiter.acquire()
     try:
         uid = _resolve_user_id(request, user_id)
         if not uid:
@@ -2713,16 +2771,45 @@ async def analyze_visit_summary_image(
         if not ct.startswith("image/"):
             raise HTTPException(status_code=400, detail="仅支持图片上传")
 
-        content = await file.read()
-        if len(content) > 10 * 1024 * 1024:
-            raise HTTPException(status_code=400, detail="文件大小超过限制（10MB）")
-
         file_id = generate_id()
         ext = Path(file.filename or "").suffix
         saved_name = f"{file_id}{ext}"
         saved_path = UPLOAD_DIR / saved_name
-        with open(saved_path, "wb") as f:
-            f.write(content)
+
+        max_size = 10 * 1024 * 1024
+        chunk_size = int(
+            os.getenv("HEALTH_RECORDS_UPLOAD_CHUNK_BYTES", str(1024 * 1024))
+        )
+        file_size = 0
+        content_buf = bytearray()
+        try:
+            with open(saved_path, "wb") as out:
+                while True:
+                    chunk = await file.read(chunk_size)
+                    if not chunk:
+                        break
+                    file_size += len(chunk)
+                    if file_size > max_size:
+                        try:
+                            out.close()
+                        except Exception:
+                            pass
+                        try:
+                            os.remove(saved_path)
+                        except Exception:
+                            pass
+                        raise HTTPException(
+                            status_code=400, detail="文件大小超过限制（10MB）"
+                        )
+                    await anyio.to_thread.run_sync(out.write, chunk)
+                    content_buf.extend(chunk)
+        finally:
+            try:
+                await file.close()
+            except Exception:
+                pass
+
+        content = bytes(content_buf)
 
         with get_db_connection() as conn:
             with conn.cursor() as cursor:
@@ -2736,7 +2823,7 @@ async def analyze_visit_summary_image(
                         saved_name,
                         file.filename or saved_name,
                         str(saved_path),
-                        len(content),
+                        file_size,
                         ct,
                     ),
                 )
@@ -2906,6 +2993,8 @@ async def analyze_visit_summary_image(
     except Exception as e:
         logger.error(f"就诊摘要图片识别失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        limiter.release()
 
 
 @app.get("/api/consultations/history", response_model=List[Consultation])
@@ -4469,6 +4558,8 @@ async def upload_file(
     request: Request = None,
 ):
     """上传文件"""
+    limiter = _get_upload_limiter()
+    await limiter.acquire()
     try:
         logger.info(
             f"upload start filename={getattr(file,'filename',None)} ct={getattr(file,'content_type',None)}"
@@ -4524,11 +4615,9 @@ async def upload_file(
         if normalized_ct not in allowed_types:
             raise HTTPException(status_code=400, detail="不支持的文件类型")
 
-        # 检查文件大小（10MB限制）
-        max_size = 10 * 1024 * 1024  # 10MB
-        file_content = await file.read()
-        if len(file_content) > max_size:
-            raise HTTPException(status_code=400, detail="文件大小超过限制（10MB）")
+        max_size = int(
+            os.getenv("HEALTH_RECORDS_MAX_UPLOAD_BYTES", str(10 * 1024 * 1024))
+        )
 
         # 解析用户ID（优先表单，其次头部/Token）
         try:
@@ -4549,9 +4638,37 @@ async def upload_file(
         filename = f"{file_id}{file_extension}"
         file_path = UPLOAD_DIR / filename
 
-        # 保存文件
-        with open(file_path, "wb") as f:
-            f.write(file_content)
+        chunk_size = int(os.getenv("HEALTH_RECORDS_UPLOAD_CHUNK_BYTES", str(1024 * 1024)))
+        file_size = 0
+        want_bytes = (not skip_ocr_flag) and normalized_ct.startswith("image/")
+        content_buf = bytearray() if want_bytes else None
+        try:
+            with open(file_path, "wb") as out:
+                while True:
+                    chunk = await file.read(chunk_size)
+                    if not chunk:
+                        break
+                    file_size += len(chunk)
+                    if file_size > max_size:
+                        try:
+                            out.close()
+                        except Exception:
+                            pass
+                        try:
+                            os.remove(file_path)
+                        except Exception:
+                            pass
+                        raise HTTPException(status_code=400, detail="文件大小超过限制")
+                    await anyio.to_thread.run_sync(out.write, chunk)
+                    if content_buf is not None:
+                        content_buf.extend(chunk)
+        finally:
+            try:
+                await file.close()
+            except Exception:
+                pass
+
+        file_content = bytes(content_buf) if content_buf is not None else b""
 
         # 使用单个事务：先写附件，再进行图片OCR并入库；图片OCR失败则回滚并报错
         with get_db_connection() as conn:
@@ -4568,7 +4685,7 @@ async def upload_file(
                         filename,
                         file.filename,
                         str(file_path),
-                        len(file_content),
+                        file_size,
                         normalized_ct,
                         datetime.now(),
                         None,
@@ -4585,7 +4702,7 @@ async def upload_file(
                         "file_id": file_id,
                         "filename": filename,
                         "original_filename": file.filename,
-                        "file_size": len(file_content),
+                        "file_size": file_size,
                         "mime_type": normalized_ct,
                         "message": "文件上传成功",
                         "ocr_info": None,
@@ -5018,7 +5135,7 @@ async def upload_file(
             "file_id": file_id,
             "filename": filename,
             "original_filename": file.filename,
-            "file_size": len(file_content),
+            "file_size": file_size,
             "mime_type": normalized_ct,
             "message": "文件上传成功",
             "ocr_info": ocr_info,
@@ -5031,6 +5148,11 @@ async def upload_file(
     except Exception as e:
         logger.error(f"文件上传失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        try:
+            limiter.release()
+        except Exception:
+            pass
 
 
 # 新增：批量上传多个文件（逐个调用单文件上传逻辑，保证返回结构一致）

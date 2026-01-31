@@ -171,6 +171,7 @@ services:
     mem_limit: 1g
     volumes:
       - ./backend:/app/backend
+      - hostapi_uploads:/app/uploads
     depends_on:
       health_advisor:
         condition: service_healthy
@@ -192,3 +193,4 @@ services:
 
 volumes:
   postgres_data:
+  hostapi_uploads:

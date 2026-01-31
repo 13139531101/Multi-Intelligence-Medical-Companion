@@ -84,6 +84,9 @@ class MemoryDatabaseConfig:
                 self._connection_pool.putconn(connection)
         except Exception as e:
             logger.error(f"归还数据库连接失败: {e}")
+
+    def put_connection(self, connection):
+        self._put_connection(connection)
     
     def create_tables(self):
         """创建记忆系统所需的数据库表"""
@@ -91,9 +94,16 @@ class MemoryDatabaseConfig:
             logger.warning("跳过创建数据库表：无数据库模式")
             return
         connection = None
+        lock_acquired = False
         try:
             connection = self.get_connection()
             cursor = connection.cursor()
+
+            try:
+                cursor.execute("SELECT pg_advisory_lock(hashtext('agent_memory_system_schema'))")
+                lock_acquired = True
+            except Exception as e:
+                logger.warning(f"获取数据库初始化锁失败: {e}")
 
             # 创建记忆主表
             cursor.execute(self._get_memories_table_sql())
@@ -126,6 +136,16 @@ class MemoryDatabaseConfig:
             raise
         finally:
             if connection:
+                if lock_acquired:
+                    try:
+                        cursor = connection.cursor()
+                        cursor.execute("SELECT pg_advisory_unlock(hashtext('agent_memory_system_schema'))")
+                        connection.commit()
+                    except Exception:
+                        try:
+                            connection.rollback()
+                        except Exception:
+                            pass
                 self._put_connection(connection)
     
     def _get_memories_table_sql(self) -> str:

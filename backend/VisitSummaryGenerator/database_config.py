@@ -80,6 +80,9 @@ class MemoryDatabaseConfig:
                 self._connection_pool.putconn(connection)
         except Exception as e:
             logger.error(f"归还数据库连接失败: {e}")
+
+    def put_connection(self, connection):
+        self._put_connection(connection)
     
     def create_tables(self):
         """创建记忆系统所需的数据库表"""
@@ -217,4 +220,4 @@ class MemoryDatabaseConfig:
             return {}
         finally:
             if connection:
-                connection.close()
+                self._put_connection(connection)

@@ -25,7 +25,7 @@ def test_localhost_access():
     """测试localhost访问"""
     print("=== 测试localhost访问 ===")
     try:
-        response = requests.get("http://127.0.0.1:13000/ping", timeout=5)
+        response = requests.get("http://127.0.0.1:13002/ping", timeout=5)
         if response.status_code == 200:
             print("✓ localhost访问正常")
             return True
@@ -40,7 +40,7 @@ def test_ip_access(ip):
     """测试IP地址访问"""
     print(f"\n=== 测试IP地址访问: {ip} ===")
     try:
-        response = requests.get(f"http://{ip}:13000/ping", timeout=5)
+        response = requests.get(f"http://{ip}:13002/ping", timeout=5)
         if response.status_code == 200:
             print(f"✓ IP地址 {ip} 访问正常")
             return True
@@ -84,11 +84,11 @@ def generate_wechat_config(ip):
     print("微信小程序不能访问localhost/127.0.0.1地址")
     print("需要修改以下配置：")
     print("\n1. 修改 frontend/wechat_mini_program/utils/api.js:")
-    print(f'   const SERVER_URL = "http://{ip}:13000";')
+    print(f'   const SERVER_URL = "http://{ip}:13002";')
     print("\n2. 在微信开发者工具中：")
     print("   - 打开'详情' -> '本地设置'")
     print("   - 勾选'不校验合法域名、web-view（业务域名）、TLS 版本以及 HTTPS 证书'")
-    print("\n3. 确保防火墙允许端口13000的访问")
+    print("\n3. 确保防火墙允许端口13002的访问")
     print("\n4. 如果仍有问题，可能需要：")
     print("   - 配置HTTPS（生产环境必需）")
     print("   - 在微信公众平台配置服务器域名")
@@ -109,7 +109,7 @@ def main():
         
         if localhost_ok and ip_ok:
             # 测试认证接口
-            test_auth_endpoints(f"http://{local_ip}:13000")
+            test_auth_endpoints(f"http://{local_ip}:13002")
             
         # 生成配置建议
         generate_wechat_config(local_ip)
@@ -124,7 +124,7 @@ def main():
         
     if local_ip and not test_ip_access(local_ip):
         print("✗ 可能需要配置防火墙或网络设置")
-        print("  建议：在Windows防火墙中允许端口13000的入站连接")
+        print("  建议：在Windows防火墙中允许端口13002的入站连接")
 
 if __name__ == "__main__":
     main()

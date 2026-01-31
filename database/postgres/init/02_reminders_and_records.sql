@@ -60,7 +60,6 @@ CREATE TABLE IF NOT EXISTS reminder_logs (
 CREATE INDEX IF NOT EXISTS idx_reminder_logs_reminder ON reminder_logs(reminder_id);
 CREATE INDEX IF NOT EXISTS idx_reminder_logs_reminder_scheduled ON reminder_logs(reminder_id, scheduled_time);
 CREATE INDEX IF NOT EXISTS idx_reminder_logs_user_scheduled ON reminder_logs(user_id, scheduled_time);
-CREATE INDEX IF NOT EXISTS idx_reminder_logs_user_scheduled_date ON reminder_logs(user_id, (scheduled_time::date));
 CREATE INDEX IF NOT EXISTS idx_reminder_logs_status ON reminder_logs(status);
 CREATE INDEX IF NOT EXISTS idx_reminder_logs_created ON reminder_logs(created_at);
 

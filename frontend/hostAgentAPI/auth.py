@@ -13,8 +13,10 @@ from typing import Optional, Dict, Any
 from fastapi import APIRouter, HTTPException, Depends, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, EmailStr
+from contextlib import contextmanager
 import psycopg
 from psycopg.rows import dict_row
+from psycopg_pool import ConnectionPool
 import os
 from dotenv import load_dotenv
 import logging
@@ -76,38 +78,79 @@ class AuthService:
     
     def __init__(self):
         self.db_config = DB_CONFIG
+        self._pool: ConnectionPool | None = None
+        self._pool_init_attempted = False
         # 在初始化时确保数据库表存在
         try:
             self.init_schema()
         except Exception as e:
             logger.warning(f"初始化认证表失败: {e}")
     
-    def get_db_connection(self):
-        """获取数据库连接（psycopg3）"""
+    def _build_dsn(self) -> str:
+        dsn = os.getenv("DATABASE_URL")
+        if isinstance(dsn, str) and dsn.strip():
+            return dsn.strip()
+        user = self.db_config.get("user") or "pha"
+        password = self.db_config.get("password") or ""
+        host = self.db_config.get("host") or "localhost"
+        port = self.db_config.get("port") or 5432
+        dbname = self.db_config.get("dbname") or "personal_health_assistant"
+        auth = f"{user}:{password}" if password else f"{user}"
+        return f"postgresql://{auth}@{host}:{port}/{dbname}"
+
+    def _get_pool(self) -> ConnectionPool | None:
+        if self._pool is not None:
+            return self._pool
+        if self._pool_init_attempted:
+            return None
+        self._pool_init_attempted = True
         try:
-            connection = psycopg.connect(**self.db_config)
+            max_size = int(os.getenv("AUTH_DB_POOL_MAX_SIZE", os.getenv("DB_POOL_MAX_SIZE", "20")))
+        except Exception:
+            max_size = 20
+        try:
+            self._pool = ConnectionPool(self._build_dsn(), max_size=max(max_size, 1))
+            return self._pool
+        except Exception as e:
+            logger.warning(f"认证模块DB连接池初始化失败，将回退为直连: {e}")
+            self._pool = None
+            return None
+
+    @contextmanager
+    def get_db_connection(self):
+        """获取数据库连接（优先连接池，失败回退直连）"""
+        pool = self._get_pool()
+        if pool is not None:
+            with pool.connection() as conn:
+                try:
+                    conn.autocommit = False
+                except Exception:
+                    pass
+                yield conn
+            return
+        try:
+            conn = psycopg.connect(**self.db_config)
             try:
-                connection.autocommit = True
+                conn.autocommit = False
             except Exception:
                 pass
-            return connection
+            yield conn
         except Exception as e:
             logger.error(f"数据库连接失败: {e}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="数据库连接失败"
             )
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
     def init_schema(self):
         """初始化 users 与 user_sessions 表（Postgres）"""
         try:
-            conn = psycopg.connect(**self.db_config)
-        except Exception as e:
-            # 快速失败并在启动时跳过架构初始化，以避免阻塞应用
-            logger.warning(f"认证模块跳过数据库架构初始化（连接失败）: {e}")
-            return
-        try:
-            with conn:
+            with self.get_db_connection() as conn:
                 with conn.cursor() as cur:
                     cur.execute(
                         """
@@ -143,8 +186,10 @@ class AuthService:
                         );
                         """
                     )
-        finally:
-            conn.close()
+                conn.commit()
+        except Exception as e:
+            logger.warning(f"认证模块跳过数据库架构初始化（连接失败）: {e}")
+            return
     
     def generate_salt(self) -> str:
         """生成密码盐值"""
@@ -191,219 +236,205 @@ class AuthService:
     
     def register_user(self, user_data: UserRegister) -> Dict[str, Any]:
         """用户注册"""
-        connection = self.get_db_connection()
-        cursor = connection.cursor(row_factory=dict_row)
-        
-        try:
-            # 检查用户名是否已存在
-            cursor.execute("SELECT id FROM users WHERE username = %s", (user_data.username,))
-            result = cursor.fetchone()
-            if result:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="用户名已存在"
-                )
-            
-            # 检查邮箱是否已存在
-            if user_data.email:
-                cursor.execute("SELECT id FROM users WHERE email = %s", (user_data.email,))
-                result = cursor.fetchone()
-                if result:
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail="邮箱已被注册"
-                    )
-            
-            # 检查手机号是否已存在
-            if user_data.phone:
-                cursor.execute("SELECT id FROM users WHERE phone = %s", (user_data.phone,))
-                result = cursor.fetchone()
-                if result:
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail="手机号已被注册"
-                    )
-            
-            # 创建新用户
-            user_id = self.generate_user_id()
-            salt = self.generate_salt()
-            password_hash = self.hash_password(user_data.password, salt)
-            
-            insert_query = """
-                INSERT INTO users (user_id, username, password_hash, salt, email, phone)
-                VALUES (%s, %s, %s, %s, %s, %s)
-            """
-            cursor.execute(insert_query, (
-                user_id, user_data.username, password_hash, salt,
-                user_data.email, user_data.phone
-            ))
-            
-            # 提交事务
-            connection.commit()
-            
-            # 关闭当前游标，创建新游标来查询
-            cursor.close()
+        cursor = None
+        with self.get_db_connection() as connection:
             cursor = connection.cursor(row_factory=dict_row)
-            
-            # 获取创建的用户信息
-            cursor.execute("""
-                SELECT user_id, username, email, phone, avatar_url, 
-                       last_login_at, login_count, status, created_at
-                FROM users WHERE user_id = %s
-            """, (user_id,))
-            
-            user = cursor.fetchone()
-            if not user:
+        
+            try:
+                # 检查用户名是否已存在
+                cursor.execute("SELECT id FROM users WHERE username = %s", (user_data.username,))
+                result = cursor.fetchone()
+                if result:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="用户名已存在"
+                    )
+
+                # 检查邮箱是否已存在
+                if user_data.email:
+                    cursor.execute("SELECT id FROM users WHERE email = %s", (user_data.email,))
+                    result = cursor.fetchone()
+                    if result:
+                        raise HTTPException(
+                            status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="邮箱已被注册"
+                        )
+
+                # 检查手机号是否已存在
+                if user_data.phone:
+                    cursor.execute("SELECT id FROM users WHERE phone = %s", (user_data.phone,))
+                    result = cursor.fetchone()
+                    if result:
+                        raise HTTPException(
+                            status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="手机号已被注册"
+                        )
+
+                # 创建新用户
+                user_id = self.generate_user_id()
+                salt = self.generate_salt()
+                password_hash = self.hash_password(user_data.password, salt)
+
+                insert_query = """
+                    INSERT INTO users (user_id, username, password_hash, salt, email, phone)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                """
+                cursor.execute(insert_query, (
+                    user_id, user_data.username, password_hash, salt,
+                    user_data.email, user_data.phone
+                ))
+
+                connection.commit()
+
+                cursor.close()
+                cursor = connection.cursor(row_factory=dict_row)
+
+                cursor.execute("""
+                    SELECT user_id, username, email, phone, avatar_url,
+                           last_login_at, login_count, status, created_at
+                    FROM users WHERE user_id = %s
+                """, (user_id,))
+
+                user = cursor.fetchone()
+                if not user:
+                    raise HTTPException(
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        detail="用户创建失败"
+                    )
+
+                return user
+
+            except HTTPException:
+                raise
+            except Exception as e:
+                connection.rollback()
+                logger.error(f"用户注册失败: {e}")
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="用户创建失败"
+                    detail="用户注册失败"
                 )
-            
-            return user
-            
-        except HTTPException:
-            raise
-        except Exception as e:
-            connection.rollback()
-            logger.error(f"用户注册失败: {e}")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="用户注册失败"
-            )
-        finally:
-            if cursor:
-                cursor.close()
-            if connection:
-                connection.close()
+            finally:
+                if cursor:
+                    cursor.close()
     
     def authenticate_user(self, login_data: UserLogin) -> Dict[str, Any]:
         """用户登录认证"""
-        connection = self.get_db_connection()
-        cursor = connection.cursor(row_factory=dict_row)
+        cursor = None
+        with self.get_db_connection() as connection:
+            cursor = connection.cursor(row_factory=dict_row)
         
-        try:
-            # 获取用户信息
-            cursor.execute("""
-                SELECT user_id, username, password_hash, salt, email, phone, 
-                       avatar_url, last_login_at, login_count, status, created_at
-                FROM users WHERE username = %s
-            """, (login_data.username,))
-            
-            user = cursor.fetchone()
-            if not user:
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="用户名或密码错误"
+            try:
+                cursor.execute("""
+                    SELECT user_id, username, password_hash, salt, email, phone,
+                           avatar_url, last_login_at, login_count, status, created_at
+                    FROM users WHERE username = %s
+                """, (login_data.username,))
+
+                user = cursor.fetchone()
+                if not user:
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="用户名或密码错误"
+                    )
+
+                if user['status'] != 1:
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="账户已被禁用"
+                    )
+
+                if not self.verify_password(login_data.password, user['salt'], user['password_hash']):
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="用户名或密码错误"
+                    )
+
+                cursor.execute(
+                    """
+                    UPDATE users
+                    SET last_login_at = CURRENT_TIMESTAMP, login_count = login_count + 1
+                    WHERE user_id = %s
+                    """,
+                    (user['user_id'],)
                 )
-            
-            # 检查用户状态
-            if user['status'] != 1:
+
+                connection.commit()
+
+                user.pop('password_hash', None)
+                user.pop('salt', None)
+
+                return user
+
+            except HTTPException:
+                raise
+            except Exception as e:
+                connection.rollback()
+                logger.error(f"用户登录失败: {e}")
                 raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="账户已被禁用"
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="登录失败"
                 )
-            
-            # 验证密码
-            if not self.verify_password(login_data.password, user['salt'], user['password_hash']):
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="用户名或密码错误"
-                )
-            
-            # 更新登录信息
-            cursor.execute(
-                """
-                UPDATE users
-                SET last_login_at = CURRENT_TIMESTAMP, login_count = login_count + 1
-                WHERE user_id = %s
-                """,
-                (user['user_id'],)
-            )
-            
-            # 提交事务
-            connection.commit()
-            
-            # 移除敏感信息
-            user.pop('password_hash', None)
-            user.pop('salt', None)
-            
-            return user
-            
-        except HTTPException:
-            raise
-        except Exception as e:
-            connection.rollback()
-            logger.error(f"用户登录失败: {e}")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="登录失败"
-            )
-        finally:
-            if cursor:
-                cursor.close()
-            if connection:
-                connection.close()
+            finally:
+                if cursor:
+                    cursor.close()
     
     def get_user_by_id(self, user_id: str) -> Dict[str, Any]:
         """根据用户ID获取用户信息"""
-        connection = self.get_db_connection()
-        cursor = connection.cursor(row_factory=dict_row)
+        cursor = None
+        with self.get_db_connection() as connection:
+            cursor = connection.cursor(row_factory=dict_row)
         
-        try:
-            cursor.execute("""
-                SELECT user_id, username, email, phone, avatar_url, 
-                       last_login_at, login_count, status, created_at
-                FROM users WHERE user_id = %s AND status = 1
-            """, (user_id,))
-            
-            user = cursor.fetchone()
-            if not user:
+            try:
+                cursor.execute("""
+                    SELECT user_id, username, email, phone, avatar_url,
+                           last_login_at, login_count, status, created_at
+                    FROM users WHERE user_id = %s AND status = 1
+                """, (user_id,))
+
+                user = cursor.fetchone()
+                if not user:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail="用户不存在"
+                    )
+
+                return user
+
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"获取用户信息失败: {e}")
                 raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="用户不存在"
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="获取用户信息失败"
                 )
-            
-            return user
-            
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.error(f"获取用户信息失败: {e}")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="获取用户信息失败"
-            )
-        finally:
-            if cursor:
-                cursor.close()
-            if connection:
-                connection.close()
+            finally:
+                if cursor:
+                    cursor.close()
     
     def save_user_session(self, user_id: str, token: str, ip_address: str = None, user_agent: str = None):
         """保存用户会话"""
-        connection = self.get_db_connection()
-        cursor = connection.cursor()
+        cursor = None
+        with self.get_db_connection() as connection:
+            cursor = connection.cursor()
         
-        try:
-            token_hash = hashlib.sha256(token.encode()).hexdigest()
-            expires_at = datetime.utcnow() + timedelta(hours=JWT_EXPIRATION_HOURS)
-            
-            cursor.execute("""
-                INSERT INTO user_sessions (user_id, token_hash, expires_at, ip_address, user_agent)
-                VALUES (%s, %s, %s, %s, %s)
-            """, (user_id, token_hash, expires_at, ip_address, user_agent))
-            
-            # 提交事务
-            connection.commit()
-            
-        except Exception as e:
-            connection.rollback()
-            logger.error(f"保存用户会话失败: {e}")
-        finally:
-            if cursor:
-                cursor.close()
-            if connection:
-                connection.close()
+            try:
+                token_hash = hashlib.sha256(token.encode()).hexdigest()
+                expires_at = datetime.utcnow() + timedelta(hours=JWT_EXPIRATION_HOURS)
+
+                cursor.execute("""
+                    INSERT INTO user_sessions (user_id, token_hash, expires_at, ip_address, user_agent)
+                    VALUES (%s, %s, %s, %s, %s)
+                """, (user_id, token_hash, expires_at, ip_address, user_agent))
+
+                connection.commit()
+
+            except Exception as e:
+                connection.rollback()
+                logger.error(f"保存用户会话失败: {e}")
+            finally:
+                if cursor:
+                    cursor.close()
 
 # 创建认证服务实例
 auth_service = AuthService()
@@ -424,13 +455,13 @@ async def register(user_data: UserRegister):
     """用户注册"""
     # 注册用户
     user = auth_service.register_user(user_data)
-    
+
     # 生成JWT token
     token = auth_service.create_jwt_token(user)
-    
+
     # 保存会话
     auth_service.save_user_session(user['user_id'], token)
-    
+
     return TokenResponse(
         access_token=token,
         token_type="bearer",
