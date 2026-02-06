@@ -247,12 +247,13 @@ def get_medication_reminders(user_id: str, date: str = "", active_only: bool = T
         }, ensure_ascii=False)
 
 @mcp.tool()
-def mark_reminder_taken(user_id: str, reminder_id: int, taken_time: str = "") -> str:
+def mark_reminder_taken(user_id: str, reminder_id: int, taken_time: str = "", scheduled_time: str = "") -> str:
     """
     标记提醒已服药
     :param user_id: 用户ID
     :param reminder_id: 提醒ID
     :param taken_time: 服药时间 (YYYY-MM-DD HH:MM:SS)，为空则使用当前时间
+    :param scheduled_time: 计划时间 (YYYY-MM-DD HH:MM[:SS] 或 HH:MM)，为空则使用默认规则
     :return: 标记结果
     """
     try:
@@ -320,19 +321,34 @@ def mark_reminder_taken(user_id: str, reminder_id: int, taken_time: str = "") ->
             except Exception as fix_e:
                 logger.error(f"自动修复数据失败: {fix_e}")
 
-        # 记录服药日志（状态使用枚举中的 completed，并写入完成时间）
+        scheduled_dt = None
+        if scheduled_time:
+            try:
+                dt = reminder_manager.format_datetime(scheduled_time)
+                if isinstance(dt, datetime):
+                    scheduled_dt = dt
+                else:
+                    s = str(scheduled_time).strip()
+                    if ":" in s and len(s) <= 5:
+                        today = datetime.now().date()
+                        scheduled_dt = datetime.combine(today, datetime.strptime(s, "%H:%M").time())
+            except Exception:
+                scheduled_dt = None
+
+        if scheduled_dt is None:
+            today = datetime.now().date()
+            scheduled_dt = datetime.combine(today, datetime.strptime(time_str, "%H:%M").time())
+
+        # 记录服药日志，并写入完成时间
         log_query = """
             INSERT INTO reminder_logs
             (reminder_id, user_id, scheduled_time, actual_time, status, completion_time, notes)
-            VALUES (%s, %s, %s, %s, 'completed', %s, '用户手动标记已服药')
+            VALUES (%s, %s, %s, %s, 'taken', %s, '用户手动标记已服药')
         """
-
-        today = datetime.now().date()
-        scheduled_time = datetime.combine(today, datetime.strptime(time_str, "%H:%M").time())
 
         log_id = reminder_manager.db_manager.execute_insert(
             log_query,
-            (reminder['id'], user_id, scheduled_time, taken_dt, taken_dt)
+            (reminder['id'], user_id, scheduled_dt, taken_dt, taken_dt)
         )
 
         return json.dumps({
@@ -413,7 +429,7 @@ def get_health_reminders(user_id: str, reminder_type: str = "",
     """
     try:
         # 构建查询条件
-        conditions = ["user_id = %s", "is_deleted = 0"]
+        conditions = ["user_id = %s", "CAST(is_deleted AS TEXT) IN ('0','f','false')"]
         params = [user_id]
 
         if reminder_type:
@@ -465,7 +481,7 @@ def complete_reminder(user_id: str, reminder_id: int) -> str:
     """
     try:
         # 检查提醒是否存在
-        check_query = "SELECT id FROM reminders WHERE id = %s AND user_id = %s AND is_deleted = 0"
+        check_query = "SELECT id FROM reminders WHERE id = %s AND user_id = %s AND CAST(is_deleted AS TEXT) IN ('0','f','false')"
         existing_reminders = reminder_manager.db_manager.execute_query(check_query, (reminder_id, user_id))
 
         if not existing_reminders:
@@ -475,13 +491,21 @@ def complete_reminder(user_id: str, reminder_id: int) -> str:
             }, ensure_ascii=False)
 
         # 更新提醒状态
-        update_query = """
-            UPDATE reminders
-            SET is_completed = 1, completed_at = NOW(), updated_at = NOW()
-            WHERE id = %s AND user_id = %s
-        """
-
-        affected_rows = reminder_manager.db_manager.execute_update(update_query, (reminder_id, user_id))
+        affected_rows = 0
+        try:
+            update_query = """
+                UPDATE reminders
+                SET is_completed = TRUE, completed_at = NOW(), updated_at = NOW()
+                WHERE id = %s AND user_id = %s
+            """
+            affected_rows = reminder_manager.db_manager.execute_update(update_query, (reminder_id, user_id))
+        except Exception:
+            update_query = """
+                UPDATE reminders
+                SET is_completed = 1, completed_at = NOW(), updated_at = NOW()
+                WHERE id = %s AND user_id = %s
+            """
+            affected_rows = reminder_manager.db_manager.execute_update(update_query, (reminder_id, user_id))
 
         if affected_rows > 0:
             return json.dumps({
@@ -523,24 +547,16 @@ def delete_reminder(user_id: str, reminder_id: int, reminder_type: str = "health
             check_query = """
                 SELECT id
                 FROM medication_reminders
-                WHERE id = %s AND user_id = %s AND is_deleted = 0
+                WHERE id = %s AND user_id = %s AND CAST(is_deleted AS TEXT) IN ('0','f','false')
             """
-            update_query = """
-                UPDATE medication_reminders
-                SET is_deleted = 1, updated_at = NOW()
-                WHERE id = %s AND user_id = %s
-            """
+            update_query = None
         else:
             check_query = """
                 SELECT id
                 FROM reminders
-                WHERE id = %s AND user_id = %s AND is_deleted = 0
+                WHERE id = %s AND user_id = %s AND CAST(is_deleted AS TEXT) IN ('0','f','false')
             """
-            update_query = """
-                UPDATE reminders
-                SET is_deleted = 1, updated_at = NOW()
-                WHERE id = %s AND user_id = %s
-            """
+            update_query = None
 
         existing_reminders = reminder_manager.db_manager.execute_query(
             check_query, (reminder_id, user_id)
@@ -553,7 +569,35 @@ def delete_reminder(user_id: str, reminder_id: int, reminder_type: str = "health
             }, ensure_ascii=False)
 
         # 软删除提醒
-        affected_rows = reminder_manager.db_manager.execute_update(update_query, (reminder_id, user_id))
+        affected_rows = 0
+        try:
+            if rt == "medication":
+                update_query = """
+                    UPDATE medication_reminders
+                    SET is_deleted = TRUE, updated_at = NOW()
+                    WHERE id = %s AND user_id = %s
+                """
+            else:
+                update_query = """
+                    UPDATE reminders
+                    SET is_deleted = TRUE, updated_at = NOW()
+                    WHERE id = %s AND user_id = %s
+                """
+            affected_rows = reminder_manager.db_manager.execute_update(update_query, (reminder_id, user_id))
+        except Exception:
+            if rt == "medication":
+                update_query = """
+                    UPDATE medication_reminders
+                    SET is_deleted = 1, updated_at = NOW()
+                    WHERE id = %s AND user_id = %s
+                """
+            else:
+                update_query = """
+                    UPDATE reminders
+                    SET is_deleted = 1, updated_at = NOW()
+                    WHERE id = %s AND user_id = %s
+                """
+            affected_rows = reminder_manager.db_manager.execute_update(update_query, (reminder_id, user_id))
 
         if affected_rows > 0:
             return json.dumps({

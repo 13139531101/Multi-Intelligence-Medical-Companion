@@ -322,14 +322,17 @@ const getMedicationReminders = (date = "", user_id = null) => {
 };
 
 // 标记用药已服用
-const markMedicationTaken = (reminderId, user_id = null) => {
+const markMedicationTaken = (reminderId, scheduledTime, user_id = null) => {
   let url = `/api/medication-reminders/${reminderId}/taken`;
   if (user_id) {
     url += `?user_id=${user_id}`;
   }
   return request(url, {
     method: "POST",
-    data: {},
+    data: { scheduledTime: scheduledTime || "" },
+    headers: {
+      "Content-Type": "application/json",
+    },
   });
 };
 

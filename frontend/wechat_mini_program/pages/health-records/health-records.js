@@ -661,6 +661,9 @@ Page({
             title: "上传成功",
             icon: "success",
           });
+          if (parsedResult.record_id) {
+            await this.loadRecords();
+          }
         } else {
           throw new Error("上传失败");
         }

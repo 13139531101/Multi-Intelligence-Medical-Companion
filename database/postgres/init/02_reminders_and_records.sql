@@ -1,18 +1,37 @@
 -- PostgreSQL DDL for medication reminders, appointment reminders, reminder logs,
 -- and health records with file attachments
 
+-- User medications
+CREATE TABLE IF NOT EXISTS user_medications (
+    id SERIAL PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    drug_name TEXT NOT NULL,
+    dosage TEXT,
+    frequency TEXT,
+    start_date DATE,
+    end_date DATE,
+    notes TEXT,
+    is_active BOOLEAN DEFAULT TRUE,
+    is_deleted BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_medications_user_id ON user_medications(user_id);
+
 -- Medication reminders
 CREATE TABLE IF NOT EXISTS medication_reminders (
     id SERIAL PRIMARY KEY,
     user_id TEXT NOT NULL,
     medication_name TEXT NOT NULL,
-    dosage TEXT NOT NULL,
-    frequency TEXT NOT NULL,
-    start_date DATE NOT NULL,
+    dosage TEXT,
+    frequency TEXT,
+    start_date DATE,
     end_date DATE,
     reminder_times JSONB NOT NULL,
     notes TEXT,
     is_active BOOLEAN DEFAULT TRUE,
+    is_deleted BOOLEAN DEFAULT FALSE,
     medication_id INTEGER,
     reminder_id INTEGER,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),

@@ -38,11 +38,20 @@ def init_database():
                     end_date DATE,
                     notes TEXT,
                     is_active BOOLEAN DEFAULT TRUE,
+                    is_deleted BOOLEAN DEFAULT FALSE,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
                 )
                 """
             )
+            cur.execute("ALTER TABLE user_medications ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN DEFAULT FALSE")
+            try:
+                cur.execute(
+                    "ALTER TABLE user_medications ALTER COLUMN is_deleted TYPE BOOLEAN "
+                    "USING (CAST(is_deleted AS TEXT) IN ('1','t','true','y','yes','on'))"
+                )
+            except Exception:
+                pass
             cur.execute("CREATE INDEX IF NOT EXISTS idx_user_medications_user_id ON user_medications(user_id)")
 
             # reminders table (Global reminders)
@@ -55,14 +64,30 @@ def init_database():
                     title TEXT NOT NULL,
                     description TEXT,
                     reminder_time TIMESTAMPTZ NOT NULL,
-                    is_completed INTEGER DEFAULT 0,
+                    is_completed BOOLEAN DEFAULT FALSE,
                     completed_at TIMESTAMPTZ,
-                    is_deleted INTEGER DEFAULT 0,
+                    is_deleted BOOLEAN DEFAULT FALSE,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
                 )
                 """
             )
+            cur.execute("ALTER TABLE reminders ADD COLUMN IF NOT EXISTS is_completed BOOLEAN DEFAULT FALSE")
+            cur.execute("ALTER TABLE reminders ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN DEFAULT FALSE")
+            try:
+                cur.execute(
+                    "ALTER TABLE reminders ALTER COLUMN is_completed TYPE BOOLEAN "
+                    "USING (CAST(is_completed AS TEXT) IN ('1','t','true','y','yes','on'))"
+                )
+            except Exception:
+                pass
+            try:
+                cur.execute(
+                    "ALTER TABLE reminders ALTER COLUMN is_deleted TYPE BOOLEAN "
+                    "USING (CAST(is_deleted AS TEXT) IN ('1','t','true','y','yes','on'))"
+                )
+            except Exception:
+                pass
             cur.execute("CREATE INDEX IF NOT EXISTS idx_reminders_user_time ON reminders(user_id, reminder_time DESC)")
 
             # medication_reminders table (Linking table)
@@ -73,13 +98,14 @@ def init_database():
                     id SERIAL PRIMARY KEY,
                     user_id TEXT NOT NULL,
                     medication_name TEXT NOT NULL,
-                    dosage TEXT NOT NULL,
-                    frequency TEXT NOT NULL,
-                    start_date DATE NOT NULL,
+                    dosage TEXT,
+                    frequency TEXT,
+                    start_date DATE,
                     end_date DATE,
                     reminder_times JSONB NOT NULL,
                     notes TEXT,
                     is_active BOOLEAN DEFAULT TRUE,
+                    is_deleted BOOLEAN DEFAULT FALSE,
                     medication_id INTEGER REFERENCES user_medications(id),
                     reminder_id INTEGER REFERENCES reminders(id),
                     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -89,6 +115,26 @@ def init_database():
             )
             cur.execute("ALTER TABLE medication_reminders ADD COLUMN IF NOT EXISTS medication_id INTEGER")
             cur.execute("ALTER TABLE medication_reminders ADD COLUMN IF NOT EXISTS reminder_id INTEGER")
+            cur.execute("ALTER TABLE medication_reminders ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN DEFAULT FALSE")
+            try:
+                cur.execute("ALTER TABLE medication_reminders ALTER COLUMN dosage DROP NOT NULL")
+            except Exception:
+                pass
+            try:
+                cur.execute("ALTER TABLE medication_reminders ALTER COLUMN frequency DROP NOT NULL")
+            except Exception:
+                pass
+            try:
+                cur.execute("ALTER TABLE medication_reminders ALTER COLUMN start_date DROP NOT NULL")
+            except Exception:
+                pass
+            try:
+                cur.execute(
+                    "ALTER TABLE medication_reminders ALTER COLUMN is_deleted TYPE BOOLEAN "
+                    "USING (CAST(is_deleted AS TEXT) IN ('1','t','true','y','yes','on'))"
+                )
+            except Exception:
+                pass
             cur.execute("CREATE INDEX IF NOT EXISTS idx_medication_reminders_user ON medication_reminders(user_id)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_medication_reminders_active ON medication_reminders(is_active)")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_medication_reminders_created ON medication_reminders(created_at)")
@@ -476,7 +522,7 @@ def get_today_reminders(user_id: str) -> Dict[str, Any]:
         }
 
 @mcp.tool()
-def log_medication_taken(reminder_id: int, actual_time: Optional[str] = None, notes: Optional[str] = None) -> Dict[str, Any]:
+def log_medication_taken(reminder_id: int, actual_time: Optional[str] = None, notes: Optional[str] = None, user_id: Optional[str] = None, scheduled_time: Optional[str] = None) -> Dict[str, Any]:
     """
     记录用药情况
 
@@ -484,33 +530,98 @@ def log_medication_taken(reminder_id: int, actual_time: Optional[str] = None, no
         reminder_id: 提醒ID (medication_reminders表的主键ID)
         actual_time: 实际用药时间（可选，默认为当前时间）
         notes: 备注（可选）
+        user_id: 用户ID（可选）
+        scheduled_time: 计划时间（可选，支持 YYYY-MM-DD HH:MM[:SS] 或 HH:MM）
 
     Returns:
         记录结果
     """
     try:
         now = datetime.now()
-        if actual_time is None:
+        if not actual_time:
             actual_dt = now
         else:
             try:
-                # HH:MM provided
-                hh, mm = actual_time.split(":")
-                actual_dt = datetime.combine(now.date(), time(int(hh), int(mm)))
+                s = str(actual_time).strip()
+                parsed = None
+                if ":" in s and len(s) <= 5:
+                    hh, mm = s.split(":")
+                    parsed = datetime.combine(now.date(), time(int(hh), int(mm)))
+                else:
+                    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M"):
+                        try:
+                            parsed = datetime.strptime(s, fmt)
+                            break
+                        except Exception:
+                            continue
+                actual_dt = parsed or now
             except Exception:
                 actual_dt = now
 
-        scheduled_dt = datetime.combine(now.date(), now.time().replace(second=0, microsecond=0))
+        scheduled_dt = None
+        if scheduled_time:
+            try:
+                s = str(scheduled_time).strip()
+                parsed = None
+                if ":" in s and len(s) <= 5:
+                    hh, mm = s.split(":")
+                    parsed = datetime.combine(now.date(), time(int(hh), int(mm)))
+                else:
+                    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M"):
+                        try:
+                            parsed = datetime.strptime(s, fmt)
+                            break
+                        except Exception:
+                            continue
+                scheduled_dt = parsed
+            except Exception:
+                scheduled_dt = None
+
+        if scheduled_dt is None:
+            times_list = []
+            try:
+                with get_pg_conn() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            "SELECT reminder_times FROM medication_reminders WHERE id = %s LIMIT 1",
+                            (reminder_id,),
+                        )
+                        row = cur.fetchone()
+                        raw_times = row["reminder_times"] if row else None
+                        if isinstance(raw_times, list):
+                            times_list = raw_times
+                        elif isinstance(raw_times, str) and raw_times.strip():
+                            try:
+                                parsed = json.loads(raw_times)
+                                times_list = parsed if isinstance(parsed, list) else [parsed]
+                            except Exception:
+                                times_list = [raw_times]
+            except Exception:
+                times_list = []
+
+            candidates = []
+            for t in times_list or []:
+                s = str(t).strip()
+                try:
+                    tt = datetime.strptime(s, "%H:%M").time()
+                    candidates.append(datetime.combine(now.date(), tt))
+                except Exception:
+                    continue
+
+            if candidates:
+                scheduled_dt = min(candidates, key=lambda x: abs((x - now).total_seconds()))
+            else:
+                scheduled_dt = now.replace(second=0, microsecond=0)
 
         with get_pg_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
                     INSERT INTO reminder_logs
-                    (reminder_id, scheduled_time, actual_time, status, notes, created_at)
-                    VALUES (%s, %s, %s, %s, %s, %s)
+                    (reminder_id, user_id, scheduled_time, actual_time, status, notes, completion_time, created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                     """,
-                    (reminder_id, scheduled_dt, actual_dt, "taken", notes, now),
+                    (reminder_id, user_id, scheduled_dt, actual_dt, "taken", notes, now, now),
                 )
                 conn.commit()
 

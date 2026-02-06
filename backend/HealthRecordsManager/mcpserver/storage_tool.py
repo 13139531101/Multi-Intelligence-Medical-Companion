@@ -292,7 +292,9 @@ def get_medications(user_id: str, is_active: bool = True) -> str:
             query = """
                 SELECT id, drug_name, dosage, frequency, start_date, end_date, notes, created_at
                 FROM user_medications
-                WHERE user_id = %s AND CAST(is_active AS TEXT) IN ('1','t','true')
+                WHERE user_id = %s
+                  AND CAST(is_deleted AS TEXT) IN ('0','f','false')
+                  AND CAST(is_active AS TEXT) IN ('1','t','true')
                 ORDER BY created_at DESC
             """
             params = (user_id,)
@@ -301,6 +303,7 @@ def get_medications(user_id: str, is_active: bool = True) -> str:
                 SELECT id, drug_name, dosage, frequency, start_date, end_date, notes, created_at
                 FROM user_medications
                 WHERE user_id = %s
+                  AND CAST(is_deleted AS TEXT) IN ('0','f','false')
                 ORDER BY created_at DESC
             """
             params = (user_id,)

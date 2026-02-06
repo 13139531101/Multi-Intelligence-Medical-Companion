@@ -508,9 +508,15 @@ Page({
 
     const userId = this.getUserId();
     const id = String(e.currentTarget.dataset.id ?? "");
+    const item = (this.data.todayMedications || []).find(
+      (x) => String(x.id) === id
+    );
+    const today = new Date().toISOString().split("T")[0];
+    const scheduledTime =
+      item?.scheduledTime || (item?.time ? `${today} ${item.time}:00` : "");
 
     try {
-      await markMedicationTaken(id, userId);
+      await markMedicationTaken(id, scheduledTime, userId);
 
       wx.showToast({
         title: "已记录服用",

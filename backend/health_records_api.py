@@ -3739,6 +3739,17 @@ async def create_health_record(
                         now,
                     ),
                 )
+                if file_ids:
+                    placeholders = ",".join(["%s"] * len(file_ids))
+                    cursor.execute(
+                        f"""
+                        UPDATE file_attachments
+                        SET record_id = %s
+                        WHERE id IN ({placeholders})
+                          AND record_id IS NULL
+                        """,
+                        tuple([record_id] + file_ids),
+                    )
                 conn.commit()
                 cursor.execute(
                     "SELECT * FROM health_records WHERE id = %s", (record_id,)
@@ -3887,6 +3898,15 @@ async def update_health_record(
                     if isinstance(record_update.metadata, dict)
                     else None
                 )
+                file_ids: list[str] = []
+                if isinstance(incoming_meta, dict):
+                    mfiles = incoming_meta.get("files") or incoming_meta.get(
+                        "uploaded_files"
+                    )
+                    if isinstance(mfiles, list):
+                        file_ids.extend(
+                            [str(x) for x in mfiles if isinstance(x, (str, int))]
+                        )
 
                 if record_update.record_date is not None:
                     update_fields.append("record_date = %s")
@@ -3928,6 +3948,17 @@ async def update_health_record(
                 else:
                     query = f"UPDATE health_records SET {', '.join(update_fields)} WHERE id = %s"
                 cursor.execute(query, params)
+                if file_ids:
+                    placeholders = ",".join(["%s"] * len(file_ids))
+                    cursor.execute(
+                        f"""
+                        UPDATE file_attachments
+                        SET record_id = %s
+                        WHERE id IN ({placeholders})
+                          AND record_id IS NULL
+                        """,
+                        tuple([record_id] + file_ids),
+                    )
                 conn.commit()
 
                 if user_id:
@@ -4697,7 +4728,58 @@ async def upload_file(
                 record_id = None
 
                 if skip_ocr_flag:
+                    now = datetime.now()
+                    record_id = generate_id()
+                    title = f"附件 - {file.filename or '上传的文件'}"
+                    tags = ["auto_import"]
+                    metadata = {
+                        "file_id": file_id,
+                        "file_path": str(file_path),
+                        "mime_type": normalized_ct,
+                        "uploaded_files": [file_id],
+                        "skip_ocr": True,
+                        "ocr_status": "pending",
+                    }
+                    cursor.execute(
+                        """
+                        INSERT INTO health_records (
+                            id, user_id, title, record_type, summary, content, importance,
+                            tags, metadata, record_date, created_at, updated_at
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        """,
+                        (
+                            record_id,
+                            user_id,
+                            title,
+                            RecordType.OTHER.value,
+                            "已上传附件，内容待识别",
+                            "",
+                            ImportanceLevel.MEDIUM.value,
+                            Json(tags),
+                            Json(metadata),
+                            None,
+                            now,
+                            now,
+                        ),
+                    )
+                    cursor.execute(
+                        "UPDATE file_attachments SET record_id = %s WHERE id = %s",
+                        (record_id, file_id),
+                    )
                     conn.commit()
+                    try:
+                        asyncio.create_task(
+                            _process_pending_ocr(
+                                record_id=str(record_id),
+                                file_id=str(file_id),
+                                user_id=str(user_id),
+                                file_path=str(file_path),
+                                original_filename=str(file.filename or ""),
+                                mime_type=str(normalized_ct or ""),
+                            )
+                        )
+                    except Exception as e:
+                        logger.warning(f"后台OCR任务启动失败: {e}")
                     return {
                         "file_id": file_id,
                         "filename": filename,
@@ -4707,7 +4789,7 @@ async def upload_file(
                         "message": "文件上传成功",
                         "ocr_info": None,
                         "memory_id": None,
-                        "record_id": None,
+                        "record_id": record_id,
                     }
 
                 if normalized_ct.startswith("image/"):
@@ -4978,7 +5060,6 @@ async def upload_file(
                         "ocr",
                         "auto_import",
                         document_type or "unknown",
-                        f"file:{file_id}",
                     ]
                     # 计算文件哈希用于去重
                     try:
@@ -5153,6 +5234,442 @@ async def upload_file(
             limiter.release()
         except Exception:
             pass
+
+
+async def _process_pending_ocr(
+    record_id: str,
+    file_id: str,
+    user_id: str,
+    file_path: str,
+    original_filename: str = "",
+    mime_type: str = "",
+):
+    started_at = datetime.now()
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor(row_factory=dict_row) as cursor:
+                cursor.execute(
+                    """
+                    SELECT id, title, summary, content, record_type, tags, metadata
+                    FROM health_records
+                    WHERE id = %s AND user_id = %s
+                    """,
+                    (record_id, user_id),
+                )
+                row = cursor.fetchone()
+                if not row:
+                    return
+                meta = (
+                    deserialize_metadata(row["metadata"])
+                    if isinstance(row.get("metadata"), str)
+                    else (row.get("metadata") or {})
+                )
+                if not isinstance(meta, dict):
+                    meta = {}
+                if meta.get("ocr_status") == "done":
+                    return
+                meta["ocr_status"] = "processing"
+                meta["ocr_started_at"] = started_at.isoformat()
+                cursor.execute(
+                    """
+                    UPDATE health_records
+                    SET metadata = %s, updated_at = %s
+                    WHERE id = %s AND user_id = %s
+                    """,
+                    (Json(meta), started_at, record_id, user_id),
+                )
+                conn.commit()
+
+        p = Path(file_path)
+        file_bytes = await anyio.to_thread.run_sync(p.read_bytes)
+        if not file_bytes:
+            raise ValueError("empty file")
+
+        ocr_text: str | None = None
+        confidence = 0.5
+        document_type = "unknown"
+
+        if (mime_type or "").startswith("image/"):
+            try:
+                from paddleocr import PaddleOCR  # type: ignore
+
+                ocr_engine = PaddleOCR(use_angle_cls=True, lang="ch")
+                result = await anyio.to_thread.run_sync(
+                    lambda: ocr_engine.ocr(str(p), cls=True)
+                )
+                texts: list[str] = []
+                confs: list[float] = []
+                if isinstance(result, list) and result:
+                    page0 = result[0] if result else []
+                    if isinstance(page0, list):
+                        for it in page0:
+                            try:
+                                texts.append(str(it[1][0] or "").strip())
+                                confs.append(float(it[1][1]))
+                            except Exception:
+                                pass
+                ocr_text = "\n".join([t for t in texts if t])
+                if confs:
+                    confidence = sum(confs) / max(len(confs), 1)
+            except Exception as e:
+                logger.warning(f"后台OCR PaddleOCR失败: {e}")
+
+        if (not ocr_text) and extract_text_from_image:
+            image_base64 = base64.b64encode(file_bytes).decode("utf-8")
+            try:
+                ocr_text = await anyio.to_thread.run_sync(
+                    lambda: (
+                        extract_text_from_image.fn(image_base64)
+                        if hasattr(extract_text_from_image, "fn")
+                        else extract_text_from_image(image_base64)
+                    )
+                )
+            except Exception as e:
+                logger.warning(f"后台OCR 外部OCR失败: {e}")
+
+        ocr_text_str = _normalize_ocr_text(
+            ocr_text if isinstance(ocr_text, str) else (str(ocr_text) if ocr_text else "")
+        )
+        if not ocr_text_str or _is_ocr_placeholder_text(ocr_text_str):
+            raise ValueError("invalid ocr result")
+
+        if validate_medical_document:
+            try:
+                validation_json = await anyio.to_thread.run_sync(
+                    lambda: (
+                        validate_medical_document.fn(ocr_text_str)
+                        if hasattr(validate_medical_document, "fn")
+                        else validate_medical_document(ocr_text_str)
+                    )
+                )
+                val = (
+                    json.loads(validation_json)
+                    if isinstance(validation_json, str)
+                    else (validation_json or {})
+                )
+                document_type = _normalize_document_type(val.get("document_type"))
+                vconf = val.get("confidence")
+                if isinstance(vconf, (int, float)):
+                    confidence = max(float(confidence), float(vconf))
+            except Exception as e:
+                logger.warning(f"后台OCR 文档验证失败: {e}")
+
+        extracted_info: dict = {}
+        if extract_medical_info:
+            try:
+                info_json = await anyio.to_thread.run_sync(
+                    lambda: (
+                        extract_medical_info.fn(ocr_text_str)
+                        if hasattr(extract_medical_info, "fn")
+                        else extract_medical_info(ocr_text_str)
+                    )
+                )
+                extracted_info = (
+                    json.loads(info_json) if isinstance(info_json, str) else (info_json or {})
+                )
+                if not isinstance(extracted_info, dict):
+                    extracted_info = {}
+            except Exception as e:
+                logger.warning(f"后台OCR 信息抽取失败: {e}")
+                extracted_info = {}
+
+        tests_val = extracted_info.get("test_results") or extracted_info.get("tests")
+        filtered = _filter_test_results(tests_val)
+        if filtered is not None:
+            if filtered:
+                extracted_info["test_results"] = filtered
+            else:
+                extracted_info.pop("test_results", None)
+            extracted_info.pop("tests", None)
+
+        memory_id = None
+        if health_records_memory_service is not None:
+            try:
+                if not health_records_memory_service.is_available():
+                    await health_records_memory_service.initialize()
+                try:
+                    memory_id = await asyncio.wait_for(
+                        health_records_memory_service.store_ocr_result(
+                            user_id=user_id,
+                            document_type=document_type,
+                            ocr_text=ocr_text_str,
+                            extracted_info=extracted_info,
+                            confidence=confidence,
+                            file_path=str(file_path),
+                        ),
+                        timeout=2.0,
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning("后台OCR存储记忆超时，已跳过")
+                    memory_id = None
+            except Exception as e:
+                logger.warning(f"后台OCR存储记忆失败: {e}")
+                memory_id = None
+
+        doc_type_lower = (document_type or "").lower()
+        if doc_type_lower in {
+            "test_report",
+            "lab_result",
+            "inspection_report",
+            "检验报告",
+            "化验单",
+        }:
+            record_type = RecordType.LAB_RESULT.value
+        elif doc_type_lower in {"prescription", "medication", "处方"}:
+            record_type = RecordType.PRESCRIPTION.value
+        else:
+            record_type = RecordType.MEDICAL_REPORT.value
+
+        structured_summary = _build_structured_summary(extracted_info)
+        llm_summary = None
+        try:
+            llm_summary = await _maybe_llm_summary(ocr_text_str, extracted_info)
+        except Exception:
+            llm_summary = None
+        final_summary = llm_summary or structured_summary or _generate_ai_summary(ocr_text_str, extracted_info)
+
+        try:
+            file_hash = hashlib.sha256(file_bytes).hexdigest()
+        except Exception:
+            file_hash = None
+
+        finished_at = datetime.now()
+        with get_db_connection() as conn:
+            with conn.cursor(row_factory=dict_row) as cursor:
+                cursor.execute(
+                    """
+                    SELECT title, summary, content, record_type, tags, metadata, importance
+                    FROM health_records
+                    WHERE id = %s AND user_id = %s
+                    """,
+                    (record_id, user_id),
+                )
+                row = cursor.fetchone()
+                if not row:
+                    return
+
+                current_title = row.get("title") or ""
+                current_summary = row.get("summary") or ""
+                current_content = row.get("content") or ""
+                current_record_type = row.get("record_type") or ""
+                current_tags = row.get("tags") or []
+                meta = (
+                    deserialize_metadata(row["metadata"])
+                    if isinstance(row.get("metadata"), str)
+                    else (row.get("metadata") or {})
+                )
+                if not isinstance(meta, dict):
+                    meta = {}
+                if not isinstance(current_tags, list):
+                    current_tags = []
+
+                new_record_type = current_record_type
+                if (not current_record_type) or (current_record_type == RecordType.OTHER.value):
+                    new_record_type = record_type
+
+                ui_doc_type = str(new_record_type or "").strip().lower()
+                if not ui_doc_type:
+                    ui_doc_type = str(document_type or "unknown").strip().lower()
+
+                raw_dt = str(document_type or "").strip().lower()
+                raw_to_key = {
+                    "病历": "medical_record",
+                    "就诊记录": "medical_record",
+                    "门诊记录": "medical_record",
+                    "检查报告": "lab_result",
+                    "检验报告": "lab_result",
+                    "化验单": "lab_result",
+                    "处方": "prescription",
+                    "处方单": "prescription",
+                    "住院记录": "hospital_record",
+                    "疫苗记录": "vaccination_record",
+                    "手术记录": "surgery",
+                    "影像资料": "imaging",
+                    "影像报告": "radiology",
+                }
+                if raw_dt in raw_to_key:
+                    ui_doc_type = raw_to_key[raw_dt]
+
+                doc_type_label_map = {
+                    "test_report": "检查报告",
+                    "inspection_report": "检查报告",
+                    "lab_result": "检查报告",
+                    "medical_record": "病历",
+                    "hospital_record": "住院记录",
+                    "vaccination_record": "疫苗记录",
+                    "vaccination": "疫苗记录",
+                    "prescription": "处方单",
+                    "surgery": "手术记录",
+                    "imaging": "影像资料",
+                    "radiology": "影像资料",
+                }
+                title_label = doc_type_label_map.get(ui_doc_type, "") or (
+                    str(document_type or "OCR文档").strip()
+                )
+
+                tags: list[str] = []
+                for t in current_tags:
+                    if isinstance(t, str) and t.startswith("file:"):
+                        continue
+                    if isinstance(t, str) and t not in tags:
+                        tags.append(t)
+                for t in ["ocr", "auto_import", ui_doc_type or "unknown"]:
+                    if t and t not in tags:
+                        tags.append(t)
+
+                new_title = current_title
+                if (not current_title) or str(current_title).startswith("附件 -"):
+                    suffix = (original_filename or "").strip()
+                    if suffix:
+                        suffix = suffix.replace("\\", "/").split("/")[-1].strip()
+                    if suffix and "." not in suffix and re.fullmatch(r"[A-Za-z0-9]{12,}", suffix):
+                        suffix = ""
+                    if suffix:
+                        new_title = f"{title_label} - {suffix}".strip(" -")
+                    else:
+                        new_title = str(title_label).strip() or "健康档案"
+
+                new_summary = current_summary
+                if (not current_summary) or (str(current_summary).strip() == "已上传附件，内容待识别"):
+                    new_summary = final_summary
+
+                new_content = current_content
+                if not current_content:
+                    new_content = ocr_text_str
+
+                uploaded_files = meta.get("uploaded_files")
+                if not isinstance(uploaded_files, list):
+                    uploaded_files = []
+                if file_id and file_id not in uploaded_files:
+                    uploaded_files.append(file_id)
+
+                meta.update(
+                    {
+                        "file_id": meta.get("file_id") or file_id,
+                        "file_path": meta.get("file_path") or str(file_path),
+                        "mime_type": meta.get("mime_type") or (mime_type or ""),
+                        "uploaded_files": uploaded_files,
+                        "ocr_info": {
+                            "document_type": ui_doc_type,
+                            "raw_document_type": str(document_type or "").strip(),
+                            "confidence": confidence,
+                            "text_length": len(ocr_text_str),
+                        },
+                        "extracted_info": extracted_info,
+                        "memory_id": memory_id,
+                        "skip_ocr": False,
+                        "ocr_status": "done",
+                        "ocr_finished_at": finished_at.isoformat(),
+                        **({"file_hash": file_hash} if file_hash else {}),
+                    }
+                )
+                cursor.execute(
+                    """
+                    UPDATE health_records
+                    SET title = %s,
+                        record_type = %s,
+                        summary = %s,
+                        content = %s,
+                        tags = %s,
+                        metadata = %s,
+                        updated_at = %s
+                    WHERE id = %s AND user_id = %s
+                    """,
+                    (
+                        new_title,
+                        new_record_type,
+                        new_summary,
+                        new_content,
+                        Json(tags),
+                        Json(meta),
+                        finished_at,
+                        record_id,
+                        user_id,
+                    ),
+                )
+
+                try:
+                    text = _make_rag_text(new_title, new_summary, new_content)
+                    _upsert_rag_document(
+                        cursor,
+                        user_id=user_id,
+                        source_type="health_records",
+                        source_id=str(record_id),
+                        record_type=str(new_record_type),
+                        title=new_title,
+                        text=text,
+                    )
+                except Exception as e:
+                    logger.warning(f"后台OCR RAG入库失败：{e}")
+
+                conn.commit()
+
+        try:
+            _save_to_hrm(
+                user_id=user_id,
+                record_type=new_record_type,
+                title=new_title,
+                content=new_content or (new_summary or ""),
+                extracted_data=meta.get("extracted_info") or {},
+            )
+        except Exception as e:
+            logger.warning(f"后台OCR HRM双写失败：{e}")
+
+        try:
+            if health_records_memory_service is not None:
+                if not health_records_memory_service.is_available():
+                    await health_records_memory_service.initialize()
+                imp_map = {"low": 0.2, "medium": 0.5, "high": 0.8, "critical": 1.0}
+                imp_key = row.get("importance") or "medium"
+                imp_val = imp_map.get(str(imp_key).lower(), 0.5)
+                await health_records_memory_service.store_health_record(
+                    user_id=user_id,
+                    record_type=new_record_type,
+                    record_data={
+                        "id": record_id,
+                        "title": new_title,
+                        "content": new_content,
+                        "metadata": meta or {},
+                        "record_date": None,
+                    },
+                    summary=new_summary or "",
+                    importance=imp_val,
+                    tags=tags,
+                )
+        except Exception as e:
+            logger.warning(f"后台OCR 写入健康档案记忆失败：{e}")
+    except Exception as e:
+        failed_at = datetime.now()
+        try:
+            with get_db_connection() as conn:
+                with conn.cursor(row_factory=dict_row) as cursor:
+                    cursor.execute(
+                        "SELECT metadata FROM health_records WHERE id = %s AND user_id = %s",
+                        (record_id, user_id),
+                    )
+                    row = cursor.fetchone() or {}
+                    meta = (
+                        deserialize_metadata(row.get("metadata"))
+                        if isinstance(row.get("metadata"), str)
+                        else (row.get("metadata") or {})
+                    )
+                    if not isinstance(meta, dict):
+                        meta = {}
+                    meta["ocr_status"] = "failed"
+                    meta["ocr_failed_at"] = failed_at.isoformat()
+                    meta["ocr_error"] = str(e)
+                    cursor.execute(
+                        """
+                        UPDATE health_records
+                        SET metadata = %s, updated_at = %s
+                        WHERE id = %s AND user_id = %s
+                        """,
+                        (Json(meta), failed_at, record_id, user_id),
+                    )
+                    conn.commit()
+        except Exception:
+            pass
+        logger.warning(f"后台OCR处理失败 record_id={record_id}: {e}")
 
 
 # 新增：批量上传多个文件（逐个调用单文件上传逻辑，保证返回结构一致）

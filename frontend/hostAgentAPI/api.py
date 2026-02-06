@@ -6,7 +6,7 @@ import os
 import sys
 import psycopg
 from psycopg.rows import dict_row
-from fastapi import FastAPI, APIRouter, Response, Request, UploadFile, File, Depends, HTTPException
+from fastapi import FastAPI, APIRouter, Response, Request, UploadFile, File, Form, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from typing import List, Optional, Dict, Any
 from fastapi.middleware.cors import CORSMiddleware
@@ -607,6 +607,9 @@ try:
             summary = summary_src_raw.strip()
         record_date = get("record_date")
         # pydantic datetime/date 直接序列化
+        tags = get("tags") or []
+        if isinstance(tags, list):
+            tags = [t for t in tags if not (isinstance(t, str) and t.startswith("file:"))]
         return {
             "id": get("id"),
             "title": get("title") or "",
@@ -618,7 +621,7 @@ try:
             "hospital": metadata.get("hospital", ""),
             "files": dedup_files,
             "importance": (get("importance").value if hasattr(get("importance"), "value") else get("importance")) or "medium",
-            "tags": get("tags") or [],
+            "tags": tags,
             "metadata": metadata,
             "created_at": get("created_at"),
             "updated_at": get("updated_at"),
@@ -704,9 +707,19 @@ try:
         return await health_api.delete_health_record(record_id, user_id=user_id, request=request)
 
     @health_router.post("/api/health-records/upload")
-    async def upload_file_proxy(file: UploadFile = File(...), user: dict = Depends(get_current_user)):
+    async def upload_file_proxy(
+        request: Request,
+        file: UploadFile = File(...),
+        skip_ocr: str | None = Form(None),
+        user: dict = Depends(get_current_user),
+    ):
         user_id = _get_user_id(user)
-        return await health_api.upload_file(file, user_id=user_id)
+        return await health_api.upload_file(
+            file=file,
+            user_id=user_id,
+            skip_ocr=skip_ocr,
+            request=request,
+        )
 
     # 新增：批量上传代理，转发到后端批量上传端点
     @health_router.post("/api/health-records/upload/multiple")
@@ -1032,7 +1045,7 @@ try:
             return impl(user_id)
 
     # 统一封装：兼容两种“标记服药”函数签名（HRM: 需要 user_id；MR: 不需要）
-    def _call_mark_taken(reminder_id: int, taken_time: str, user_id: str):
+    def _call_mark_taken(reminder_id: int, taken_time: str, user_id: str, scheduled_time: str = ""):
         fn = storage_mark_taken
         impl = getattr(fn, "fn", fn)
         import inspect
@@ -1049,6 +1062,8 @@ try:
                 kwargs["taken_time"] = taken_time
             elif "actual_time" in params:
                 kwargs["actual_time"] = taken_time
+            if "scheduled_time" in params:
+                kwargs["scheduled_time"] = scheduled_time
             # HRM 需要 user_id
             if "user_id" in params:
                 kwargs["user_id"] = user_id
@@ -1067,6 +1082,8 @@ try:
                     kwargs2["taken_time"] = taken_time
                 elif "actual_time" in params2:
                     kwargs2["actual_time"] = taken_time
+                if "scheduled_time" in params2:
+                    kwargs2["scheduled_time"] = scheduled_time
                 if "user_id" in params2:
                     kwargs2["user_id"] = user_id
                 return impl(**kwargs2)
@@ -1289,7 +1306,7 @@ async def update_medication(medication_id: int, request: Request, user: dict = D
                 update_sql = (
                     "UPDATE user_medications SET drug_name = %s, dosage = %s, frequency = %s, "
                     "start_date = %s, end_date = %s, notes = %s, updated_at = NOW() "
-                    "WHERE id = %s AND user_id = %s AND is_deleted = 0"
+                    "WHERE id = %s AND user_id = %s AND CAST(is_deleted AS TEXT) IN ('0','f','false')"
                 )
                 params = (
                     drug_name, dosage, frequency_text,
@@ -1397,7 +1414,7 @@ async def list_medication_reminders(date: str = "", active_only: bool = True, us
                         "scheduledTime": scheduled_dt.strftime("%Y-%m-%d %H:%M:%S"),
                         "time": t,
                         "status": status,
-                        "taken": status == "taken",
+                        "taken": status in ("taken", "completed"),
                     })
 
             try:
@@ -1593,12 +1610,23 @@ async def delete_consultation_api(consultation_id: str, user: dict = Depends(get
 
 @meds_router.post("/medication-reminders/{reminder_id}/taken")
 @meds_router.post("/api/medication-reminders/{reminder_id}/taken")
-async def mark_medication_taken(reminder_id: int, taken_time: str = "", user: dict = Depends(get_current_user)):
+async def mark_medication_taken(reminder_id: int, request: Request, taken_time: str = "", user: dict = Depends(get_current_user)):
         try:
             # 记录服药接口签名为 log_medication_taken(reminder_id, actual_time=None, notes=None)
             try:
                 user_id = str(user.get("id") or user.get("user_id") or user.get("uid"))
-                raw = _call_mark_taken(reminder_id, taken_time, user_id)
+                payload = {}
+                try:
+                    payload = await request.json()
+                except Exception:
+                    payload = {}
+
+                scheduled_time = payload.get("scheduledTime") or payload.get("scheduled_time") or ""
+                taken_payload = payload.get("takenTime") or payload.get("taken_time") or payload.get("actual_time") or ""
+                if not taken_time and taken_payload:
+                    taken_time = str(taken_payload)
+
+                raw = _call_mark_taken(reminder_id, taken_time, user_id, str(scheduled_time or ""))
                 data = json.loads(raw) if isinstance(raw, str) else raw
                 return data
             except Exception:
@@ -1788,7 +1816,7 @@ async def add_reminders_to_medication(medication_id: int, request: Request, user
 
     from datetime import datetime
     meds = dbm.execute_query(
-        "SELECT id, drug_name, dosage, frequency, start_date, end_date, notes FROM user_medications WHERE id = %s AND user_id = %s AND is_deleted = 0",
+        "SELECT id, drug_name, dosage, frequency, start_date, end_date, notes FROM user_medications WHERE id = %s AND user_id = %s AND CAST(is_deleted AS TEXT) IN ('0','f','false')",
         (medication_id, user_id),
     )
     if not meds:
@@ -1820,7 +1848,7 @@ async def add_reminders_to_medication(medication_id: int, request: Request, user
         existing = []
         try:
             existing = dbm.execute_query(
-                "SELECT id FROM medication_reminders WHERE user_id = %s AND medication_id = %s AND reminder_times::text LIKE %s AND CAST(is_active AS TEXT) IN ('1','t','true') LIMIT 1",
+                "SELECT id FROM medication_reminders WHERE user_id = %s AND medication_id = %s AND reminder_times::text LIKE %s AND CAST(is_deleted AS TEXT) IN ('0','f','false') AND CAST(is_active AS TEXT) IN ('1','t','true') LIMIT 1",
                 (user_id, medication_id, f"%{t}%"),
             )
         except Exception:

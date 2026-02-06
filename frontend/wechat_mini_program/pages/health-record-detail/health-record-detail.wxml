@@ -1,6 +1,5 @@
 <view class="container">
   <view class="header">
-    <view class="title">{{record.display_title || record.title || "健康档案"}}</view>
     <view class="meta-row">
       <view class="type">{{record.record_type_label}}</view>
       <view class="date">{{record.formatted_date}}</view>
@@ -8,9 +7,6 @@
     <view class="meta-row" wx:if="{{record.hospital || record.doctor}}">
       <view class="meta-item" wx:if="{{record.hospital}}">医院：{{record.hospital}}</view>
       <view class="meta-item" wx:if="{{record.doctor}}">医生：{{record.doctor}}</view>
-    </view>
-    <view class="tags" wx:if="{{record.tags && record.tags.length}}">
-      <view class="tag" wx:for="{{record.tags}}" wx:key="*this">{{tagLabelMap[item] || item}}</view>
     </view>
   </view>
 

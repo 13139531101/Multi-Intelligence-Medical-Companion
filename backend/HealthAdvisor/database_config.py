@@ -10,8 +10,45 @@ from contextlib import contextmanager
 from typing import Dict, Any, Optional
 import psycopg
 from psycopg.rows import dict_row
+from psycopg_pool import ConnectionPool
 
 logger = logging.getLogger(__name__)
+
+_db_pool: ConnectionPool | None = None
+_db_pool_init_attempted = False
+
+
+def _build_db_dsn(cfg: Dict[str, Any]) -> str:
+    dsn = os.getenv("DATABASE_URL")
+    if dsn:
+        return dsn
+
+    user = cfg["user"]
+    password = cfg.get("password") or ""
+    host = cfg["host"]
+    port = cfg["port"]
+    dbname = cfg["dbname"]
+    auth = f"{user}:{password}" if password else f"{user}"
+    return f"postgresql://{auth}@{host}:{port}/{dbname}"
+
+
+def _get_db_pool(cfg: Dict[str, Any]) -> ConnectionPool | None:
+    global _db_pool, _db_pool_init_attempted
+    if _db_pool is not None:
+        return _db_pool
+    if _db_pool_init_attempted:
+        return None
+    _db_pool_init_attempted = True
+    try:
+        max_size = int(os.getenv("DB_POOL_MAX_SIZE", "20"))
+        timeout = float(os.getenv("DB_POOL_TIMEOUT", "5"))
+        _db_pool = ConnectionPool(_build_db_dsn(cfg), max_size=max(max_size, 1), timeout=timeout)
+        return _db_pool
+    except Exception as e:
+        logger.warning(f"DB连接池初始化失败，将回退为直连: {e}")
+        _db_pool = None
+        return None
+
 
 class DatabaseConfig:
     """数据库配置类（PostgreSQL）"""
@@ -40,9 +77,27 @@ class DatabaseManager:
     @contextmanager
     def get_connection(self):
         """获取数据库连接（上下文管理器）"""
+        cfg = self.config.get_connection_config()
+        pool = _get_db_pool(cfg)
+        if pool is not None:
+            with pool.connection() as conn:
+                try:
+                    conn.autocommit = cfg.get('autocommit', False)
+                except Exception:
+                    pass
+                try:
+                    yield conn
+                except Exception as e:
+                    try:
+                        conn.rollback()
+                    except Exception:
+                        pass
+                    logger.error(f"数据库操作失败: {e}")
+                    raise
+            return
+
         conn = None
         try:
-            cfg = self.config.get_connection_config()
             conn = psycopg.connect(
                 host=cfg['host'],
                 port=cfg['port'],
