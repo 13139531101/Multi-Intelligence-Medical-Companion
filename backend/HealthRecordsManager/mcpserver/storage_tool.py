@@ -288,25 +288,36 @@ def get_medications(user_id: str, is_active: bool = True) -> str:
     :return: 用药记录列表
     """
     try:
-        if is_active:
-            query = """
-                SELECT id, drug_name, dosage, frequency, start_date, end_date, notes, created_at
-                FROM user_medications
-                WHERE user_id = %s
-                  AND CAST(is_deleted AS TEXT) IN ('0','f','false')
-                  AND CAST(is_active AS TEXT) IN ('1','t','true')
-                ORDER BY created_at DESC
-            """
-            params = (user_id,)
-        else:
-            query = """
-                SELECT id, drug_name, dosage, frequency, start_date, end_date, notes, created_at
-                FROM user_medications
-                WHERE user_id = %s
-                  AND CAST(is_deleted AS TEXT) IN ('0','f','false')
-                ORDER BY created_at DESC
-            """
-            params = (user_id,)
+        cols = set()
+        try:
+            rows = storage.db_manager.execute_query(
+                """
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_name = 'user_medications'
+                  AND column_name IN ('is_deleted', 'is_active')
+                """
+            )
+            for r in rows or []:
+                c = r.get("column_name") if isinstance(r, dict) else None
+                if isinstance(c, str) and c:
+                    cols.add(c)
+        except Exception:
+            cols = set()
+
+        where = ["user_id = %s"]
+        if "is_deleted" in cols:
+            where.append("CAST(is_deleted AS TEXT) IN ('0','f','false')")
+        if is_active and ("is_active" in cols):
+            where.append("CAST(is_active AS TEXT) IN ('1','t','true')")
+
+        query = f"""
+            SELECT id, drug_name, dosage, frequency, start_date, end_date, notes, created_at
+            FROM user_medications
+            WHERE {' AND '.join(where)}
+            ORDER BY created_at DESC
+        """
+        params = (user_id,)
 
         medications = storage.db_manager.execute_query(query, params)
 

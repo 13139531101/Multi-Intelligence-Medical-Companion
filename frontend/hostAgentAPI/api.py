@@ -1469,7 +1469,13 @@ async def create_medication_reminder(request: Request, user: dict = Depends(get_
 # (Removes conflicting endpoints that are now handled by health_records_api via health_router)
 
 @meds_router.get("/api/consultations/history")
-async def get_consultation_history(skip: int = 0, limit: int = 20, user: dict = Depends(get_current_user)):
+async def get_consultation_history(
+    skip: int = 0,
+    limit: int = 20,
+    include_summary: bool = False,
+    include_health_records: bool = False,
+    user: dict = Depends(get_current_user),
+):
     try:
         user_id = str(user.get("id") or user.get("user_id") or user.get("uid"))
         db_manager = get_db_manager()
@@ -1481,13 +1487,32 @@ async def get_consultation_history(skip: int = 0, limit: int = 20, user: dict = 
             (user_id, skip, limit)
         )
         # Convert datetimes and ensure consistent fields
+        filtered = []
         for row in rows:
              if row.get('created_at'): row['created_at'] = str(row['created_at'])
              if row.get('updated_at'): row['updated_at'] = str(row['updated_at'])
              # Ensure frontend compatible fields
              if not row.get('consultation_type') and row.get('type'):
                  row['consultation_type'] = row['type']
-        return rows
+             tags = row.get("tags")
+             if isinstance(tags, str):
+                 try:
+                     tags = json.loads(tags)
+                 except Exception:
+                     tags = []
+             elif tags is None:
+                 tags = []
+             elif not isinstance(tags, list):
+                 tags = []
+             row["tags"] = tags
+
+             if not include_summary and "summary" in tags:
+                 continue
+             if not include_health_records and "health_records" in tags:
+                 continue
+
+             filtered.append(row)
+        return filtered
     except Exception as e:
         logging.error(f"Get history error: {e}")
         return []
@@ -1510,6 +1535,7 @@ async def create_consultation_db(request: Request, user: dict = Depends(get_curr
         db_manager = get_db_manager()
         if not db_manager:
              return {"success": False, "message": "DB not available"}
+        _ensure_consultation_tables(db_manager)
 
         # Serialize tags if list
         import json
@@ -1539,16 +1565,20 @@ async def save_consultation_message(request: Request, user: dict = Depends(get_c
         db_manager = get_db_manager()
         if not db_manager:
             return {"success": False, "message": "DB Manager not available"}
+        _ensure_consultation_tables(db_manager)
 
         msg_id = str(uuid.uuid4())
 
         # Serialize files if present
         import json
-        files_json = json.dumps(files) if files else None
+        files_json = json.dumps(files or [])
 
-        db_manager.execute_insert(
-            "INSERT INTO chat_messages (id, consultation_id, role, content, files) VALUES (%s, %s, %s, %s, %s)",
-            (msg_id, consultation_id, role, content, files_json)
+        db_manager.execute_update(
+            """
+            INSERT INTO chat_messages (id, consultation_id, role, content, files, created_at)
+            VALUES (%s, %s, %s, %s, %s::jsonb, now())
+            """,
+            (msg_id, consultation_id, role, content, files_json),
         )
         return {"success": True}
     except Exception as e:
@@ -1561,17 +1591,36 @@ async def get_consultation_messages(consultation_id: str, user: dict = Depends(g
         db_manager = get_db_manager()
         if not db_manager:
             return {"success": False, "message": "DB Manager not available"}
+        _ensure_consultation_tables(db_manager)
 
         rows = db_manager.execute_query(
-            "SELECT * FROM chat_messages WHERE consultation_id = %s ORDER BY created_at ASC",
+            """
+            SELECT id, role, content, files, created_at
+            FROM chat_messages
+            WHERE consultation_id = %s
+            ORDER BY created_at ASC
+            """,
             (consultation_id,)
         )
-        # Convert UUID and datetime to string
+        messages = []
         for row in rows:
-            if row.get('id'): row['id'] = str(row['id'])
-            if row.get('created_at'): row['created_at'] = str(row['created_at'])
+            files = row.get("files")
+            if isinstance(files, str):
+                try:
+                    files = json.loads(files)
+                except Exception:
+                    files = []
+            messages.append(
+                {
+                    "id": str(row.get("id") or ""),
+                    "role": row.get("role") or "",
+                    "content": row.get("content") or "",
+                    "files": files or [],
+                    "created_at": str(row.get("created_at") or ""),
+                }
+            )
 
-        return {"success": True, "messages": rows}
+        return {"success": True, "messages": messages}
     except Exception as e:
         logging.error(f"Get messages error: {e}")
         return {"success": False, "message": str(e)}
@@ -2593,6 +2642,7 @@ async def _debug_init_med_tables():
             consultation_id TEXT NOT NULL,
             role TEXT NOT NULL,
             content TEXT NOT NULL,
+            files JSONB,
             created_at TIMESTAMPTZ DEFAULT now()
         )
         """,
@@ -2638,8 +2688,16 @@ async def _debug_init_med_tables():
         "CREATE INDEX IF NOT EXISTS idx_reminder_logs_status ON reminder_logs(status)",
         "CREATE INDEX IF NOT EXISTS idx_reminder_logs_created ON reminder_logs(created_at)",
         "ALTER TABLE consultations ADD COLUMN IF NOT EXISTS question TEXT",
+        "ALTER TABLE consultations ADD COLUMN IF NOT EXISTS answer TEXT",
+        "ALTER TABLE consultations ALTER COLUMN answer SET DEFAULT ''",
+        "ALTER TABLE consultations ADD COLUMN IF NOT EXISTS title TEXT",
+        "ALTER TABLE consultations ADD COLUMN IF NOT EXISTS consultation_type TEXT",
+        "ALTER TABLE consultations ADD COLUMN IF NOT EXISTS agent_id TEXT",
+        "ALTER TABLE consultations ADD COLUMN IF NOT EXISTS status TEXT",
+        "ALTER TABLE consultations ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ",
         "ALTER TABLE consultations ADD COLUMN IF NOT EXISTS session_id TEXT",
         "ALTER TABLE consultations ADD COLUMN IF NOT EXISTS tags JSONB",
+        "ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS files JSONB",
     ]
     for s in stmts:
         dbm.execute_update(s)
@@ -2660,6 +2718,7 @@ def _ensure_consultation_tables(dbm):
             created_at TIMESTAMPTZ DEFAULT now(),
             updated_at TIMESTAMPTZ DEFAULT now(),
             question TEXT,
+            answer TEXT DEFAULT '',
             session_id TEXT,
             tags JSONB
         )
@@ -2676,7 +2735,14 @@ def _ensure_consultation_tables(dbm):
         """,
         "CREATE INDEX IF NOT EXISTS idx_consultations_user ON consultations(user_id, created_at DESC)",
         "CREATE INDEX IF NOT EXISTS idx_chat_messages_cid ON chat_messages(consultation_id, created_at ASC)",
+        "ALTER TABLE consultations ADD COLUMN IF NOT EXISTS title TEXT",
+        "ALTER TABLE consultations ADD COLUMN IF NOT EXISTS consultation_type TEXT",
+        "ALTER TABLE consultations ADD COLUMN IF NOT EXISTS agent_id TEXT",
+        "ALTER TABLE consultations ADD COLUMN IF NOT EXISTS status TEXT",
+        "ALTER TABLE consultations ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ",
         "ALTER TABLE consultations ADD COLUMN IF NOT EXISTS question TEXT",
+        "ALTER TABLE consultations ADD COLUMN IF NOT EXISTS answer TEXT",
+        "ALTER TABLE consultations ALTER COLUMN answer SET DEFAULT ''",
         "ALTER TABLE consultations ADD COLUMN IF NOT EXISTS session_id TEXT",
         "ALTER TABLE consultations ADD COLUMN IF NOT EXISTS tags JSONB",
         "ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS files JSONB"

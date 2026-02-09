@@ -1,18 +1,31 @@
 {
   "mcpServers": {
+    "DatabaseTool": {
+      "command": "python",
+      "args": ["mcpserver/database_tool.py"],
+      "cwd": "/app/VisitSummaryGenerator",
+      "env": {
+        "DATABASE_URL": "postgresql://pha:pha_pass@postgres:5432/personal_health_assistant",
+        "MEMORY_DATABASE_URL": "postgresql://pha:pha_pass@postgres:5432/personal_health_assistant"
+      }
+    },
     "DocumentTool": {
       "command": "python",
-      "args": [
-        "mcpserver/document_tool.py"
-      ],
-      "cwd": "/app/VisitSummaryGenerator"
+      "args": ["mcpserver/document_tool.py"],
+      "cwd": "/app/VisitSummaryGenerator",
+      "env": {
+        "DATABASE_URL": "postgresql://pha:pha_pass@postgres:5432/personal_health_assistant",
+        "MEMORY_DATABASE_URL": "postgresql://pha:pha_pass@postgres:5432/personal_health_assistant"
+      }
     },
     "AIAnalysisTool": {
       "command": "python",
-      "args": [
-        "mcpserver/ai_analysis_tool.py"
-      ],
-      "cwd": "/app/VisitSummaryGenerator"
+      "args": ["mcpserver/ai_analysis_tool.py"],
+      "cwd": "/app/VisitSummaryGenerator",
+      "env": {
+        "DATABASE_URL": "postgresql://pha:pha_pass@postgres:5432/personal_health_assistant",
+        "MEMORY_DATABASE_URL": "postgresql://pha:pha_pass@postgres:5432/personal_health_assistant"
+      }
     }
   }
 }

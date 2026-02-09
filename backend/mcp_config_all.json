@@ -162,6 +162,17 @@
       ],
       "cwd": "VisitSummaryGenerator"
     },
+    "VisitSummaryGenerator_DatabaseTool": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--with", "mcp[cli]",
+        "mcp",
+        "run",
+        "mcpserver/database_tool.py"
+      ],
+      "cwd": "VisitSummaryGenerator"
+    },
     "VisitSummaryGenerator_AIAnalysisTool": {
       "command": "uv",
       "args": [

@@ -24,9 +24,19 @@ def get_pg_conn():
 def init_database():
     """初始化PostgreSQL数据库（防御性创建表）"""
     with get_pg_conn() as conn:
+        try:
+            conn.autocommit = True
+        except Exception:
+            pass
         with conn.cursor() as cur:
+            def _exec(sql: str):
+                try:
+                    cur.execute(sql)
+                except Exception:
+                    return
+
             # user_medications table (from HealthRecordsManager schema)
-            cur.execute(
+            _exec(
                 """
                 CREATE TABLE IF NOT EXISTS user_medications (
                     id SERIAL PRIMARY KEY,
@@ -44,7 +54,7 @@ def init_database():
                 )
                 """
             )
-            cur.execute("ALTER TABLE user_medications ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN DEFAULT FALSE")
+            _exec("ALTER TABLE user_medications ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN DEFAULT FALSE")
             try:
                 cur.execute(
                     "ALTER TABLE user_medications ALTER COLUMN is_deleted TYPE BOOLEAN "
@@ -52,10 +62,10 @@ def init_database():
                 )
             except Exception:
                 pass
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_user_medications_user_id ON user_medications(user_id)")
+            _exec("CREATE INDEX IF NOT EXISTS idx_user_medications_user_id ON user_medications(user_id)")
 
             # reminders table (Global reminders)
-            cur.execute(
+            _exec(
                 """
                 CREATE TABLE IF NOT EXISTS reminders (
                     id SERIAL PRIMARY KEY,
@@ -72,8 +82,8 @@ def init_database():
                 )
                 """
             )
-            cur.execute("ALTER TABLE reminders ADD COLUMN IF NOT EXISTS is_completed BOOLEAN DEFAULT FALSE")
-            cur.execute("ALTER TABLE reminders ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN DEFAULT FALSE")
+            _exec("ALTER TABLE reminders ADD COLUMN IF NOT EXISTS is_completed BOOLEAN DEFAULT FALSE")
+            _exec("ALTER TABLE reminders ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN DEFAULT FALSE")
             try:
                 cur.execute(
                     "ALTER TABLE reminders ALTER COLUMN is_completed TYPE BOOLEAN "
@@ -88,11 +98,11 @@ def init_database():
                 )
             except Exception:
                 pass
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_reminders_user_time ON reminders(user_id, reminder_time DESC)")
+            _exec("CREATE INDEX IF NOT EXISTS idx_reminders_user_time ON reminders(user_id, reminder_time DESC)")
 
             # medication_reminders table (Linking table)
             # Ensure it has reminder_id and medication_id
-            cur.execute(
+            _exec(
                 """
                 CREATE TABLE IF NOT EXISTS medication_reminders (
                     id SERIAL PRIMARY KEY,
@@ -113,9 +123,9 @@ def init_database():
                 )
                 """
             )
-            cur.execute("ALTER TABLE medication_reminders ADD COLUMN IF NOT EXISTS medication_id INTEGER")
-            cur.execute("ALTER TABLE medication_reminders ADD COLUMN IF NOT EXISTS reminder_id INTEGER")
-            cur.execute("ALTER TABLE medication_reminders ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN DEFAULT FALSE")
+            _exec("ALTER TABLE medication_reminders ADD COLUMN IF NOT EXISTS medication_id INTEGER")
+            _exec("ALTER TABLE medication_reminders ADD COLUMN IF NOT EXISTS reminder_id INTEGER")
+            _exec("ALTER TABLE medication_reminders ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN DEFAULT FALSE")
             try:
                 cur.execute("ALTER TABLE medication_reminders ALTER COLUMN dosage DROP NOT NULL")
             except Exception:
@@ -135,13 +145,13 @@ def init_database():
                 )
             except Exception:
                 pass
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_medication_reminders_user ON medication_reminders(user_id)")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_medication_reminders_active ON medication_reminders(is_active)")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_medication_reminders_created ON medication_reminders(created_at)")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_medication_reminders_user_created_desc ON medication_reminders(user_id, created_at DESC)")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_medication_reminders_user_medication ON medication_reminders(user_id, medication_id)")
+            _exec("CREATE INDEX IF NOT EXISTS idx_medication_reminders_user ON medication_reminders(user_id)")
+            _exec("CREATE INDEX IF NOT EXISTS idx_medication_reminders_active ON medication_reminders(is_active)")
+            _exec("CREATE INDEX IF NOT EXISTS idx_medication_reminders_created ON medication_reminders(created_at)")
+            _exec("CREATE INDEX IF NOT EXISTS idx_medication_reminders_user_created_desc ON medication_reminders(user_id, created_at DESC)")
+            _exec("CREATE INDEX IF NOT EXISTS idx_medication_reminders_user_medication ON medication_reminders(user_id, medication_id)")
 
-            cur.execute(
+            _exec(
                 """
                 CREATE TABLE IF NOT EXISTS reminder_logs (
                     id SERIAL PRIMARY KEY,
@@ -156,15 +166,15 @@ def init_database():
                 )
                 """
             )
-            cur.execute("ALTER TABLE reminder_logs ADD COLUMN IF NOT EXISTS user_id TEXT")
-            cur.execute("ALTER TABLE reminder_logs ADD COLUMN IF NOT EXISTS completion_time TIMESTAMPTZ")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_reminder_logs_reminder ON reminder_logs(reminder_id)")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_reminder_logs_reminder_scheduled ON reminder_logs(reminder_id, scheduled_time)")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_reminder_logs_user_scheduled ON reminder_logs(user_id, scheduled_time)")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_reminder_logs_status ON reminder_logs(status)")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_reminder_logs_created ON reminder_logs(created_at)")
+            _exec("ALTER TABLE reminder_logs ADD COLUMN IF NOT EXISTS user_id TEXT")
+            _exec("ALTER TABLE reminder_logs ADD COLUMN IF NOT EXISTS completion_time TIMESTAMPTZ")
+            _exec("CREATE INDEX IF NOT EXISTS idx_reminder_logs_reminder ON reminder_logs(reminder_id)")
+            _exec("CREATE INDEX IF NOT EXISTS idx_reminder_logs_reminder_scheduled ON reminder_logs(reminder_id, scheduled_time)")
+            _exec("CREATE INDEX IF NOT EXISTS idx_reminder_logs_user_scheduled ON reminder_logs(user_id, scheduled_time)")
+            _exec("CREATE INDEX IF NOT EXISTS idx_reminder_logs_status ON reminder_logs(status)")
+            _exec("CREATE INDEX IF NOT EXISTS idx_reminder_logs_created ON reminder_logs(created_at)")
 
-            cur.execute(
+            _exec(
                 """
                 CREATE TABLE IF NOT EXISTS appointment_reminders (
                     id SERIAL PRIMARY KEY,
@@ -182,9 +192,8 @@ def init_database():
                 )
                 """
             )
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_appointment_reminders_user ON appointment_reminders(user_id)")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_appointment_reminders_date ON appointment_reminders(appointment_date)")
-            conn.commit()
+            _exec("CREATE INDEX IF NOT EXISTS idx_appointment_reminders_user ON appointment_reminders(user_id)")
+            _exec("CREATE INDEX IF NOT EXISTS idx_appointment_reminders_date ON appointment_reminders(appointment_date)")
 
 # 初始化数据库
 init_database()

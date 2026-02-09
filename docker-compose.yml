@@ -77,6 +77,12 @@ services:
       - PORT=10013
       - HOST=0.0.0.0
       - PYTHONPATH=/app
+      - DATABASE_URL=${DATABASE_URL:-postgresql://pha:pha_pass@postgres:5432/personal_health_assistant}
+      - DB_NAME=${POSTGRES_DB:-personal_health_assistant}
+      - DB_HOST=${DB_HOST:-postgres}
+      - DB_PORT=${DB_PORT:-5432}
+      - DB_USER=${DB_USER:-pha}
+      - DB_PASSWORD=${DB_PASSWORD:-pha_pass}
       - MEMORY_DATABASE_URL=${MEMORY_DATABASE_URL:-postgresql://pha:pha_pass@postgres:5432/personal_health_assistant}
       - A2A_CURRENT_USER_ID=${A2A_CURRENT_USER_ID:-111}
     ports:

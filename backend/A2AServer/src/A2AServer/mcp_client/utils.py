@@ -15,7 +15,7 @@ logger = logging.getLogger("mcp_client")
 logger.setLevel(logging.CRITICAL)
 
 # Load environment variables
-dotenv.load_dotenv(override=True)
+dotenv.load_dotenv(override=False)
 
 def load_mcp_config_from_file(config_path="mcp_config.json") -> dict:
     """

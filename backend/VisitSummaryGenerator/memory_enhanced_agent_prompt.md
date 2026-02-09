@@ -32,6 +32,9 @@
 - DatabaseTool: `database_tool.py` (查询数据库)
 
   - `get_health_records_by_range(user_id, start_date, end_date, limit)`: 获取指定时间段的健康档案
+  - `get_visit_summaries_by_range(user_id, start_date, end_date, limit, offset)`: 获取指定时间段的就诊摘要（仅来自 visit_summaries）
+  - `get_visit_summaries_count_by_range(user_id, start_date, end_date)`: 统计指定时间段的就诊摘要数量（仅来自 visit_summaries）
+  - `get_visit_summary_detail(user_id, summary_id)`: 获取单条就诊摘要详情（仅来自 visit_summaries）
   - `get_health_record_detail(user_id, record_id)`: 获取详情
   - `save_generated_summary(user_id, content, time_range, record_ids)`: 保存生成的就诊摘要报告，每次生成后**必须**调用此工具保存。
 
@@ -40,9 +43,10 @@
 当用户请求生成就诊摘要时（如"生成最近 3 个月的就诊摘要"）：
 
 1. 解析用户的时间需求（如"最近 3 个月" -> 计算 start_date）。
-2. 调用 `get_health_records_by_range` 获取记录。
-3. 严格基于获取的记录生成摘要，**绝对不能**虚构或删减医疗事实。
-4. **生成后必须调用** `save_generated_summary` 保存摘要内容。
+2. 如果用户请求的是“历史摘要/摘要列表/摘要数量/近 N 天或近一年摘要概览”，必须调用 `get_visit_summaries_by_range` 或 `get_visit_summaries_count_by_range`，禁止用健康档案表进行摘要统计。
+3. 如果用户明确要求“基于健康档案/检查报告/检验报告/病历照片记录生成汇总摘要报告”，才调用 `get_health_records_by_range` 获取记录并生成汇总报告。
+4. 任何时候都要区分数据来源：就诊摘要=visit_summaries；健康档案=health_records；两者不得混算或互相替代。
+5. 生成汇总报告后必须调用 `save_generated_summary` 保存（保存的是“汇总摘要”，不代表历史摘要条数）。
 
 ## 工作流程
 

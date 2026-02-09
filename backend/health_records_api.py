@@ -3002,6 +3002,8 @@ async def get_consultation_history(
     skip: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=100),
     user_id: Optional[str] = Query(None),
+    include_summary: bool = Query(False),
+    include_health_records: bool = Query(False),
     request: Request = None,
 ):
     """获取健康咨询历史"""
@@ -3012,15 +3014,21 @@ async def get_consultation_history(
 
         with get_db_connection() as conn:
             with conn.cursor(row_factory=dict_row) as cursor:
-                cursor.execute(
-                    """
-                    SELECT * FROM consultations 
-                    WHERE user_id = %s 
-                    ORDER BY created_at DESC 
+                where_clauses = ["user_id = %s"]
+                if not include_summary:
+                    where_clauses.append("(tags IS NULL OR NOT (tags ? 'summary'))")
+                if not include_health_records:
+                    where_clauses.append(
+                        "(tags IS NULL OR NOT (tags ? 'health_records'))"
+                    )
+                where_sql = " AND ".join(where_clauses)
+                sql = f"""
+                    SELECT * FROM consultations
+                    WHERE {where_sql}
+                    ORDER BY created_at DESC
                     LIMIT %s OFFSET %s
-                    """,
-                    (uid, limit, skip),
-                )
+                """
+                cursor.execute(sql, (uid, limit, skip))
                 rows = cursor.fetchall()
                 # Handle JSONB tags field
                 results = []

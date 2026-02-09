@@ -5,14 +5,24 @@
       "args": [
         "mcpserver/reminder_tool.py"
       ],
-      "cwd": "/app/MedicationReminder"
+      "cwd": "/app/MedicationReminder",
+      "env": {
+        "PG_DSN": "postgresql://pha:pha_pass@postgres:5432/personal_health_assistant",
+        "DATABASE_URL": "postgresql://pha:pha_pass@postgres:5432/personal_health_assistant",
+        "MEMORY_DATABASE_URL": "postgresql://pha:pha_pass@postgres:5432/personal_health_assistant"
+      }
     },
     "NotificationTool": {
       "command": "python",
       "args": [
         "mcpserver/notification_tool.py"
       ],
-      "cwd": "/app/MedicationReminder"
+      "cwd": "/app/MedicationReminder",
+      "env": {
+        "PG_DSN": "postgresql://pha:pha_pass@postgres:5432/personal_health_assistant",
+        "DATABASE_URL": "postgresql://pha:pha_pass@postgres:5432/personal_health_assistant",
+        "MEMORY_DATABASE_URL": "postgresql://pha:pha_pass@postgres:5432/personal_health_assistant"
+      }
     },
     "MemoryIntegrationTool": {
       "command": "python",
