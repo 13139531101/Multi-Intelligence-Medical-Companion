@@ -273,12 +273,17 @@ DB_CONFIG = {
     ),
 }
 
-_RAG_VECTOR_DIM = int(os.getenv("RAG_VECTOR_DIM", "384"))
+_RAG_VECTOR_DIM = 384
 _RAG_EMBEDDING_MODEL = os.getenv("RAG_EMBEDDING_MODEL") or os.getenv(
     "EMBEDDING_MODEL", "all-MiniLM-L6-v2"
 )
 _rag_schema_ready = False
 _embedding_service = None
+
+JWT_SECRET_KEY = os.getenv(
+    "JWT_SECRET_KEY", "your-secret-key-change-this-in-production"
+)
+JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
 
 _db_pool: ConnectionPool | None = None
 _db_pool_init_attempted = False
@@ -333,6 +338,9 @@ def _get_embedding_service():
         return _embedding_service
     try:
         _embedding_service = EmbeddingService(model_name=_RAG_EMBEDDING_MODEL)
+        dim = getattr(_embedding_service, "dimension", None)
+        if dim is not None and int(dim) != _RAG_VECTOR_DIM:
+            _embedding_service = None
         return _embedding_service
     except Exception:
         _embedding_service = None
@@ -376,6 +384,25 @@ def _ensure_rag_schema(cursor) -> None:
             pass
         cursor.execute(
             """
+            CREATE TABLE IF NOT EXISTS rag_documents (
+                user_id TEXT NOT NULL,
+                source_type TEXT NOT NULL,
+                source_id TEXT NOT NULL,
+                record_type TEXT,
+                title TEXT,
+                full_text TEXT NOT NULL,
+                text_sha256 TEXT NOT NULL,
+                embedding_model TEXT NOT NULL,
+                embedding_dim INTEGER NOT NULL,
+                chunk_count INTEGER NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                PRIMARY KEY (user_id, source_type, source_id, embedding_model)
+            );
+            """
+        )
+        cursor.execute(
+            """
             CREATE TABLE IF NOT EXISTS rag_chunks (
                 id UUID PRIMARY KEY,
                 user_id TEXT NOT NULL,
@@ -390,9 +417,40 @@ def _ensure_rag_schema(cursor) -> None:
                 embedding vector(384) NOT NULL,
                 created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
                 updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-                UNIQUE (source_type, source_id, chunk_index, embedding_model)
+                UNIQUE (user_id, source_type, source_id, chunk_index, embedding_model)
             );
             """
+        )
+        try:
+            cursor.execute(
+                """
+                ALTER TABLE rag_chunks
+                DROP CONSTRAINT IF EXISTS rag_chunks_source_type_source_id_chunk_index_embedding_model_key
+                """
+            )
+        except Exception:
+            pass
+        try:
+            cursor.execute(
+                """
+                ALTER TABLE rag_chunks
+                ADD CONSTRAINT rag_chunks_user_source_chunk_model_key
+                UNIQUE (user_id, source_type, source_id, chunk_index, embedding_model)
+                """
+            )
+        except Exception:
+            pass
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_rag_documents_user ON rag_documents(user_id);"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_rag_documents_user_source ON rag_documents(user_id, source_type);"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_rag_documents_source ON rag_documents(source_type, source_id);"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_rag_documents_updated ON rag_documents(updated_at);"
         )
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_rag_chunks_user ON rag_chunks(user_id);"
@@ -455,12 +513,54 @@ def _upsert_rag_document(
     if not valid:
         return 0
 
+    now = datetime.now()
+    text_sha256 = hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+    cursor.execute(
+        """
+        INSERT INTO rag_documents (
+            user_id, source_type, source_id, record_type, title,
+            full_text, text_sha256,
+            embedding_model, embedding_dim, chunk_count,
+            created_at, updated_at
+        ) VALUES (
+            %s, %s, %s, %s, %s,
+            %s, %s,
+            %s, %s, %s,
+            %s, %s
+        )
+        ON CONFLICT (user_id, source_type, source_id, embedding_model)
+        DO UPDATE SET
+            record_type = EXCLUDED.record_type,
+            title = EXCLUDED.title,
+            full_text = EXCLUDED.full_text,
+            text_sha256 = EXCLUDED.text_sha256,
+            embedding_dim = EXCLUDED.embedding_dim,
+            chunk_count = EXCLUDED.chunk_count,
+            updated_at = EXCLUDED.updated_at
+        """,
+        (
+            user_id,
+            source_type,
+            source_id,
+            record_type,
+            title,
+            text,
+            text_sha256,
+            es.model_name,
+            _RAG_VECTOR_DIM,
+            len(valid),
+            now,
+            now,
+        ),
+    )
+
     cursor.execute(
         """
         DELETE FROM rag_chunks
-        WHERE source_type = %s AND source_id = %s AND embedding_model = %s
+        WHERE user_id = %s AND source_type = %s AND source_id = %s AND embedding_model = %s
         """,
-        (source_type, source_id, es.model_name),
+        (user_id, source_type, source_id, es.model_name),
     )
 
     inserted = 0
@@ -476,7 +576,7 @@ def _upsert_rag_document(
                 %s, %s, %s, %s, %s::vector(384),
                 %s, %s
             )
-            ON CONFLICT (source_type, source_id, chunk_index, embedding_model)
+            ON CONFLICT (user_id, source_type, source_id, chunk_index, embedding_model)
             DO UPDATE SET
                 user_id = EXCLUDED.user_id,
                 record_type = EXCLUDED.record_type,
@@ -498,8 +598,8 @@ def _upsert_rag_document(
                 es.model_name,
                 len(emb),
                 _vector_literal(emb),
-                datetime.now(),
-                datetime.now(),
+                now,
+                now,
             ),
         )
         inserted += 1
@@ -2047,14 +2147,971 @@ async def startup_event():
         logger.warning(f"工具预热过程出现异常（忽略，继续启动）: {e}")
 
 
-def _resolve_user_id(request: Request | None, user_id: str | None) -> str | None:
-    if user_id:
-        return str(user_id)
-    if request and hasattr(request, "state") and hasattr(request.state, "user"):
-        u = request.state.user
-        if isinstance(u, dict):
-            return str(u.get("id") or u.get("user_id") or u.get("uid") or "")
-    return None
+def _resolve_user_id(request: Request | None, user_id: str | None) -> str:
+    try:
+        if user_id and str(user_id).strip():
+            return str(user_id).strip()
+    except Exception:
+        pass
+    try:
+        if request and hasattr(request, "state") and hasattr(request.state, "user"):
+            u = request.state.user
+            if isinstance(u, dict):
+                uid = u.get("id") or u.get("user_id") or u.get("uid") or ""
+                if isinstance(uid, str) and uid.strip():
+                    return uid.strip()
+    except Exception:
+        pass
+    try:
+        if request is not None:
+            xuid = request.headers.get("X-User-Id") or request.headers.get("x-user-id")
+            if isinstance(xuid, str) and xuid.strip():
+                return xuid.strip()
+    except Exception:
+        pass
+    try:
+        if request is not None:
+            auth = request.headers.get("authorization") or request.headers.get(
+                "Authorization"
+            )
+            if isinstance(auth, str) and auth.lower().startswith("bearer "):
+                token = auth.split(" ", 1)[1].strip()
+                payload = jwt.decode(token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
+                uid = payload.get("user_id") or payload.get("sub")
+                if isinstance(uid, str) and uid.strip():
+                    return uid.strip()
+    except Exception:
+        pass
+    try:
+        env_uid = os.environ.get("A2A_CURRENT_USER_ID") or os.environ.get("USER_ID")
+        if (
+            isinstance(env_uid, str)
+            and env_uid.strip()
+            and env_uid.strip().lower() != "default_user"
+        ):
+            return env_uid.strip()
+    except Exception:
+        pass
+    return ""
+
+
+class RAGBackfillRequest(BaseModel):
+    user_id: Optional[str] = None
+    source_types: List[str] = Field(
+        default_factory=lambda: ["health_records", "visit_summaries"]
+    )
+    limit: int = Field(default=200, ge=1, le=5000)
+    offset: int = Field(default=0, ge=0)
+    dry_run: bool = False
+    include_deleted: bool = False
+
+
+@app.post("/api/rag/backfill")
+async def backfill_rag(payload: RAGBackfillRequest, request: Request = None):
+    uid = _resolve_user_id(request, payload.user_id)
+    if not uid:
+        raise HTTPException(status_code=401, detail="未认证用户")
+
+    es = _get_embedding_service()
+    if es is None:
+        raise HTTPException(status_code=500, detail="EmbeddingService不可用，无法回填RAG")
+
+    source_types = [str(x).strip() for x in (payload.source_types or []) if str(x).strip()]
+    if not source_types:
+        raise HTTPException(status_code=400, detail="source_types不能为空")
+
+    limit = int(payload.limit or 200)
+    offset = int(payload.offset or 0)
+
+    summary_filter = "" if payload.include_deleted else " AND COALESCE(is_deleted, 0) = 0"
+
+    result: Dict[str, Any] = {
+        "success": True,
+        "user_id": uid,
+        "source_types": source_types,
+        "limit": limit,
+        "offset": offset,
+        "dry_run": bool(payload.dry_run),
+        "model": getattr(es, "model_name", None),
+        "embedding_dim": getattr(es, "dimension", None),
+        "processed_docs": 0,
+        "inserted_chunks": 0,
+        "per_source": {},
+        "errors": [],
+    }
+
+    with get_db_connection() as conn:
+        with conn.cursor(row_factory=dict_row) as cursor:
+            for st in source_types:
+                st_key = st
+                per = {"source_type": st_key, "processed_docs": 0, "inserted_chunks": 0, "errors": []}
+
+                try:
+                    if st_key == "health_records":
+                        cursor.execute(
+                            """
+                            SELECT id, record_type, title, summary, content
+                            FROM health_records
+                            WHERE user_id = %s
+                            ORDER BY created_at DESC
+                            LIMIT %s OFFSET %s
+                            """,
+                            (uid, limit, offset),
+                        )
+                        rows = cursor.fetchall() or []
+                        for r in rows:
+                            try:
+                                doc_id = str(r.get("id"))
+                                record_type = r.get("record_type")
+                                title = r.get("title")
+                                text = _make_rag_text(title, r.get("summary"), r.get("content"))
+                                per["processed_docs"] += 1
+                                result["processed_docs"] += 1
+                                if payload.dry_run:
+                                    continue
+                                inserted = _upsert_rag_document(
+                                    cursor,
+                                    user_id=uid,
+                                    source_type="health_records",
+                                    source_id=doc_id,
+                                    record_type=str(record_type) if record_type is not None else None,
+                                    title=title,
+                                    text=text,
+                                )
+                                conn.commit()
+                                per["inserted_chunks"] += int(inserted or 0)
+                                result["inserted_chunks"] += int(inserted or 0)
+                            except Exception as e:
+                                try:
+                                    conn.rollback()
+                                except Exception:
+                                    pass
+                                msg = f"health_records:{r.get('id')}: {e}"
+                                per["errors"].append(msg)
+                                result["errors"].append(msg)
+
+                    elif st_key == "visit_summaries":
+                        cursor.execute(
+                            f"""
+                            SELECT
+                                id, title, visit_date, doctor, hospital, department,
+                                chief_complaint, symptoms, examination, diagnosis,
+                                treatment, prescription, follow_up, summary_content, notes
+                            FROM visit_summaries
+                            WHERE user_id = %s{summary_filter}
+                            ORDER BY created_at DESC
+                            LIMIT %s OFFSET %s
+                            """,
+                            (uid, limit, offset),
+                        )
+                        rows = cursor.fetchall() or []
+                        for r in rows:
+                            try:
+                                doc_id = str(r.get("id"))
+                                title = r.get("title")
+                                text = "\n".join(
+                                    [
+                                        f"标题: {title or ''}",
+                                        f"就诊日期: {r.get('visit_date') or ''}",
+                                        f"医院: {r.get('hospital') or ''}",
+                                        f"科室: {r.get('department') or ''}",
+                                        f"医生: {r.get('doctor') or ''}",
+                                        f"主诉: {r.get('chief_complaint') or ''}",
+                                        f"症状: {r.get('symptoms') or ''}",
+                                        f"检查: {r.get('examination') or ''}",
+                                        f"诊断: {r.get('diagnosis') or ''}",
+                                        f"治疗: {r.get('treatment') or ''}",
+                                        f"处方: {r.get('prescription') or ''}",
+                                        f"复查/随访: {r.get('follow_up') or ''}",
+                                        f"摘要: {r.get('summary_content') or ''}",
+                                        f"备注: {r.get('notes') or ''}",
+                                    ]
+                                ).strip()
+                                per["processed_docs"] += 1
+                                result["processed_docs"] += 1
+                                if payload.dry_run:
+                                    continue
+                                inserted = _upsert_rag_document(
+                                    cursor,
+                                    user_id=uid,
+                                    source_type="visit_summaries",
+                                    source_id=doc_id,
+                                    record_type="visit_summary",
+                                    title=title,
+                                    text=text,
+                                )
+                                conn.commit()
+                                per["inserted_chunks"] += int(inserted or 0)
+                                result["inserted_chunks"] += int(inserted or 0)
+                            except Exception as e:
+                                try:
+                                    conn.rollback()
+                                except Exception:
+                                    pass
+                                msg = f"visit_summaries:{r.get('id')}: {e}"
+                                per["errors"].append(msg)
+                                result["errors"].append(msg)
+                    else:
+                        per["errors"].append(f"unknown source_type: {st_key}")
+                        result["errors"].append(f"unknown source_type: {st_key}")
+                except Exception as e:
+                    try:
+                        conn.rollback()
+                    except Exception:
+                        pass
+                    msg = f"{st_key}: {e}"
+                    per["errors"].append(msg)
+                    result["errors"].append(msg)
+
+                result["per_source"][st_key] = per
+
+    return result
+
+
+_GLOBAL_KB_USER_ID = "__global__"
+_ADMIN_TOKEN = (os.getenv("ADMIN_TOKEN") or "").strip()
+
+
+def _require_admin(request: Request | None) -> None:
+    if not _ADMIN_TOKEN:
+        raise HTTPException(status_code=403, detail="ADMIN_TOKEN未配置")
+    if request is None:
+        raise HTTPException(status_code=403, detail="缺少请求上下文")
+    token = request.headers.get("X-Admin-Token") or request.headers.get("x-admin-token")
+    if not isinstance(token, str) or token.strip() != _ADMIN_TOKEN:
+        raise HTTPException(status_code=403, detail="无权限")
+
+
+class AdminRAGDocsListRequest(BaseModel):
+    user_id: Optional[str] = None
+    source_type: Optional[str] = None
+    q: Optional[str] = None
+    limit: int = Field(default=50, ge=1, le=500)
+    offset: int = Field(default=0, ge=0)
+
+
+@app.post("/api/admin/rag/docs")
+async def admin_list_rag_docs(payload: AdminRAGDocsListRequest, request: Request = None):
+    _require_admin(request)
+
+    uid = (payload.user_id or "").strip()
+    st = (payload.source_type or "").strip()
+    q = (payload.q or "").strip()
+    limit = int(payload.limit or 50)
+    offset = int(payload.offset or 0)
+
+    where = ["1=1"]
+    params: list[Any] = []
+    if uid:
+        where.append("user_id = %s")
+        params.append(uid)
+    if st:
+        where.append("source_type = %s")
+        params.append(st)
+    if q:
+        where.append("(source_id ILIKE %s OR COALESCE(title, '') ILIKE %s)")
+        like = f"%{q}%"
+        params.extend([like, like])
+
+    with get_db_connection() as conn:
+        with conn.cursor(row_factory=dict_row) as cursor:
+            _ensure_rag_schema(cursor)
+            cursor.execute(
+                f"""
+                SELECT
+                    user_id,
+                    source_type,
+                    source_id,
+                    record_type,
+                    title,
+                    chunk_count,
+                    embedding_model,
+                    embedding_dim,
+                    created_at,
+                    updated_at
+                FROM rag_documents
+                WHERE {' AND '.join(where)}
+                ORDER BY updated_at DESC
+                LIMIT %s OFFSET %s
+                """,
+                tuple(params + [limit, offset]),
+            )
+            rows = cursor.fetchall() or []
+
+    return {
+        "success": True,
+        "count": len(rows),
+        "items": rows,
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+class AdminRAGChunksListRequest(BaseModel):
+    user_id: str
+    source_type: str
+    source_id: str
+    limit: int = Field(default=200, ge=1, le=1000)
+    offset: int = Field(default=0, ge=0)
+
+
+@app.post("/api/admin/rag/chunks")
+async def admin_list_rag_chunks(payload: AdminRAGChunksListRequest, request: Request = None):
+    _require_admin(request)
+
+    uid = (payload.user_id or "").strip()
+    st = (payload.source_type or "").strip()
+    sid = (payload.source_id or "").strip()
+    if not uid or not st or not sid:
+        raise HTTPException(status_code=400, detail="user_id/source_type/source_id不能为空")
+
+    limit = int(payload.limit or 200)
+    offset = int(payload.offset or 0)
+
+    with get_db_connection() as conn:
+        with conn.cursor(row_factory=dict_row) as cursor:
+            _ensure_rag_schema(cursor)
+            cursor.execute(
+                """
+                SELECT
+                    id,
+                    user_id,
+                    source_type,
+                    source_id,
+                    record_type,
+                    title,
+                    chunk_index,
+                    chunk_text,
+                    embedding_model,
+                    embedding_dim,
+                    created_at,
+                    updated_at
+                FROM rag_chunks
+                WHERE user_id = %s AND source_type = %s AND source_id = %s
+                ORDER BY chunk_index ASC
+                LIMIT %s OFFSET %s
+                """,
+                (uid, st, sid, limit, offset),
+            )
+            rows = cursor.fetchall() or []
+
+    return {
+        "success": True,
+        "count": len(rows),
+        "items": rows,
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+class AdminRAGSearchRequest(BaseModel):
+    query: str
+    user_id: Optional[str] = None
+    source_types: List[str] = Field(default_factory=lambda: ["medical_kb"])
+    include_global: bool = True
+    limit: int = Field(default=10, ge=1, le=50)
+
+
+@app.post("/api/admin/rag/search")
+async def admin_rag_search(payload: AdminRAGSearchRequest, request: Request = None):
+    _require_admin(request)
+
+    q = (payload.query or "").strip()
+    if not q:
+        raise HTTPException(status_code=400, detail="query不能为空")
+
+    es = _get_embedding_service()
+    if es is None:
+        raise HTTPException(status_code=500, detail="EmbeddingService不可用")
+
+    q_emb = es.generate_embedding(q)
+    if not q_emb or len(q_emb) != _RAG_VECTOR_DIM:
+        raise HTTPException(status_code=500, detail="Embedding维度不匹配")
+
+    uid = (payload.user_id or "").strip()
+    include_global = bool(payload.include_global)
+    uids: list[str] = []
+    if uid:
+        uids.append(uid)
+    if include_global and _GLOBAL_KB_USER_ID not in uids:
+        uids.append(_GLOBAL_KB_USER_ID)
+    if not uids:
+        raise HTTPException(status_code=400, detail="user_id为空且include_global为false")
+
+    st = [str(x).strip() for x in (payload.source_types or []) if str(x).strip()]
+    if not st:
+        st = ["medical_kb"]
+
+    placeholders_st = ",".join(["%s"] * len(st))
+    where_uid = "(" + " OR ".join(["user_id = %s"] * len(uids)) + ")"
+    qv = _vector_literal(q_emb)
+
+    with get_db_connection() as conn:
+        with conn.cursor(row_factory=dict_row) as cursor:
+            _ensure_rag_schema(cursor)
+            cursor.execute(
+                f"""
+                SELECT *
+                FROM (
+                    SELECT
+                        user_id,
+                        source_type,
+                        source_id,
+                        record_type,
+                        title,
+                        chunk_text,
+                        created_at,
+                        updated_at,
+                        (embedding <=> %s::vector(384)) AS distance,
+                        row_number() OVER (
+                            PARTITION BY user_id, source_type, source_id
+                            ORDER BY (embedding <=> %s::vector(384)) ASC
+                        ) AS rn
+                    FROM rag_chunks
+                    WHERE {where_uid} AND source_type IN ({placeholders_st})
+                ) t
+                WHERE rn = 1
+                ORDER BY distance ASC
+                LIMIT %s
+                """,
+                tuple([qv, qv] + uids + st + [int(payload.limit or 10)]),
+            )
+            rows = cursor.fetchall() or []
+
+    return {
+        "success": True,
+        "query": q,
+        "model": getattr(es, "model_name", None),
+        "embedding_dim": getattr(es, "dimension", None),
+        "count": len(rows),
+        "items": rows,
+    }
+
+
+class AdminRAGReindexRequest(BaseModel):
+    user_id: str
+    source_type: str
+    source_id: str
+
+
+@app.post("/api/admin/rag/reindex")
+async def admin_rag_reindex(payload: AdminRAGReindexRequest, request: Request = None):
+    _require_admin(request)
+
+    uid = (payload.user_id or "").strip()
+    st = (payload.source_type or "").strip()
+    sid = (payload.source_id or "").strip()
+    if not uid or not st or not sid:
+        raise HTTPException(status_code=400, detail="user_id/source_type/source_id不能为空")
+
+    es = _get_embedding_service()
+    if es is None:
+        raise HTTPException(status_code=500, detail="EmbeddingService不可用")
+
+    with get_db_connection() as conn:
+        with conn.cursor(row_factory=dict_row) as cursor:
+            _ensure_rag_schema(cursor)
+            cursor.execute(
+                """
+                SELECT record_type, title, full_text
+                FROM rag_documents
+                WHERE user_id = %s AND source_type = %s AND source_id = %s
+                ORDER BY updated_at DESC
+                LIMIT 1
+                """,
+                (uid, st, sid),
+            )
+            row = cursor.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="未找到RAG文档")
+
+            inserted = _upsert_rag_document(
+                cursor,
+                user_id=uid,
+                source_type=st,
+                source_id=sid,
+                record_type=row.get("record_type"),
+                title=row.get("title"),
+                text=row.get("full_text") or "",
+            )
+            conn.commit()
+
+    return {
+        "success": True,
+        "user_id": uid,
+        "source_type": st,
+        "source_id": sid,
+        "inserted_chunks": int(inserted or 0),
+        "model": getattr(es, "model_name", None),
+        "embedding_dim": getattr(es, "dimension", None),
+    }
+
+
+class AdminRAGReindexBulkRequest(BaseModel):
+    user_id: str
+    source_type: str
+    source_ids: List[str] = Field(default_factory=list)
+    limit: int = Field(default=2000, ge=1, le=20000)
+
+
+@app.post("/api/admin/rag/reindex/bulk")
+async def admin_rag_reindex_bulk(
+    payload: AdminRAGReindexBulkRequest, request: Request = None
+):
+    _require_admin(request)
+
+    uid = (payload.user_id or "").strip()
+    st = (payload.source_type or "").strip()
+    if not uid or not st:
+        raise HTTPException(status_code=400, detail="user_id/source_type不能为空")
+
+    es = _get_embedding_service()
+    if es is None:
+        raise HTTPException(status_code=500, detail="EmbeddingService不可用")
+
+    source_ids = [str(x).strip() for x in (payload.source_ids or []) if str(x).strip()]
+    limit = int(payload.limit or 2000)
+
+    results: List[Dict[str, Any]] = []
+    with get_db_connection() as conn:
+        with conn.cursor(row_factory=dict_row) as cursor:
+            _ensure_rag_schema(cursor)
+            if not source_ids:
+                cursor.execute(
+                    """
+                    SELECT source_id
+                    FROM rag_documents
+                    WHERE user_id = %s AND source_type = %s
+                    ORDER BY updated_at DESC
+                    LIMIT %s
+                    """,
+                    (uid, st, limit),
+                )
+                rows = cursor.fetchall() or []
+                source_ids = [str(r.get("source_id") or "") for r in rows if r.get("source_id")]
+
+            for sid in source_ids:
+                try:
+                    cursor.execute(
+                        """
+                        SELECT record_type, title, full_text
+                        FROM rag_documents
+                        WHERE user_id = %s AND source_type = %s AND source_id = %s
+                        ORDER BY updated_at DESC
+                        LIMIT 1
+                        """,
+                        (uid, st, sid),
+                    )
+                    row = cursor.fetchone()
+                    if not row:
+                        results.append({"source_id": sid, "success": False, "error": "未找到RAG文档"})
+                        continue
+                    inserted = _upsert_rag_document(
+                        cursor,
+                        user_id=uid,
+                        source_type=st,
+                        source_id=sid,
+                        record_type=row.get("record_type"),
+                        title=row.get("title"),
+                        text=row.get("full_text") or "",
+                    )
+                    conn.commit()
+                    results.append(
+                        {"source_id": sid, "success": True, "inserted_chunks": int(inserted or 0)}
+                    )
+                except Exception as e:
+                    try:
+                        conn.rollback()
+                    except Exception:
+                        pass
+                    results.append({"source_id": sid, "success": False, "error": str(e)})
+
+    return {
+        "success": True,
+        "user_id": uid,
+        "source_type": st,
+        "count": len(results),
+        "items": results,
+        "model": getattr(es, "model_name", None),
+        "embedding_dim": getattr(es, "dimension", None),
+    }
+
+
+class MedicalKBDocUpsertRequest(BaseModel):
+    user_id: Optional[str] = None
+    global_kb: bool = True
+    doc_id: Optional[str] = None
+    doc_type: Optional[str] = "medical_kb"
+    title: str
+    content: str
+
+
+class MedicalKBDocBulkUpsertRequest(BaseModel):
+    user_id: Optional[str] = None
+    global_kb: bool = True
+    docs: List[MedicalKBDocUpsertRequest] = Field(default_factory=list)
+
+
+@app.post("/api/medical-kb/docs")
+async def upsert_medical_kb_doc(payload: MedicalKBDocUpsertRequest, request: Request = None):
+    uid = _resolve_user_id(request, payload.user_id)
+    if not uid:
+        raise HTTPException(status_code=401, detail="未认证用户")
+
+    es = _get_embedding_service()
+    if es is None:
+        raise HTTPException(status_code=500, detail="EmbeddingService不可用，无法入库知识库文档")
+
+    title = (payload.title or "").strip()
+    content = (payload.content or "").strip()
+    if not title or not content:
+        raise HTTPException(status_code=400, detail="title 与 content 不能为空")
+
+    kb_uid = _GLOBAL_KB_USER_ID if payload.global_kb else uid
+    doc_id = (payload.doc_id or "").strip() or str(uuid.uuid4())
+    doc_type = (payload.doc_type or "").strip() or "medical_kb"
+
+    text = "\n".join([f"标题: {title}", f"内容: {content}"]).strip()
+
+    with get_db_connection() as conn:
+        with conn.cursor() as cursor:
+            try:
+                inserted = _upsert_rag_document(
+                    cursor,
+                    user_id=kb_uid,
+                    source_type="medical_kb",
+                    source_id=doc_id,
+                    record_type=doc_type,
+                    title=title,
+                    text=text,
+                )
+                conn.commit()
+            except Exception as e:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                raise HTTPException(status_code=500, detail=f"知识库入库失败: {e}")
+
+    return {
+        "success": True,
+        "doc_id": doc_id,
+        "user_id": kb_uid,
+        "global_kb": bool(payload.global_kb),
+        "inserted_chunks": int(inserted or 0),
+        "model": getattr(es, "model_name", None),
+        "embedding_dim": getattr(es, "dimension", None),
+    }
+
+
+@app.post("/api/medical-kb/docs/bulk")
+async def bulk_upsert_medical_kb_docs(payload: MedicalKBDocBulkUpsertRequest, request: Request = None):
+    uid = _resolve_user_id(request, payload.user_id)
+    if not uid:
+        raise HTTPException(status_code=401, detail="未认证用户")
+
+    es = _get_embedding_service()
+    if es is None:
+        raise HTTPException(status_code=500, detail="EmbeddingService不可用，无法入库知识库文档")
+
+    kb_uid = _GLOBAL_KB_USER_ID if payload.global_kb else uid
+    docs = payload.docs or []
+    if not docs:
+        raise HTTPException(status_code=400, detail="docs不能为空")
+
+    results: List[Dict[str, Any]] = []
+    total_chunks = 0
+    with get_db_connection() as conn:
+        with conn.cursor() as cursor:
+            for d in docs:
+                title = (d.title or "").strip()
+                content = (d.content or "").strip()
+                if not title or not content:
+                    results.append(
+                        {
+                            "success": False,
+                            "doc_id": d.doc_id,
+                            "error": "title 与 content 不能为空",
+                        }
+                    )
+                    continue
+                doc_id = (d.doc_id or "").strip() or str(uuid.uuid4())
+                doc_type = (d.doc_type or "").strip() or "medical_kb"
+                text = "\n".join([f"标题: {title}", f"内容: {content}"]).strip()
+                try:
+                    inserted = _upsert_rag_document(
+                        cursor,
+                        user_id=kb_uid,
+                        source_type="medical_kb",
+                        source_id=doc_id,
+                        record_type=doc_type,
+                        title=title,
+                        text=text,
+                    )
+                    conn.commit()
+                    total_chunks += int(inserted or 0)
+                    results.append(
+                        {
+                            "success": True,
+                            "doc_id": doc_id,
+                            "inserted_chunks": int(inserted or 0),
+                        }
+                    )
+                except Exception as e:
+                    try:
+                        conn.rollback()
+                    except Exception:
+                        pass
+                    results.append(
+                        {
+                            "success": False,
+                            "doc_id": doc_id,
+                            "error": str(e),
+                        }
+                    )
+
+    return {
+        "success": True,
+        "user_id": kb_uid,
+        "global_kb": bool(payload.global_kb),
+        "docs": results,
+        "inserted_chunks": total_chunks,
+        "model": getattr(es, "model_name", None),
+        "embedding_dim": getattr(es, "dimension", None),
+    }
+
+
+class AdminMedicalKBImportDoc(BaseModel):
+    doc_id: Optional[str] = None
+    doc_type: Optional[str] = "medical_kb"
+    title: str
+    content: str
+
+
+class AdminMedicalKBImportRequest(BaseModel):
+    global_kb: bool = True
+    user_id: Optional[str] = None
+    docs: List[AdminMedicalKBImportDoc] = Field(default_factory=list)
+
+
+@app.post("/api/admin/medical-kb/import")
+async def admin_import_medical_kb(payload: AdminMedicalKBImportRequest, request: Request = None):
+    _require_admin(request)
+
+    es = _get_embedding_service()
+    if es is None:
+        raise HTTPException(status_code=500, detail="EmbeddingService不可用，无法入库知识库文档")
+
+    docs = payload.docs or []
+    if not docs:
+        raise HTTPException(status_code=400, detail="docs不能为空")
+
+    if payload.global_kb:
+        kb_uid = _GLOBAL_KB_USER_ID
+    else:
+        kb_uid = (payload.user_id or "").strip()
+        if not kb_uid:
+            raise HTTPException(status_code=400, detail="global_kb=false时必须提供user_id")
+
+    results: List[Dict[str, Any]] = []
+    total_chunks = 0
+    with get_db_connection() as conn:
+        with conn.cursor() as cursor:
+            for d in docs:
+                title = (d.title or "").strip()
+                content = (d.content or "").strip()
+                if not title or not content:
+                    results.append(
+                        {"success": False, "doc_id": d.doc_id, "error": "title 与 content 不能为空"}
+                    )
+                    continue
+                doc_id = (d.doc_id or "").strip() or str(uuid.uuid4())
+                doc_type = (d.doc_type or "").strip() or "medical_kb"
+                text = "\n".join([f"标题: {title}", f"内容: {content}"]).strip()
+                try:
+                    inserted = _upsert_rag_document(
+                        cursor,
+                        user_id=kb_uid,
+                        source_type="medical_kb",
+                        source_id=doc_id,
+                        record_type=doc_type,
+                        title=title,
+                        text=text,
+                    )
+                    conn.commit()
+                    total_chunks += int(inserted or 0)
+                    results.append(
+                        {"success": True, "doc_id": doc_id, "inserted_chunks": int(inserted or 0)}
+                    )
+                except Exception as e:
+                    try:
+                        conn.rollback()
+                    except Exception:
+                        pass
+                    results.append({"success": False, "doc_id": doc_id, "error": str(e)})
+
+    return {
+        "success": True,
+        "user_id": kb_uid,
+        "global_kb": bool(payload.global_kb),
+        "docs": results,
+        "inserted_chunks": total_chunks,
+        "model": getattr(es, "model_name", None),
+        "embedding_dim": getattr(es, "dimension", None),
+    }
+
+
+@app.get("/api/medical-kb/docs")
+async def list_medical_kb_docs(
+    user_id: Optional[str] = Query(None),
+    global_kb: bool = Query(True),
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    request: Request = None,
+):
+    uid = _resolve_user_id(request, user_id)
+    if not uid:
+        raise HTTPException(status_code=401, detail="未认证用户")
+
+    kb_uid = _GLOBAL_KB_USER_ID if global_kb else uid
+
+    with get_db_connection() as conn:
+        with conn.cursor(row_factory=dict_row) as cursor:
+            _ensure_rag_schema(cursor)
+            cursor.execute(
+                """
+                SELECT
+                    source_id AS doc_id,
+                    COALESCE(title, '') AS title,
+                    COALESCE(record_type, '') AS doc_type,
+                    chunk_count AS chunks,
+                    created_at,
+                    updated_at
+                FROM (
+                    SELECT DISTINCT ON (source_id)
+                        source_id, title, record_type, chunk_count, created_at, updated_at
+                    FROM rag_documents
+                    WHERE user_id = %s AND source_type = 'medical_kb'
+                    ORDER BY source_id, updated_at DESC
+                ) t
+                ORDER BY updated_at DESC
+                LIMIT %s OFFSET %s
+                """,
+                (kb_uid, limit, offset),
+            )
+            rows = cursor.fetchall() or []
+
+    return {
+        "success": True,
+        "user_id": kb_uid,
+        "global_kb": bool(global_kb),
+        "count": len(rows),
+        "items": rows,
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+@app.get("/api/medical-kb/stats")
+async def get_medical_kb_stats(
+    user_id: Optional[str] = Query(None),
+    global_kb: bool = Query(True),
+    request: Request = None,
+):
+    uid = _resolve_user_id(request, user_id)
+    if not uid:
+        raise HTTPException(status_code=401, detail="未认证用户")
+
+    kb_uid = _GLOBAL_KB_USER_ID if global_kb else uid
+
+    with get_db_connection() as conn:
+        with conn.cursor(row_factory=dict_row) as cursor:
+            _ensure_rag_schema(cursor)
+            cursor.execute(
+                """
+                SELECT
+                    COUNT(1) AS docs,
+                    COALESCE(SUM(chunk_count), 0) AS chunks,
+                    MAX(updated_at) AS last_updated
+                FROM rag_documents
+                WHERE user_id = %s AND source_type = 'medical_kb'
+                """,
+                (kb_uid,),
+            )
+            total = cursor.fetchone() or {}
+            cursor.execute(
+                """
+                SELECT embedding_model, COUNT(1) AS docs
+                FROM rag_documents
+                WHERE user_id = %s AND source_type = 'medical_kb'
+                GROUP BY embedding_model
+                ORDER BY COUNT(1) DESC
+                """,
+                (kb_uid,),
+            )
+            models = cursor.fetchall() or []
+
+    return {
+        "success": True,
+        "user_id": kb_uid,
+        "global_kb": bool(global_kb),
+        "docs": int(total.get("docs") or 0),
+        "chunks": int(total.get("chunks") or 0),
+        "last_updated": total.get("last_updated"),
+        "models": models,
+    }
+
+
+@app.delete("/api/medical-kb/docs/{doc_id}")
+async def delete_medical_kb_doc(
+    doc_id: str,
+    user_id: Optional[str] = Query(None),
+    global_kb: bool = Query(True),
+    request: Request = None,
+):
+    uid = _resolve_user_id(request, user_id)
+    if not uid:
+        raise HTTPException(status_code=401, detail="未认证用户")
+
+    kb_uid = _GLOBAL_KB_USER_ID if global_kb else uid
+    did = (doc_id or "").strip()
+    if not did:
+        raise HTTPException(status_code=400, detail="doc_id不能为空")
+
+    with get_db_connection() as conn:
+        with conn.cursor() as cursor:
+            try:
+                _ensure_rag_schema(cursor)
+                cursor.execute(
+                    """
+                    DELETE FROM rag_documents
+                    WHERE user_id = %s AND source_type = 'medical_kb' AND source_id = %s
+                    """,
+                    (kb_uid, did),
+                )
+                cursor.execute(
+                    """
+                    DELETE FROM rag_chunks
+                    WHERE user_id = %s AND source_type = 'medical_kb' AND source_id = %s
+                    """,
+                    (kb_uid, did),
+                )
+                deleted = int(cursor.rowcount or 0)
+                conn.commit()
+            except Exception as e:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                raise HTTPException(status_code=500, detail=f"删除知识库文档失败: {e}")
+
+    return {
+        "success": True,
+        "doc_id": did,
+        "user_id": kb_uid,
+        "global_kb": bool(global_kb),
+        "deleted_chunks": deleted,
+    }
 
 
 @app.get("/api/health-records/status")
@@ -5842,44 +6899,3 @@ if __name__ == "__main__":
     import uvicorn
 
     uvicorn.run(app, host="0.0.0.0", port=8000)
-JWT_SECRET_KEY = os.getenv(
-    "JWT_SECRET_KEY", "your-secret-key-change-this-in-production"
-)
-JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
-
-
-def _resolve_user_id(request: Request, user_id: str | None) -> str:
-    try:
-        if user_id and str(user_id).strip():
-            return str(user_id).strip()
-    except Exception:
-        pass
-    try:
-        xuid = request.headers.get("X-User-Id") or request.headers.get("x-user-id")
-        if isinstance(xuid, str) and xuid.strip():
-            return xuid.strip()
-    except Exception:
-        pass
-    try:
-        auth = request.headers.get("authorization") or request.headers.get(
-            "Authorization"
-        )
-        if isinstance(auth, str) and auth.lower().startswith("bearer "):
-            token = auth.split(" ", 1)[1].strip()
-            payload = jwt.decode(token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
-            uid = payload.get("user_id") or payload.get("sub")
-            if isinstance(uid, str) and uid.strip():
-                return uid.strip()
-    except Exception:
-        pass
-    try:
-        env_uid = os.environ.get("A2A_CURRENT_USER_ID") or os.environ.get("USER_ID")
-        if (
-            isinstance(env_uid, str)
-            and env_uid.strip()
-            and env_uid.strip().lower() != "default_user"
-        ):
-            return env_uid.strip()
-    except Exception:
-        pass
-    return ""

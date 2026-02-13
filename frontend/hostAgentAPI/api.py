@@ -1482,9 +1482,15 @@ async def get_consultation_history(
         if not db_manager:
              return []
 
+        where_clauses = ["user_id = %s"]
+        if not include_summary:
+            where_clauses.append("(tags IS NULL OR NOT (tags ? 'summary'))")
+        if not include_health_records:
+            where_clauses.append("(tags IS NULL OR NOT (tags ? 'health_records'))")
+        where_sql = " AND ".join(where_clauses)
         rows = db_manager.execute_query(
-            "SELECT * FROM consultations WHERE user_id = %s ORDER BY created_at DESC OFFSET %s LIMIT %s",
-            (user_id, skip, limit)
+            f"SELECT * FROM consultations WHERE {where_sql} ORDER BY created_at DESC LIMIT %s OFFSET %s",
+            (user_id, limit, skip),
         )
         # Convert datetimes and ensure consistent fields
         filtered = []
@@ -1505,11 +1511,6 @@ async def get_consultation_history(
              elif not isinstance(tags, list):
                  tags = []
              row["tags"] = tags
-
-             if not include_summary and "summary" in tags:
-                 continue
-             if not include_health_records and "health_records" in tags:
-                 continue
 
              filtered.append(row)
         return filtered
@@ -1876,6 +1877,10 @@ async def add_reminders_to_medication(medication_id: int, request: Request, user
     dosage = med.get("dosage") or ""
     frequency_text = med.get("frequency") or ""
     merged_notes = notes or (med.get("notes") or "")
+    if not start_date:
+        start_date = str(med.get("start_date"))[:10] if med.get("start_date") else ""
+    if not end_date:
+        end_date = str(med.get("end_date"))[:10] if med.get("end_date") else ""
 
     try:
         import re as _re
@@ -1953,7 +1958,22 @@ async def get_medication_stats(days: int = 7, date: str = "", user: dict = Depen
         scheduled_cnt = 0
         try:
             row = dbm.execute_query(
-                "SELECT COUNT(*) AS cnt FROM medication_reminders WHERE user_id = %s AND CAST(is_active AS TEXT) IN ('1','t','true') AND (start_date <= %s) AND (end_date IS NULL OR end_date >= %s)",
+                """
+                SELECT COUNT(*) AS cnt
+                FROM medication_reminders mr
+                LEFT JOIN user_medications um
+                  ON um.user_id = mr.user_id
+                 AND um.id = mr.medication_id
+                 AND CAST(um.is_deleted AS TEXT) IN ('0','f','false')
+                WHERE mr.user_id = %s
+                  AND CAST(mr.is_deleted AS TEXT) IN ('0','f','false')
+                  AND CAST(mr.is_active AS TEXT) IN ('1','t','true')
+                  AND COALESCE(mr.start_date, um.start_date, DATE '1900-01-01') <= %s
+                  AND (
+                    COALESCE(mr.end_date, um.end_date) IS NULL
+                    OR COALESCE(mr.end_date, um.end_date) >= %s
+                  )
+                """,
                 (user_id, d, d),
             )
             scheduled_cnt = int((row[0] or {}).get("cnt") or 0) if row else 0
@@ -2004,8 +2024,8 @@ async def get_medication_stats(days: int = 7, date: str = "", user: dict = Depen
     total_missed = sum(x["missed"] for x in per_day)
     total_on_time = sum(x["onTime"] for x in per_day)
 
-    adherence_rate = int(round((total_taken / total_scheduled) * 100)) if total_scheduled > 0 else 100
-    on_time_rate = int(round((total_on_time / total_taken) * 100)) if total_taken > 0 else 100
+    adherence_rate = int(round((total_taken / total_scheduled) * 100)) if total_scheduled > 0 else 0
+    on_time_rate = int(round((total_on_time / total_taken) * 100)) if total_taken > 0 else 0
 
     streak = 0
     for x in reversed(per_day):
@@ -2021,6 +2041,7 @@ async def get_medication_stats(days: int = 7, date: str = "", user: dict = Depen
         "missedDoses": total_missed,
         "onTimeRate": on_time_rate,
         "windowDays": days,
+        "totalScheduled": total_scheduled,
         "perDay": per_day,
     }
 
@@ -2447,23 +2468,41 @@ async def list_medication_reminder_plans(active_only: bool = True, user: dict = 
             if active_only:
                 rows = dbm.execute_query(
                     """
-                    SELECT id, medication_id, medication_name, dosage, frequency,
-                           reminder_times, start_date, end_date, notes, is_active
-                    FROM medication_reminders
-                    WHERE user_id = %s
-                      AND CAST(is_active AS TEXT) IN ('1','t','true')
-                    ORDER BY created_at DESC
+                    SELECT mr.id, mr.medication_id, mr.medication_name, mr.dosage, mr.frequency,
+                           mr.reminder_times, mr.start_date, mr.end_date, mr.notes, mr.is_active,
+                           COALESCE(mr.start_date, um.start_date) AS effective_start_date,
+                           COALESCE(mr.end_date, um.end_date) AS effective_end_date
+                    FROM medication_reminders mr
+                    LEFT JOIN user_medications um
+                      ON um.user_id = mr.user_id
+                     AND um.id = mr.medication_id
+                     AND CAST(um.is_deleted AS TEXT) IN ('0','f','false')
+                    WHERE mr.user_id = %s
+                      AND CAST(mr.is_deleted AS TEXT) IN ('0','f','false')
+                      AND CAST(mr.is_active AS TEXT) IN ('1','t','true')
+                      AND (
+                        COALESCE(mr.end_date, um.end_date) IS NULL
+                        OR COALESCE(mr.end_date, um.end_date) >= CURRENT_DATE
+                      )
+                    ORDER BY mr.created_at DESC
                     """,
                     (uid,),
                 )
             else:
                 rows = dbm.execute_query(
                     """
-                    SELECT id, medication_id, medication_name, dosage, frequency,
-                           reminder_times, start_date, end_date, notes, is_active
-                    FROM medication_reminders
-                    WHERE user_id = %s
-                    ORDER BY created_at DESC
+                    SELECT mr.id, mr.medication_id, mr.medication_name, mr.dosage, mr.frequency,
+                           mr.reminder_times, mr.start_date, mr.end_date, mr.notes, mr.is_active,
+                           COALESCE(mr.start_date, um.start_date) AS effective_start_date,
+                           COALESCE(mr.end_date, um.end_date) AS effective_end_date
+                    FROM medication_reminders mr
+                    LEFT JOIN user_medications um
+                      ON um.user_id = mr.user_id
+                     AND um.id = mr.medication_id
+                     AND CAST(um.is_deleted AS TEXT) IN ('0','f','false')
+                    WHERE mr.user_id = %s
+                      AND CAST(mr.is_deleted AS TEXT) IN ('0','f','false')
+                    ORDER BY mr.created_at DESC
                     """,
                     (uid,),
                 )
@@ -2499,13 +2538,13 @@ async def list_medication_reminder_plans(active_only: bool = True, user: dict = 
                             in ("1", "t", "true"),
                             "notes": r.get("notes") or "",
                             "startDate": (
-                                str(r.get("start_date"))[:10]
-                                if r.get("start_date")
+                                str(r.get("effective_start_date"))[:10]
+                                if r.get("effective_start_date")
                                 else ""
                             ),
                             "endDate": (
-                                str(r.get("end_date"))[:10]
-                                if r.get("end_date")
+                                str(r.get("effective_end_date"))[:10]
+                                if r.get("effective_end_date")
                                 else None
                             ),
                         }

@@ -36,8 +36,6 @@ alibabacloud-tea-openapi>=0.3.7
 alibabacloud-tea-util>=0.3.12
 
 # 讯飞星火大模型SDK
-spark-ai-python>=0.4.5  # 如果有官方SDK
-websocket-client>=1.6.0  # 用于WebSocket连接
 
 # 图像处理
 Pillow>=10.0.0

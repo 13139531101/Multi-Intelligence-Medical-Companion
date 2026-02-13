@@ -29,6 +29,8 @@ Page({
     // 用药提醒
     reminders: [],
 
+    todayWindowTab: "today",
+
     // 统计数据
     stats: {
       totalDays: 0,
@@ -202,25 +204,36 @@ Page({
       // 4. 映射为 todayMedications
       const todayMedications = this.mapRemindersToToday(
         remindersToday,
-        medications
+        medications,
       );
 
-      // 5. 获取提醒计划（用于“用药提醒”卡片）
-      const plansRaw = await getMedicationReminderPlans(false, userId);
-      const plans = Array.isArray(plansRaw) ? plansRaw : plansRaw?.plans || [];
-      const reminders = this.mapPlansToReminders(plans);
+      let reminders = [];
+      if ((medications || []).length > 0) {
+        const plansRaw = await getMedicationReminderPlans(false, userId);
+        const plans = Array.isArray(plansRaw)
+          ? plansRaw
+          : plansRaw?.plans || [];
+        reminders = this.mapPlansToReminders(plans);
+      }
 
       // 6. 获取统计数据（真实）
       let stats = this.calculateStats(todayMedications, medicationRecords);
       try {
         const statsRaw = await getMedicationStats(7, today, userId);
         if (statsRaw && statsRaw.success) {
-          stats = {
-            totalDays: Number(statsRaw.totalDays || 0),
-            adherenceRate: Number(statsRaw.adherenceRate || 0),
-            missedDoses: Number(statsRaw.missedDoses || 0),
-            onTimeRate: Number(statsRaw.onTimeRate || 0),
-          };
+          const hasAnySchedule =
+            Number(statsRaw.totalScheduled || 0) > 0 ||
+            (statsRaw.perDay || [] || []).some(
+              (x) => Number(x?.scheduled || 0) > 0,
+            );
+          if (hasAnySchedule && todayMedications.length > 0) {
+            stats = {
+              totalDays: Number(statsRaw.totalDays || 0),
+              adherenceRate: Number(statsRaw.adherenceRate || 0),
+              missedDoses: Number(statsRaw.missedDoses || 0),
+              onTimeRate: Number(statsRaw.onTimeRate || 0),
+            };
+          }
         }
       } catch (e) {
         stats = this.calculateStats(todayMedications, medicationRecords);
@@ -231,10 +244,22 @@ Page({
         todayMedications,
         reminders,
         availableMedications: medicationRecords.filter(
-          (m) => m.status === "active"
+          (m) => m.status === "active",
         ),
         stats,
       });
+
+      const currentTab = this.data.todayWindowTab || "today";
+      let nextTab = currentTab;
+      if (currentTab === "reminders" && reminders.length === 0) {
+        nextTab = "today";
+      }
+      if (currentTab === "today" && todayMedications.length === 0) {
+        if (reminders.length > 0) nextTab = "reminders";
+      }
+      if (nextTab !== currentTab) {
+        this.setData({ todayWindowTab: nextTab });
+      }
     } catch (error) {
       console.error("加载数据失败:", error);
       wx.showToast({
@@ -244,6 +269,12 @@ Page({
     } finally {
       this.setData({ loading: false });
     }
+  },
+
+  switchTodayWindowTab(e) {
+    const tab = String(e.currentTarget.dataset.tab || "");
+    if (tab !== "today" && tab !== "reminders") return;
+    this.setData({ todayWindowTab: tab });
   },
 
   mapMedicationsToRecords(medications) {
@@ -273,12 +304,12 @@ Page({
         const end = new Date(m.endDate);
         const total = Math.max(
           1,
-          Math.floor((end - start) / (1000 * 60 * 60 * 24)) + 1
+          Math.floor((end - start) / (1000 * 60 * 60 * 24)) + 1,
         );
         const passed = Math.floor((now - start) / (1000 * 60 * 60 * 24)) + 1;
         progress = Math.min(
           100,
-          Math.max(0, Math.round((passed / total) * 100))
+          Math.max(0, Math.round((passed / total) * 100)),
         );
       }
 
@@ -292,8 +323,8 @@ Page({
           m.startDate && m.endDate
             ? `${m.startDate} 至 ${m.endDate}`
             : m.startDate
-            ? `开始于 ${m.startDate}`
-            : "",
+              ? `开始于 ${m.startDate}`
+              : "",
         date: m.startDate || "",
         progress,
         status,
@@ -340,10 +371,10 @@ Page({
           statusRaw === "taken" || statusRaw === "completed"
             ? "taken"
             : statusRaw === "missed" || statusRaw === "skipped"
-            ? "missed"
-            : r.taken
-            ? "taken"
-            : "pending";
+              ? "missed"
+              : r.taken
+                ? "taken"
+                : "pending";
 
         return {
           id: r.id,
@@ -362,6 +393,7 @@ Page({
 
   mapPlansToReminders(plans) {
     if (!plans || !Array.isArray(plans)) return [];
+    const today = new Date().toISOString().split("T")[0];
     return plans
       .map((p) => ({
         id: p.id,
@@ -369,24 +401,27 @@ Page({
         time: p.time || "",
         frequency: p.frequency || "",
         enabled: !!p.enabled,
+        startDate: p.startDate || p.start_date || "",
+        endDate: p.endDate || p.end_date || null,
       }))
       .filter((x) => x.id !== undefined && x.id !== null)
+      .filter((x) => !x.endDate || String(x.endDate) >= today)
       .sort((a, b) => String(a.time || "").localeCompare(String(b.time || "")));
   },
 
   calculateStats(todayMedications, medicationRecords) {
     const totalToday = todayMedications.length;
     const takenToday = todayMedications.filter(
-      (m) => m.status === "taken"
+      (m) => m.status === "taken",
     ).length;
     const missedToday = todayMedications.filter(
-      (m) => m.status === "missed"
+      (m) => m.status === "missed",
     ).length;
 
     return {
       totalDays: 0,
       adherenceRate:
-        totalToday > 0 ? Math.round((takenToday / totalToday) * 100) : 100,
+        totalToday > 0 ? Math.round((takenToday / totalToday) * 100) : 0,
       missedDoses:
         missedToday + Math.max(0, totalToday - takenToday - missedToday),
       onTimeRate: takenToday > 0 ? 100 : 0,
@@ -509,7 +544,7 @@ Page({
     const userId = this.getUserId();
     const id = String(e.currentTarget.dataset.id ?? "");
     const item = (this.data.todayMedications || []).find(
-      (x) => String(x.id) === id
+      (x) => String(x.id) === id,
     );
     const today = new Date().toISOString().split("T")[0];
     const scheduledTime =
@@ -533,7 +568,7 @@ Page({
   async skipMedication(e) {
     const id = String(e.currentTarget.dataset.id ?? "");
     const item = (this.data.todayMedications || []).find(
-      (x) => String(x.id) === id
+      (x) => String(x.id) === id,
     );
 
     const today = new Date().toISOString().split("T")[0];
@@ -554,7 +589,7 @@ Page({
   viewMedicationDetail(e) {
     const id = String(e.currentTarget.dataset.id ?? "");
     const item = (this.data.todayMedications || []).find(
-      (x) => String(x.id) === id
+      (x) => String(x.id) === id,
     );
     if (!item) return;
 
@@ -562,8 +597,8 @@ Page({
       item.status === "taken"
         ? "已服用"
         : item.status === "missed"
-        ? "已错过"
-        : "待服用";
+          ? "已错过"
+          : "待服用";
 
     wx.showModal({
       title: item.name || "用药详情",
@@ -578,7 +613,7 @@ Page({
   viewRecordDetail(e) {
     const id = String(e.currentTarget.dataset.id ?? "");
     const record = (this.data.medicationRecords || []).find(
-      (x) => String(x.id) === id
+      (x) => String(x.id) === id,
     );
     if (!record) return;
 
@@ -666,7 +701,7 @@ Page({
   async deleteMedication(e) {
     const id = String(e.currentTarget.dataset.id ?? "");
     const record = (this.data.medicationRecords || []).find(
-      (x) => String(x.id) === id
+      (x) => String(x.id) === id,
     );
 
     wx.showModal({
@@ -725,11 +760,15 @@ Page({
     // 根据频率设置时间数组
     let times = [""];
     if (frequency.includes("两次")) {
-      times = ["", ""];
+      times = ["08:00", "20:00"];
     } else if (frequency.includes("三次")) {
-      times = ["", "", ""];
+      times = ["08:00", "13:00", "20:00"];
     } else if (frequency.includes("四次")) {
-      times = ["", "", "", ""];
+      times = ["08:00", "12:00", "18:00", "22:00"];
+    } else if (frequency.includes("每日一次")) {
+      times = ["08:00"];
+    } else if (frequency.includes("按需")) {
+      times = [];
     }
 
     this.setData({
@@ -821,7 +860,22 @@ Page({
       return;
     }
 
-    const validTimes = medication.times.filter((time) => time);
+    let validTimes = (medication.times || []).filter((time) => time);
+    if (
+      validTimes.length === 0 &&
+      typeof medication.frequency === "string" &&
+      medication.frequency.includes("每日")
+    ) {
+      if (medication.frequency.includes("两次")) {
+        validTimes = ["08:00", "20:00"];
+      } else if (medication.frequency.includes("三次")) {
+        validTimes = ["08:00", "13:00", "20:00"];
+      } else if (medication.frequency.includes("四次")) {
+        validTimes = ["08:00", "12:00", "18:00", "22:00"];
+      } else if (medication.frequency.includes("一次")) {
+        validTimes = ["08:00"];
+      }
+    }
     const today = new Date().toISOString().split("T")[0];
     const startDate = medication.startDate || today;
     const endDate =
@@ -900,7 +954,7 @@ Page({
       await addMedicationRemindersToMedication(
         selectedMed.id,
         payload,
-        this.getUserId()
+        this.getUserId(),
       );
 
       wx.showToast({

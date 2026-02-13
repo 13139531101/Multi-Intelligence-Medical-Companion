@@ -32,6 +32,15 @@ services:
       - DATABASE_URL=${DATABASE_URL:-postgresql://pha:pha_pass@postgres:5432/personal_health_assistant}
       - MEMORY_DATABASE_URL=${MEMORY_DATABASE_URL:-postgresql://pha:pha_pass@postgres:5432/personal_health_assistant}
       - A2A_CURRENT_USER_ID=${A2A_CURRENT_USER_ID:-111}
+      - SPARK_APP_ID=${SPARK_APP_ID:-}
+      - SPARK_API_KEY=${SPARK_API_KEY:-}
+      - SPARK_API_SECRET=${SPARK_API_SECRET:-}
+      - SPARK_API_URL=${SPARK_API_URL:-}
+      - SPARK_API_DOMAIN=${SPARK_API_DOMAIN:-}
+      - SPARK_API_PASSWORD=${SPARK_API_PASSWORD:-}
+      - SPARK_HTTP_URL=${SPARK_HTTP_URL:-}
+      - SPARK_MODEL=${SPARK_MODEL:-}
+      - SPARK_TIMEOUT_SECONDS=${SPARK_TIMEOUT_SECONDS:-25}
     ports:
       - "10011:10011"
     healthcheck:

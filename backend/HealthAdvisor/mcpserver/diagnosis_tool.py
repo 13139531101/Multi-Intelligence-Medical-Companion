@@ -14,6 +14,34 @@ load_dotenv()
 # 创建 FastMCP 应用
 mcp = FastMCP("DiagnosisTool")
 
+def _call_spark_ws(prompt: str, timeout_seconds: float) -> str:
+    app_id = os.getenv("SPARK_APP_ID")
+    api_key = os.getenv("SPARK_API_KEY")
+    api_secret = os.getenv("SPARK_API_SECRET")
+    spark_url = os.getenv("SPARK_API_URL") or "wss://spark-api.xf-yun.com/v1/x1"
+    domain = os.getenv("SPARK_API_DOMAIN") or "spark-x"
+
+    if not (app_id and api_key and api_secret):
+        return "请求失败: 讯飞WS配置缺失，请检查 SPARK_APP_ID/SPARK_API_KEY/SPARK_API_SECRET"
+
+    try:
+        from .spark_client import call_spark
+    except Exception:
+        from spark_client import call_spark
+
+    try:
+        return call_spark(
+            prompt,
+            app_id,
+            api_key,
+            api_secret,
+            spark_url,
+            domain,
+            timeout_seconds=timeout_seconds,
+        )
+    except Exception as e:
+        return f"请求失败: {e}"
+
 def call_spark_medical_llm(prompt: str) -> str:
     """
     调用讯飞医疗大模型进行诊断分析
@@ -370,27 +398,23 @@ def ai_medical_diagnosis(symptoms: List[str] = None, patient_info: Dict[str, Any
         """
         
         # 调用讯飞医疗大模型
-        app_id = os.getenv('SPARK_APP_ID')
-        api_key = os.getenv('SPARK_API_KEY')
-        api_secret = os.getenv('SPARK_API_SECRET')
-        spark_url = os.getenv('SPARK_API_URL', 'wss://spark-api.xf-yun.com/v1.1/chat')
-        domain = os.getenv('SPARK_API_DOMAIN', 'general')
+        timeout_seconds = float(os.getenv("SPARK_TIMEOUT_SECONDS", "25") or "25")
+        ai_response = _call_spark_ws(prompt, timeout_seconds=timeout_seconds)
 
-        if all([app_id, api_key, api_secret]):
-             try:
-                 from .spark_client import call_spark
-                 ai_response = call_spark(prompt, app_id, api_key, api_secret, spark_url, domain)
-             except ImportError:
-                 # Try relative import if running as script
-                 try:
-                     from spark_client import call_spark
-                     ai_response = call_spark(prompt, app_id, api_key, api_secret, spark_url, domain)
-                 except Exception as e:
-                     return f"导入 Spark 客户端失败: {e}"
-             except Exception as e:
-                 return f"讯飞医疗大模型调用失败: {str(e)}"
-        else:
-             return "讯飞医疗大模型配置缺失，请检查环境变量"
+        if isinstance(ai_response, str) and (
+            ai_response.startswith("请求失败") or ai_response.startswith("请求超时")
+        ):
+            return {
+                "status": "error",
+                "message": ai_response,
+                "input_data": {
+                    "symptoms": symptoms,
+                    "patient_info": patient_info,
+                    "medical_history": medical_history,
+                },
+                "analysis_time": datetime.now().isoformat(),
+                "disclaimer": "此AI分析仅供参考，不能替代专业医疗诊断。请及时就医获得专业诊疗。",
+            }
         
         return {
             "status": "success",

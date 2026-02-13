@@ -8,6 +8,7 @@ import os
 import logging
 from contextlib import contextmanager
 from typing import Dict, Any, Optional
+from urllib.parse import urlparse, urlunparse
 import psycopg
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
@@ -18,10 +19,34 @@ _db_pool: ConnectionPool | None = None
 _db_pool_init_attempted = False
 
 
+def _normalize_dsn(dsn: str) -> str:
+    dsn = (dsn or "").strip()
+    if not dsn:
+        return dsn
+    if os.name != "nt":
+        return dsn
+    try:
+        u = urlparse(dsn)
+        host = (u.hostname or "").strip().lower()
+        if host != "postgres":
+            return dsn
+        userinfo = ""
+        if u.username:
+            userinfo = u.username
+            if u.password:
+                userinfo = f"{userinfo}:{u.password}"
+            userinfo = f"{userinfo}@"
+        port = f":{u.port}" if u.port else ""
+        netloc = f"{userinfo}localhost{port}"
+        return urlunparse(u._replace(netloc=netloc))
+    except Exception:
+        return dsn
+
+
 def _build_db_dsn(cfg: Dict[str, Any]) -> str:
     dsn = os.getenv("DATABASE_URL")
     if dsn:
-        return dsn
+        return _normalize_dsn(dsn)
 
     user = cfg["user"]
     password = cfg.get("password") or ""
@@ -29,7 +54,7 @@ def _build_db_dsn(cfg: Dict[str, Any]) -> str:
     port = cfg["port"]
     dbname = cfg["dbname"]
     auth = f"{user}:{password}" if password else f"{user}"
-    return f"postgresql://{auth}@{host}:{port}/{dbname}"
+    return _normalize_dsn(f"postgresql://{auth}@{host}:{port}/{dbname}")
 
 
 def _get_db_pool(cfg: Dict[str, Any]) -> ConnectionPool | None:

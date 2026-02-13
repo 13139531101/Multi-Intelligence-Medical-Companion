@@ -118,6 +118,27 @@ CREATE TABLE IF NOT EXISTS file_attachments (
 CREATE INDEX IF NOT EXISTS idx_file_attachments_record ON file_attachments(record_id);
 
 -- RAG chunks (pgvector)
+CREATE TABLE IF NOT EXISTS rag_documents (
+    user_id TEXT NOT NULL,
+    source_type TEXT NOT NULL,
+    source_id TEXT NOT NULL,
+    record_type TEXT,
+    title TEXT,
+    full_text TEXT NOT NULL,
+    text_sha256 TEXT NOT NULL,
+    embedding_model TEXT NOT NULL,
+    embedding_dim INTEGER NOT NULL,
+    chunk_count INTEGER NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (user_id, source_type, source_id, embedding_model)
+);
+
+CREATE INDEX IF NOT EXISTS idx_rag_documents_user ON rag_documents(user_id);
+CREATE INDEX IF NOT EXISTS idx_rag_documents_user_source ON rag_documents(user_id, source_type);
+CREATE INDEX IF NOT EXISTS idx_rag_documents_source ON rag_documents(source_type, source_id);
+CREATE INDEX IF NOT EXISTS idx_rag_documents_updated ON rag_documents(updated_at);
+
 CREATE TABLE IF NOT EXISTS rag_chunks (
     id UUID PRIMARY KEY,
     user_id TEXT NOT NULL,
@@ -132,7 +153,7 @@ CREATE TABLE IF NOT EXISTS rag_chunks (
     embedding vector(384) NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE (source_type, source_id, chunk_index, embedding_model)
+    UNIQUE (user_id, source_type, source_id, chunk_index, embedding_model)
 );
 
 CREATE INDEX IF NOT EXISTS idx_rag_chunks_user ON rag_chunks(user_id);

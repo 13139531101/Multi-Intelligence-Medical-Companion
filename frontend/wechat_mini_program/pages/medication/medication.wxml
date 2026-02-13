@@ -28,35 +28,88 @@
       <text class="section-title">今日用药</text>
       <text class="section-date">{{todayDate}}</text>
     </view>
+
+    <view class="today-window-tabs">
+      <view class="today-window-tabs-left">
+        <view
+          class="today-window-tab {{todayWindowTab === 'today' ? 'active' : ''}}"
+          bindtap="switchTodayWindowTab"
+          data-tab="today"
+        >
+          今日用药
+        </view>
+        <view
+          class="today-window-tab {{todayWindowTab === 'reminders' ? 'active' : ''}}"
+          bindtap="switchTodayWindowTab"
+          data-tab="reminders"
+        >
+          用药提醒
+        </view>
+      </view>
+      <text
+        wx:if="{{todayWindowTab === 'reminders'}}"
+        class="today-window-action"
+        bindtap="manageReminders"
+      >
+        管理提醒
+      </text>
+    </view>
     
-    <scroll-view wx:if="{{todayMedications.length > 0}}" scroll-y enhanced show-scrollbar="{{false}}" class="medication-scroll">
-      <view class="medication-list">
-        <view wx:for="{{todayMedications}}" wx:key="id" class="medication-item {{item.status}}" bindtap="viewMedicationDetail" data-id="{{item.id}}">
-          <view class="medication-time">{{item.time}}</view>
-          <view class="medication-info">
-            <view class="medication-name">{{item.name}}</view>
-            <view class="medication-dose">{{item.dose}} {{item.unit}}</view>
-            <view class="medication-type">{{item.type}}</view>
-          </view>
-          <view class="medication-right">
-            <view class="medication-status">
-              <text wx:if="{{item.status === 'pending'}}" class="status-text pending">待服用</text>
-              <text wx:if="{{item.status === 'taken'}}" class="status-text taken">已服用</text>
-              <text wx:if="{{item.status === 'missed'}}" class="status-text missed">已错过</text>
+    <view wx:if="{{todayWindowTab === 'today'}}">
+      <scroll-view wx:if="{{todayMedications.length > 0}}" scroll-y enhanced show-scrollbar="{{false}}" class="medication-scroll">
+        <view class="medication-list">
+          <view wx:for="{{todayMedications}}" wx:key="id" class="medication-item {{item.status}}" bindtap="viewMedicationDetail" data-id="{{item.id}}">
+            <view class="medication-time">{{item.time}}</view>
+            <view class="medication-info">
+              <view class="medication-name">{{item.name}}</view>
+              <view class="medication-dose">{{item.dose}} {{item.unit}}</view>
+              <view class="medication-type">{{item.type}}</view>
             </view>
-            <view wx:if="{{item.status === 'pending'}}" class="medication-actions">
-              <button size="mini" class="action-btn take-btn" catchtap="takeMedication" data-id="{{item.id}}">服用</button>
-              <button size="mini" class="action-btn skip-btn" catchtap="skipMedication" data-id="{{item.id}}">跳过</button>
+            <view class="medication-right">
+              <view class="medication-status">
+                <text wx:if="{{item.status === 'pending'}}" class="status-text pending">待服用</text>
+                <text wx:if="{{item.status === 'taken'}}" class="status-text taken">已服用</text>
+                <text wx:if="{{item.status === 'missed'}}" class="status-text missed">已错过</text>
+              </view>
+              <view wx:if="{{item.status === 'pending'}}" class="medication-actions">
+                <button size="mini" class="action-btn take-btn" catchtap="takeMedication" data-id="{{item.id}}">服用</button>
+                <button size="mini" class="action-btn skip-btn" catchtap="skipMedication" data-id="{{item.id}}">跳过</button>
+              </view>
             </view>
           </view>
         </view>
-      </view>
-    </scroll-view>
+      </scroll-view>
 
-    <view wx:else class="empty-state">
-      <text class="empty-icon">💊</text>
-      <text class="empty-title">今日暂无用药安排</text>
-      <text class="empty-desc">点击上方"添加用药"开始记录</text>
+      <view wx:else class="empty-state">
+        <text class="empty-icon">💊</text>
+        <text class="empty-title">今日暂无用药安排</text>
+        <text class="empty-desc">点击上方"添加用药"开始记录</text>
+      </view>
+    </view>
+
+    <view wx:elif="{{todayWindowTab === 'reminders'}}">
+      <scroll-view wx:if="{{reminders.length > 0}}" scroll-y enhanced show-scrollbar="{{false}}" class="medication-scroll">
+        <view class="reminders-list">
+          <view wx:for="{{reminders}}" wx:key="id" class="reminder-item" bindtap="editReminder" data-id="{{item.id}}">
+            <view class="reminder-left">
+              <view class="reminder-time">{{item.time}}</view>
+              <view class="reminder-info">
+                <text class="reminder-medication">{{item.medicationName}}</text>
+                <text class="reminder-frequency">{{item.frequency}}</text>
+              </view>
+            </view>
+            <view class="reminder-switch">
+              <switch checked="{{item.enabled}}" bindchange="toggleReminder" data-id="{{item.id}}" catchtap="noop"/>
+            </view>
+          </view>
+        </view>
+      </scroll-view>
+
+      <view wx:else class="empty-state">
+        <text class="empty-icon">⏰</text>
+        <text class="empty-title">暂无提醒</text>
+        <text class="empty-desc">设置提醒不错过每次服药</text>
+      </view>
     </view>
   </view>
 
@@ -97,35 +150,6 @@
       <text class="empty-icon">📋</text>
       <text class="empty-title">暂无用药记录</text>
       <text class="empty-desc">开始记录您的用药情况</text>
-    </view>
-  </view>
-
-  <!-- 用药提醒 -->
-  <view class="reminders-section section-card">
-    <view class="section-header">
-      <text class="section-title">用药提醒</text>
-      <text class="section-more" bindtap="manageReminders">管理提醒</text>
-    </view>
-
-    <view wx:if="{{reminders.length > 0}}" class="reminders-list">
-      <view wx:for="{{reminders}}" wx:key="id" class="reminder-item" bindtap="editReminder" data-id="{{item.id}}">
-        <view class="reminder-left">
-          <view class="reminder-time">{{item.time}}</view>
-          <view class="reminder-info">
-            <text class="reminder-medication">{{item.medicationName}}</text>
-            <text class="reminder-frequency">{{item.frequency}}</text>
-          </view>
-        </view>
-        <view class="reminder-switch">
-          <switch checked="{{item.enabled}}" bindchange="toggleReminder" data-id="{{item.id}}" catchtap="noop"/>
-        </view>
-      </view>
-    </view>
-
-    <view wx:else class="empty-state">
-      <text class="empty-icon">⏰</text>
-      <text class="empty-title">暂无提醒</text>
-      <text class="empty-desc">设置提醒不错过每次服药</text>
     </view>
   </view>
 

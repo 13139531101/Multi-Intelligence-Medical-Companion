@@ -6,6 +6,7 @@ import os
 import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import Json
+from urllib.parse import urlparse, urlunparse
 
 # 创建 FastMCP 应用
 mcp = FastMCP("ReminderTool")
@@ -17,6 +18,34 @@ PG_DSN = (
     # 默认回退到容器网络中的 postgres 服务与项目数据库
     or "postgresql://pha:pha_pass@postgres:5432/personal_health_assistant"
 )
+
+
+def _normalize_pg_dsn(dsn: str) -> str:
+    dsn = (dsn or "").strip()
+    if not dsn:
+        return dsn
+    if os.name != "nt":
+        return dsn
+    try:
+        u = urlparse(dsn)
+        host = (u.hostname or "").strip().lower()
+        if host != "postgres":
+            return dsn
+        userinfo = ""
+        if u.username:
+            userinfo = u.username
+            if u.password:
+                userinfo = f"{userinfo}:{u.password}"
+            userinfo = f"{userinfo}@"
+        port = f":{u.port}" if u.port else ""
+        netloc = f"{userinfo}localhost{port}"
+        return urlunparse(u._replace(netloc=netloc))
+    except Exception:
+        return dsn
+
+
+PG_DSN = _normalize_pg_dsn(PG_DSN)
+
 
 def get_pg_conn():
     return psycopg.connect(PG_DSN, row_factory=dict_row)
