@@ -150,6 +150,55 @@ services:
       timeout: 3s
       retries: 12
 
+  admin_backend:
+    build:
+      context: backend
+      dockerfile: Dockerfile.admin
+    environment:
+      - PORT=8000
+      - HOST=0.0.0.0
+      - PYTHONPATH=/app
+      # 复用已有的数据库配置
+      - DATABASE_URL=${DATABASE_URL:-postgresql://pha:pha_pass@postgres:5432/personal_health_assistant}
+      - DB_NAME=${POSTGRES_DB:-personal_health_assistant}
+      - DB_HOST=${DB_HOST:-postgres}
+      - DB_PORT=${DB_PORT:-5432}
+      - DB_USER=${DB_USER:-pha}
+      - DB_PASSWORD=${DB_PASSWORD:-pha_pass}
+      - MEMORY_DATABASE_URL=${MEMORY_DATABASE_URL:-postgresql://pha:pha_pass@postgres:5432/personal_health_assistant}
+      - A2A_CURRENT_USER_ID=${A2A_CURRENT_USER_ID:-111}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-dev-secret}
+      - JWT_ALGORITHM=${JWT_ALGORITHM:-HS256}
+      - ADMIN_TOKEN=${ADMIN_TOKEN:-admin123}
+      # OCR & LLM 配置
+      - OCR_PROVIDER=${OCR_PROVIDER:-local}
+      - ALIYUN_OCR_VERSION=${ALIYUN_OCR_VERSION}
+      - ALIYUN_ACCESS_KEY_ID=${ALIYUN_ACCESS_KEY_ID}
+      - ALIYUN_ACCESS_KEY_SECRET=${ALIYUN_ACCESS_KEY_SECRET}
+      - ALIYUN_REGION_ID=${ALIYUN_REGION_ID}
+      - ALIYUN_OCR_ENDPOINT=${ALIYUN_OCR_ENDPOINT}
+      - ALIYUN_OCR_TYPE=${ALIYUN_OCR_TYPE}
+      - USE_LLM_SUMMARY=${USE_LLM_SUMMARY:-false}
+      - LLM_BASE_URL=${LLM_BASE_URL:-}
+      - LLM_MODEL=${LLM_MODEL:-}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend/uploads:/app/uploads
+    depends_on:
+      - postgres
+
+  admin_frontend:
+    build:
+      context: frontend/admin-dashboard
+      dockerfile: Dockerfile
+    ports:
+      - "3002:80"
+    depends_on:
+      - admin_backend
+
   hostapi:
     build:
       context: .

@@ -1,0 +1,36 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-slate-950 text-cyan-50;
+    font-family: 'Courier New', Courier, monospace; /* Tech feel */
+  }
+}
+
+.glass-panel {
+  @apply bg-slate-900/50 backdrop-blur-md border border-cyan-500/30 shadow-[0_0_15px_rgba(6,182,212,0.1)];
+}
+
+.neon-text {
+  @apply text-cyan-400 drop-shadow-[0_0_5px_rgba(34,211,238,0.8)];
+}
+
+.neon-border {
+  @apply border border-cyan-500/50 shadow-[0_0_10px_rgba(6,182,212,0.3)];
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+}
+::-webkit-scrollbar-track {
+  @apply bg-slate-900;
+}
+::-webkit-scrollbar-thumb {
+  @apply bg-cyan-900/50 rounded;
+}
+::-webkit-scrollbar-thumb:hover {
+  @apply bg-cyan-700;
+}

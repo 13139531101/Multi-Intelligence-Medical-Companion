@@ -1,7 +1,6 @@
 from fastapi import (
     FastAPI,
     HTTPException,
-    Depends,
     UploadFile,
     File,
     Form,
@@ -9,10 +8,10 @@ from fastapi import (
     Request,
 )
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from enum import Enum
 import json
 import os
@@ -24,6 +23,9 @@ import logging
 from contextlib import contextmanager
 import base64
 import mimetypes
+import time
+from urllib.parse import urlparse
+import requests
 import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import Json
@@ -33,9 +35,9 @@ import re
 import anyio
 
 try:
-    from embedding_manager import EmbeddingService
+    import psutil  # type: ignore
 except Exception:
-    EmbeddingService = None  # type: ignore
+    psutil = None  # type: ignore
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
@@ -60,14 +62,14 @@ try:
         )
     except Exception:
         extract_test_results = None  # 非必需
-    from HealthRecordsManager.memory_service import health_records_memory_service
 except Exception as _import_err:
     logger.warning(f"可选OCR/记忆模块加载失败，将跳过OCR与入库: {_import_err}")
     extract_text_from_image = None
     validate_medical_document = None
     extract_medical_info = None
     extract_test_results = None
-    health_records_memory_service = None
+
+health_records_memory_service = None
 
 # 独立：导入HRM存储工具（不受记忆系统导入失败影响）
 try:
@@ -82,6 +84,36 @@ try:
 except Exception as _hrm_err:
     logger.warning(f"HRM存储工具加载失败，将跳过双写: {_hrm_err}")
     HRM_SAVE_RECORD = None  # type: ignore
+
+
+_health_records_memory_import_attempted = False
+
+
+def _get_health_records_memory_service():
+    global health_records_memory_service, _health_records_memory_import_attempted
+    if health_records_memory_service is not None:
+        return health_records_memory_service
+    if _health_records_memory_import_attempted:
+        return None
+    _health_records_memory_import_attempted = True
+    try:
+        enable_memory_flag = os.getenv("ENABLE_AGENT_MEMORY", "true").lower()
+        skip_memory_init = os.getenv("SKIP_MEMORY_INIT", "0") == "1"
+        if enable_memory_flag not in ("true", "1") or skip_memory_init:
+            return None
+    except Exception:
+        pass
+    try:
+        from HealthRecordsManager.memory_service import (
+            health_records_memory_service as _svc,
+        )
+
+        health_records_memory_service = _svc
+        return health_records_memory_service
+    except Exception as e:
+        logger.warning(f"记忆服务导入失败，将以无记忆模式运行: {e}")
+        health_records_memory_service = None
+        return None
 
 # 创建FastAPI应用
 app = FastAPI(
@@ -333,7 +365,9 @@ def _get_embedding_service():
     global _embedding_service
     if _embedding_service is not None:
         return _embedding_service
-    if EmbeddingService is None:
+    try:
+        from embedding_manager import EmbeddingService  # type: ignore
+    except Exception:
         _embedding_service = None
         return _embedding_service
     try:
@@ -2095,33 +2129,22 @@ def _save_to_hrm(
 
 
 # API路由
-@app.on_event("startup")
-async def startup_event():
-    """应用启动时初始化数据库并预热可选工具（OCR与记忆系统）"""
-    init_database()
-
-    # 预热：在启动阶段加载 OCR 与记忆系统，避免首次图片上传时阻塞
+async def _warmup_optional_tools() -> None:
     try:
-        # 初始化记忆系统并预热嵌入模型
-        if (
-            "health_records_memory_service" in globals()
-            and health_records_memory_service
-        ):
+        _get_health_records_memory_service()
+        if health_records_memory_service:
             try:
                 await health_records_memory_service.initialize()
                 ms = getattr(health_records_memory_service, "memory_system", None)
                 if ms and getattr(ms, "embedding_service", None):
-                    # 生成一次小样本嵌入以触发模型加载
                     try:
                         ms.embedding_service.generate_embedding("warmup for embeddings")
                         logger.info("记忆嵌入模型预热完成")
                     except Exception as e:
                         logger.warning(f"记忆嵌入模型预热异常: {e}")
             except Exception as e:
-                logger.warning(f"记忆系统初始化/预热失败，将继续启动: {e}")
+                logger.warning(f"记忆系统初始化/预热失败，将跳过: {e}")
 
-        # 预热 OCR 工具与文档验证器
-        # 使用 1x1 PNG 的 base64 触发一次轻量调用，避免首次上传图片时冷启动
         tiny_png_b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII="
         if "extract_text_from_image" in globals() and extract_text_from_image:
             try:
@@ -2144,7 +2167,21 @@ async def startup_event():
             except Exception as e:
                 logger.warning(f"医疗文档验证器预热异常: {e}")
     except Exception as e:
-        logger.warning(f"工具预热过程出现异常（忽略，继续启动）: {e}")
+        logger.warning(f"工具预热过程出现异常（忽略）: {e}")
+
+
+@app.on_event("startup")
+async def startup_event():
+    """应用启动时初始化数据库并预热可选工具（OCR与记忆系统）"""
+    try:
+        init_database()
+    except Exception as e:
+        logger.error(f"数据库初始化失败（将继续启动，部分功能不可用）: {e}")
+
+    try:
+        asyncio.create_task(_warmup_optional_tools())
+    except Exception as e:
+        logger.warning(f"启动预热任务失败（忽略）: {e}")
 
 
 def _resolve_user_id(request: Request | None, user_id: str | None) -> str:
@@ -2373,13 +2410,133 @@ _ADMIN_TOKEN = (os.getenv("ADMIN_TOKEN") or "").strip()
 
 
 def _require_admin(request: Request | None) -> None:
-    if not _ADMIN_TOKEN:
-        raise HTTPException(status_code=403, detail="ADMIN_TOKEN未配置")
     if request is None:
         raise HTTPException(status_code=403, detail="缺少请求上下文")
+    if not _ADMIN_TOKEN:
+        try:
+            host = getattr(getattr(request, "client", None), "host", None)
+            if host in ("127.0.0.1", "::1", "localhost"):
+                return
+        except Exception:
+            pass
+        raise HTTPException(status_code=403, detail="ADMIN_TOKEN未配置")
     token = request.headers.get("X-Admin-Token") or request.headers.get("x-admin-token")
     if not isinstance(token, str) or token.strip() != _ADMIN_TOKEN:
         raise HTTPException(status_code=403, detail="无权限")
+
+
+def _normalize_http_url(url: str) -> str:
+    u = (url or "").strip()
+    if not u:
+        return ""
+    p = urlparse(u)
+    if not p.scheme:
+        return "http://" + u
+    return u
+
+
+class MonitorTarget(BaseModel):
+    name: str
+    url: str
+    path: str = "/"
+
+
+class MonitorCheckRequest(BaseModel):
+    targets: List[MonitorTarget] = Field(default_factory=list)
+    timeout: float = Field(default=1.5, ge=0.1, le=10)
+
+
+def _probe_target(target: MonitorTarget, timeout: float) -> Dict[str, Any]:
+    name = (target.name or "").strip() or "service"
+    base = _normalize_http_url(target.url)
+    path = (target.path or "/").strip() or "/"
+    if not base:
+        return {"name": name, "ok": False, "error": "empty_url"}
+    url = base.rstrip("/") + (path if path.startswith("/") else "/" + path)
+
+    t0 = time.perf_counter()
+    try:
+        resp = requests.get(url, timeout=timeout)
+        dt_ms = (time.perf_counter() - t0) * 1000.0
+        return {
+            "name": name,
+            "url": url,
+            "ok": resp.status_code < 400,
+            "status_code": int(resp.status_code),
+            "latency_ms": round(dt_ms, 2),
+        }
+    except Exception as e:
+        dt_ms = (time.perf_counter() - t0) * 1000.0
+        return {
+            "name": name,
+            "url": url,
+            "ok": False,
+            "latency_ms": round(dt_ms, 2),
+            "error": str(e),
+        }
+
+
+@app.get("/api/admin/monitor/summary")
+async def admin_monitor_summary(request: Request = None):
+    _require_admin(request)
+
+    db_ok = False
+    db_error = ""
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT 1")
+                db_ok = True
+    except Exception as e:
+        db_ok = False
+        db_error = str(e)
+
+    es = _get_embedding_service()
+    embedding = {
+        "available": es is not None,
+        "model": getattr(es, "model_name", None) if es is not None else None,
+        "dimension": getattr(es, "dimension", None) if es is not None else None,
+    }
+
+    system: Dict[str, Any] = {"available": psutil is not None}
+    if psutil is not None:
+        try:
+            vm = psutil.virtual_memory()
+            du = psutil.disk_usage(os.getcwd())
+            system.update(
+                {
+                    "cpu_percent": float(psutil.cpu_percent(interval=0.05)),
+                    "mem_percent": float(vm.percent),
+                    "mem_used": int(vm.used),
+                    "mem_total": int(vm.total),
+                    "disk_percent": float(du.percent),
+                    "disk_used": int(du.used),
+                    "disk_total": int(du.total),
+                }
+            )
+        except Exception:
+            pass
+
+    return {
+        "success": True,
+        "timestamp": datetime.now().isoformat(),
+        "db": {"ok": db_ok, "error": db_error},
+        "embedding": embedding,
+        "system": system,
+    }
+
+
+@app.post("/api/admin/monitor/check")
+async def admin_monitor_check(payload: MonitorCheckRequest, request: Request = None):
+    _require_admin(request)
+
+    targets = payload.targets or []
+    timeout = float(payload.timeout or 1.5)
+    results: List[Dict[str, Any]] = []
+    for t in targets:
+        results.append(await anyio.to_thread.run_sync(_probe_target, t, timeout))
+    ok_count = sum(1 for r in results if r.get("ok"))
+    return {"success": True, "count": len(results), "ok": ok_count, "items": results}
 
 
 class AdminRAGDocsListRequest(BaseModel):
@@ -2958,6 +3115,63 @@ async def admin_import_medical_kb(payload: AdminMedicalKBImportRequest, request:
         "inserted_chunks": total_chunks,
         "model": getattr(es, "model_name", None),
         "embedding_dim": getattr(es, "dimension", None),
+    }
+
+
+@app.delete("/api/admin/medical-kb/docs/{doc_id}")
+async def admin_delete_medical_kb_doc(
+    doc_id: str,
+    global_kb: bool = Query(True),
+    user_id: Optional[str] = Query(None),
+    request: Request = None,
+):
+    _require_admin(request)
+
+    did = (doc_id or "").strip()
+    if not did:
+        raise HTTPException(status_code=400, detail="doc_id不能为空")
+
+    if global_kb:
+        kb_uid = _GLOBAL_KB_USER_ID
+    else:
+        kb_uid = (user_id or "").strip()
+        if not kb_uid:
+            raise HTTPException(status_code=400, detail="global_kb=false时必须提供user_id")
+
+    deleted = 0
+    with get_db_connection() as conn:
+        with conn.cursor() as cursor:
+            try:
+                _ensure_rag_schema(cursor)
+                cursor.execute(
+                    """
+                    DELETE FROM rag_documents
+                    WHERE user_id = %s AND source_type = 'medical_kb' AND source_id = %s
+                    """,
+                    (kb_uid, did),
+                )
+                cursor.execute(
+                    """
+                    DELETE FROM rag_chunks
+                    WHERE user_id = %s AND source_type = 'medical_kb' AND source_id = %s
+                    """,
+                    (kb_uid, did),
+                )
+                deleted = int(cursor.rowcount or 0)
+                conn.commit()
+            except Exception as e:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                raise HTTPException(status_code=500, detail=f"删除知识库文档失败: {e}")
+
+    return {
+        "success": True,
+        "doc_id": did,
+        "user_id": kb_uid,
+        "global_kb": bool(global_kb),
+        "deleted_chunks": deleted,
     }
 
 
@@ -6893,6 +7107,349 @@ async def get_file_attachment(file_id: str):
     except Exception as e:
         logger.error(f"获取附件失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+_ADMIN_PAGE_HTML = """
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>后台管理</title>
+    <style>
+      :root { color-scheme: light dark; }
+      body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji"; margin: 16px; }
+      h1 { margin: 0 0 12px 0; font-size: 18px; }
+      h2 { margin: 18px 0 8px 0; font-size: 16px; }
+      .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+      input[type="text"], input[type="password"], textarea { padding: 8px; border: 1px solid #6666; border-radius: 6px; min-width: 240px; }
+      textarea { width: min(980px, 100%); height: 140px; }
+      button { padding: 8px 10px; border: 1px solid #6666; border-radius: 8px; cursor: pointer; }
+      table { border-collapse: collapse; width: 100%; max-width: 1200px; }
+      td, th { border: 1px solid #6663; padding: 8px; vertical-align: top; }
+      th { text-align: left; }
+      .muted { opacity: 0.75; }
+      .ok { color: #0a7; }
+      .bad { color: #d33; }
+      .box { border: 1px solid #6663; border-radius: 10px; padding: 12px; max-width: 1200px; }
+      .grid { display: grid; grid-template-columns: 1fr; gap: 12px; }
+      @media (min-width: 1024px) { .grid { grid-template-columns: 1fr 1fr; } }
+      pre { white-space: pre-wrap; word-break: break-word; }
+    </style>
+  </head>
+  <body>
+    <h1>后台管理</h1>
+
+    <div class="box">
+      <div class="row">
+        <label>ADMIN_TOKEN</label>
+        <input id="adminToken" type="password" placeholder="填入 ADMIN_TOKEN" />
+        <button id="saveTokenBtn">保存</button>
+        <span class="muted">请求会带 X-Admin-Token</span>
+      </div>
+    </div>
+
+    <h2>监控</h2>
+    <div class="box grid">
+      <div>
+        <div class="row">
+          <button id="refreshSummaryBtn">刷新概览</button>
+          <button id="runChecksBtn">检查服务</button>
+          <span id="summaryStatus" class="muted"></span>
+        </div>
+        <pre id="summaryJson" class="muted"></pre>
+      </div>
+      <div>
+        <div class="row">
+          <span class="muted">Targets（本地保存）</span>
+          <button id="addTargetBtn">新增</button>
+          <button id="resetTargetsBtn">重置默认</button>
+        </div>
+        <table>
+          <thead>
+            <tr><th>名称</th><th>URL</th><th>Path</th><th></th></tr>
+          </thead>
+          <tbody id="targetsTbody"></tbody>
+        </table>
+        <pre id="checksJson" class="muted"></pre>
+      </div>
+    </div>
+
+    <h2>医疗 RAG</h2>
+    <div class="box">
+      <div class="row">
+        <button id="listDocsBtn">列出文档</button>
+        <input id="docFilter" type="text" placeholder="过滤（source_id/title）" />
+        <button id="searchBtn">检索</button>
+        <input id="searchQuery" type="text" placeholder="查询（如 头痛/发热/阿司匹林）" />
+      </div>
+      <div class="row muted">
+        <span>默认：global_kb(__global__) + source_type=medical_kb</span>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>doc_id</th><th>title</th><th>type</th><th>chunks</th><th>updated</th><th></th>
+          </tr>
+        </thead>
+        <tbody id="docsTbody"></tbody>
+      </table>
+      <pre id="searchJson" class="muted"></pre>
+    </div>
+
+    <h2>入库</h2>
+    <div class="box">
+      <div class="row">
+        <input id="ingestDocId" type="text" placeholder="doc_id（可空，自动生成）" />
+        <input id="ingestTitle" type="text" placeholder="title" />
+        <input id="ingestType" type="text" placeholder="doc_type（guideline/drug_label/...）" />
+        <button id="ingestBtn">入库</button>
+      </div>
+      <textarea id="ingestContent" placeholder="粘贴指南/说明书正文（建议包含章节标题）"></textarea>
+      <pre id="ingestJson" class="muted"></pre>
+    </div>
+
+    <script>
+      const LS_TOKEN = "adminToken";
+      const LS_TARGETS = "monitorTargets";
+
+      function getToken() {
+        return (localStorage.getItem(LS_TOKEN) || "").trim();
+      }
+      function setToken(v) {
+        localStorage.setItem(LS_TOKEN, (v || "").trim());
+      }
+      function headers() {
+        const t = getToken();
+        return t ? { "Content-Type": "application/json", "X-Admin-Token": t } : { "Content-Type": "application/json" };
+      }
+      function defaultTargets() {
+        const origin = location.origin;
+        return [
+          { name: "health-api", url: origin, path: "/api/health-records/status" },
+          { name: "a2a-health-records", url: "http://localhost:10010", path: "/.well-known/agent.json" },
+          { name: "a2a-health-advisor", url: "http://localhost:10011", path: "/.well-known/agent.json" },
+          { name: "a2a-medication", url: "http://localhost:10012", path: "/.well-known/agent.json" },
+          { name: "a2a-visit-summary", url: "http://localhost:10013", path: "/.well-known/agent.json" },
+          { name: "a2a-rag", url: "http://localhost:10005", path: "/.well-known/agent.json" }
+        ];
+      }
+      function loadTargets() {
+        try {
+          const raw = localStorage.getItem(LS_TARGETS);
+          if (!raw) return defaultTargets();
+          const t = JSON.parse(raw);
+          if (!Array.isArray(t) || t.length === 0) return defaultTargets();
+          return t;
+        } catch {
+          return defaultTargets();
+        }
+      }
+      function saveTargets(t) {
+        localStorage.setItem(LS_TARGETS, JSON.stringify(t || []));
+      }
+      function renderTargets() {
+        const tbody = document.getElementById("targetsTbody");
+        tbody.innerHTML = "";
+        const t = loadTargets();
+        t.forEach((it, idx) => {
+          const tr = document.createElement("tr");
+          tr.innerHTML = `
+            <td><input data-k="name" data-i="${idx}" type="text" value="${(it.name||"").replaceAll('"','&quot;')}" /></td>
+            <td><input data-k="url" data-i="${idx}" type="text" value="${(it.url||"").replaceAll('"','&quot;')}" /></td>
+            <td><input data-k="path" data-i="${idx}" type="text" value="${(it.path||"").replaceAll('"','&quot;')}" /></td>
+            <td><button data-del="${idx}">删除</button></td>
+          `;
+          tbody.appendChild(tr);
+        });
+
+        tbody.querySelectorAll("input").forEach((inp) => {
+          inp.addEventListener("change", (e) => {
+            const el = e.target;
+            const i = parseInt(el.getAttribute("data-i"), 10);
+            const k = el.getAttribute("data-k");
+            const cur = loadTargets();
+            cur[i] = { ...cur[i], [k]: el.value };
+            saveTargets(cur);
+          });
+        });
+        tbody.querySelectorAll("button[data-del]").forEach((btn) => {
+          btn.addEventListener("click", () => {
+            const i = parseInt(btn.getAttribute("data-del"), 10);
+            const cur = loadTargets();
+            cur.splice(i, 1);
+            saveTargets(cur);
+            renderTargets();
+          });
+        });
+      }
+
+      async function fetchJson(url, opts) {
+        const resp = await fetch(url, opts);
+        const text = await resp.text();
+        let data = null;
+        try { data = JSON.parse(text); } catch { data = { raw: text }; }
+        if (!resp.ok) {
+          throw new Error((data && (data.detail || data.error)) ? (data.detail || data.error) : ("HTTP " + resp.status));
+        }
+        return data;
+      }
+
+      async function refreshSummary() {
+        const el = document.getElementById("summaryStatus");
+        const out = document.getElementById("summaryJson");
+        el.textContent = "加载中...";
+        try {
+          const data = await fetchJson("/api/admin/monitor/summary", { method: "GET", headers: headers() });
+          out.textContent = JSON.stringify(data, null, 2);
+          el.textContent = "OK";
+          el.className = "ok";
+        } catch (e) {
+          out.textContent = String(e);
+          el.textContent = "ERROR";
+          el.className = "bad";
+        }
+      }
+
+      async function runChecks() {
+        const out = document.getElementById("checksJson");
+        out.textContent = "检查中...";
+        try {
+          const data = await fetchJson("/api/admin/monitor/check", {
+            method: "POST",
+            headers: headers(),
+            body: JSON.stringify({ targets: loadTargets(), timeout: 2.0 })
+          });
+          out.textContent = JSON.stringify(data, null, 2);
+        } catch (e) {
+          out.textContent = String(e);
+        }
+      }
+
+      async function listDocs() {
+        const out = document.getElementById("searchJson");
+        const tbody = document.getElementById("docsTbody");
+        const q = (document.getElementById("docFilter").value || "").trim();
+        out.textContent = "";
+        tbody.innerHTML = "";
+        try {
+          const data = await fetchJson("/api/admin/rag/docs", {
+            method: "POST",
+            headers: headers(),
+            body: JSON.stringify({ source_type: "medical_kb", q, limit: 50, offset: 0 })
+          });
+          (data.items || []).forEach((it) => {
+            const tr = document.createElement("tr");
+            const docId = it.source_id || "";
+            const title = it.title || "";
+            const rt = it.record_type || "";
+            const chunks = it.chunk_count || 0;
+            const updated = (it.updated_at || "").toString().slice(0, 19).replace("T"," ");
+            tr.innerHTML = `
+              <td>${docId}</td>
+              <td>${title}</td>
+              <td>${rt}</td>
+              <td>${chunks}</td>
+              <td>${updated}</td>
+              <td>
+                <button data-del="${docId}">删除</button>
+              </td>
+            `;
+            tbody.appendChild(tr);
+          });
+          tbody.querySelectorAll("button[data-del]").forEach((btn) => {
+            btn.addEventListener("click", async () => {
+              const docId = btn.getAttribute("data-del");
+              if (!docId) return;
+              if (!confirm("确认删除 doc_id=" + docId + " ?")) return;
+              try {
+                const data = await fetchJson("/api/admin/medical-kb/docs/" + encodeURIComponent(docId) + "?global_kb=true", {
+                  method: "DELETE",
+                  headers: headers()
+                });
+                out.textContent = JSON.stringify(data, null, 2);
+                await listDocs();
+              } catch (e) {
+                out.textContent = String(e);
+              }
+            });
+          });
+        } catch (e) {
+          out.textContent = String(e);
+        }
+      }
+
+      async function ragSearch() {
+        const out = document.getElementById("searchJson");
+        const q = (document.getElementById("searchQuery").value || "").trim();
+        if (!q) { out.textContent = "请输入查询"; return; }
+        out.textContent = "查询中...";
+        try {
+          const data = await fetchJson("/api/admin/rag/search", {
+            method: "POST",
+            headers: headers(),
+            body: JSON.stringify({ query: q, source_types: ["medical_kb"], include_global: true, limit: 10 })
+          });
+          out.textContent = JSON.stringify(data, null, 2);
+        } catch (e) {
+          out.textContent = String(e);
+        }
+      }
+
+      async function ingest() {
+        const out = document.getElementById("ingestJson");
+        const doc_id = (document.getElementById("ingestDocId").value || "").trim();
+        const title = (document.getElementById("ingestTitle").value || "").trim();
+        const doc_type = (document.getElementById("ingestType").value || "guideline").trim();
+        const content = (document.getElementById("ingestContent").value || "").trim();
+        if (!title || !content) { out.textContent = "title/content 不能为空"; return; }
+        out.textContent = "入库中...";
+        try {
+          const payload = { global_kb: true, docs: [{ doc_id: doc_id || null, doc_type, title, content }] };
+          const data = await fetchJson("/api/admin/medical-kb/import", {
+            method: "POST",
+            headers: headers(),
+            body: JSON.stringify(payload)
+          });
+          out.textContent = JSON.stringify(data, null, 2);
+          await listDocs();
+        } catch (e) {
+          out.textContent = String(e);
+        }
+      }
+
+      document.getElementById("saveTokenBtn").addEventListener("click", () => {
+        setToken(document.getElementById("adminToken").value);
+        document.getElementById("adminToken").value = getToken();
+      });
+      document.getElementById("refreshSummaryBtn").addEventListener("click", refreshSummary);
+      document.getElementById("runChecksBtn").addEventListener("click", runChecks);
+      document.getElementById("listDocsBtn").addEventListener("click", listDocs);
+      document.getElementById("searchBtn").addEventListener("click", ragSearch);
+      document.getElementById("ingestBtn").addEventListener("click", ingest);
+      document.getElementById("addTargetBtn").addEventListener("click", () => {
+        const cur = loadTargets();
+        cur.push({ name: "service", url: "http://localhost:8000", path: "/" });
+        saveTargets(cur);
+        renderTargets();
+      });
+      document.getElementById("resetTargetsBtn").addEventListener("click", () => {
+        saveTargets(defaultTargets());
+        renderTargets();
+      });
+
+      document.getElementById("adminToken").value = getToken();
+      renderTargets();
+      refreshSummary();
+    </script>
+  </body>
+</html>
+""".strip()
+
+
+@app.get("/admin")
+async def admin_page():
+    return HTMLResponse(_ADMIN_PAGE_HTML)
 
 
 if __name__ == "__main__":
