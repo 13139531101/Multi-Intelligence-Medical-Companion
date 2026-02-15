@@ -7,6 +7,21 @@ import json
 logger = logging.getLogger(__name__)
 
 
+def _load_dotenv() -> None:
+    try:
+        from dotenv import load_dotenv  # type: ignore
+    except Exception:
+        return
+
+    try:
+        load_dotenv(override=False)
+    except Exception:
+        return
+
+
+_load_dotenv()
+
+
 class EmbeddingService:
     """嵌入服务 - 负责生成和管理文本向量嵌入"""
 
@@ -22,6 +37,22 @@ class EmbeddingService:
         3072,
     }
 
+    _REMOTE_PROVIDERS = {
+        "remote",
+        "dashscope",
+        "qwen",
+        "bailian",
+        "baidu",
+        "openai",
+        "azure",
+        "bytedance",
+        "doubao",
+        "deepseek",
+        "vllm",
+        "lmstudio",
+        "zhipu",
+    }
+
     def __init__(self, model_name: str = None):
         provider_env = os.getenv("EMBEDDING_PROVIDER")
         if not provider_env:
@@ -29,6 +60,8 @@ class EmbeddingService:
                 os.getenv("DASHSCOPE_API_KEY") or ""
             ).strip():
                 provider_env = "dashscope"
+            elif (os.getenv("OPENAI_API_KEY") or "").strip():
+                provider_env = "openai"
             else:
                 provider_env = "local"
         self.provider = provider_env.strip().lower()
@@ -57,7 +90,7 @@ class EmbeddingService:
     def _load_model(self):
         """加载嵌入模型"""
         provider = (self.provider or "local").strip().lower()
-        if provider in {"dashscope", "qwen", "remote"}:
+        if provider in self._REMOTE_PROVIDERS:
             try:
                 self._load_remote_model()
                 return
@@ -97,6 +130,7 @@ class EmbeddingService:
             self.dimension = 384  # 默认维度
 
     def _load_remote_model(self):
+        provider = (self.provider or "").strip().lower()
         base_url = (os.getenv("EMBEDDING_API_BASE") or "").strip()
         api_key = (os.getenv("EMBEDDING_API_KEY") or "").strip()
 
@@ -106,9 +140,22 @@ class EmbeddingService:
             api_key = (os.getenv("DASHSCOPE_API_KEY") or "").strip()
 
         if not base_url:
-            base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+            base_url = (
+                (os.getenv("OPENAI_BASE_URL") or "").strip()
+                or (os.getenv("OPENAI_API_BASE") or "").strip()
+            )
         if not api_key:
-            raise RuntimeError("缺少EMBEDDING_API_KEY/DASHSCOPE_API_KEY")
+            api_key = (os.getenv("OPENAI_API_KEY") or "").strip()
+
+        if not base_url:
+            if provider == "openai":
+                base_url = "https://api.openai.com/v1"
+            else:
+                base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        if not api_key:
+            raise RuntimeError(
+                "缺少EMBEDDING_API_KEY/DASHSCOPE_API_KEY/OPENAI_API_KEY"
+            )
 
         desired_dim = (
             os.getenv("EMBEDDING_DIM") or os.getenv("RAG_VECTOR_DIM") or "384"
@@ -118,7 +165,6 @@ class EmbeddingService:
         except Exception:
             desired_dim_int = 384
 
-        provider = (self.provider or "").strip().lower()
         if provider in {"dashscope", "qwen"} and not self.model_name:
             self.model_name = "text-embedding-v4"
         if provider in {"dashscope", "qwen"} and self.model_name in {
@@ -199,7 +245,7 @@ class EmbeddingService:
 
         try:
             provider = (self.provider or "").strip().lower()
-            if provider in {"dashscope", "qwen", "remote"}:
+            if provider in self._REMOTE_PROVIDERS:
                 out = self._remote_embeddings([text])
                 return out[0] if out else None
 
@@ -230,7 +276,7 @@ class EmbeddingService:
 
         try:
             provider = (self.provider or "").strip().lower()
-            if provider in {"dashscope", "qwen", "remote"}:
+            if provider in self._REMOTE_PROVIDERS:
                 return self._remote_embeddings(texts)
 
             if not self.model:
@@ -281,7 +327,7 @@ class EmbeddingService:
             similarity = dot_product / (norm1 * norm2)
 
             # 确保结果在0-1范围内
-            return max(0.0, min(1.0, (similarity + 1) / 2))
+            return max(0.0, min(1.0, similarity))
 
         except Exception as e:
             logger.error(f"计算相似度失败: {e}")

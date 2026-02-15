@@ -15,6 +15,29 @@ from psycopg_pool import ConnectionPool
 
 logger = logging.getLogger(__name__)
 
+
+def _load_dotenv() -> None:
+    try:
+        from dotenv import load_dotenv  # type: ignore
+    except Exception:
+        return
+
+    base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    candidates = [
+        os.path.join(os.path.dirname(__file__), ".env"),
+        os.path.join(base_dir, ".env"),
+    ]
+    loaded = False
+    for path in candidates:
+        if os.path.exists(path):
+            load_dotenv(dotenv_path=path, override=False)
+            loaded = True
+    if not loaded:
+        load_dotenv(override=False)
+
+
+_load_dotenv()
+
 _db_pool: ConnectionPool | None = None
 _db_pool_init_attempted = False
 
@@ -67,12 +90,24 @@ def _get_db_pool(cfg: Dict[str, Any]) -> ConnectionPool | None:
     try:
         max_size = int(os.getenv("DB_POOL_MAX_SIZE", "20"))
         timeout = float(os.getenv("DB_POOL_TIMEOUT", "5"))
-        _db_pool = ConnectionPool(_build_db_dsn(cfg), max_size=max(max_size, 1), timeout=timeout)
+        _db_pool = ConnectionPool(
+            _build_db_dsn(cfg),
+            max_size=max(max_size, 1),
+            timeout=timeout,
+        )
         return _db_pool
     except Exception as e:
         logger.warning(f"DB连接池初始化失败，将回退为直连: {e}")
         _db_pool = None
         return None
+
+
+def _env_or_default(name: str, default: str) -> str:
+    v = os.getenv(name)
+    if v is None:
+        return default
+    v = str(v).strip()
+    return v or default
 
 
 class DatabaseConfig:
@@ -81,17 +116,20 @@ class DatabaseConfig:
     def __init__(self):
         # PostgreSQL 数据库配置
         self.config = {
-            'host': os.getenv('DB_HOST', 'localhost'),
-            'port': int(os.getenv('DB_PORT', 5432)),
-            'user': os.getenv('DB_USER', 'pha'),
-            'password': os.getenv('DB_PASSWORD', 'pha_pwd'),
-            'dbname': os.getenv('DB_NAME', os.getenv('POSTGRES_DB', 'personal_health_assistant')),
+            'host': _env_or_default('DB_HOST', 'localhost'),
+            'port': int(_env_or_default('DB_PORT', '5432')),
+            'user': _env_or_default('DB_USER', 'pha'),
+            'password': _env_or_default('DB_PASSWORD', 'pha_pass'),
+            'dbname': os.getenv(
+                'DB_NAME', os.getenv('POSTGRES_DB', 'personal_health_assistant')
+            ),
             'autocommit': False,
         }
 
     def get_connection_config(self) -> Dict[str, Any]:
         """获取数据库连接配置"""
         return self.config.copy()
+
 
 class DatabaseManager:
     """数据库管理类（PostgreSQL）"""
@@ -146,14 +184,14 @@ class DatabaseManager:
                     conn.close()
                 except Exception:
                     pass
-    
+
     def execute_query(self, query: str, params: tuple = None) -> list:
         """执行查询语句，返回字典列表"""
         with self.get_connection() as conn:
             with conn.cursor(row_factory=dict_row) as cur:
                 cur.execute(query, params or ())
                 return cur.fetchall()
-    
+
     def execute_update(self, query: str, params: tuple = None) -> int:
         """执行更新语句，返回影响行数"""
         with self.get_connection() as conn:
@@ -161,7 +199,7 @@ class DatabaseManager:
                 cur.execute(query, params or ())
                 conn.commit()
                 return cur.rowcount
-    
+
     def execute_insert(self, query: str, params: tuple = None) -> Optional[int]:
         """执行插入语句，优先通过 RETURNING 返回插入ID，否则返回影响行数"""
         with self.get_connection() as conn:
@@ -175,7 +213,7 @@ class DatabaseManager:
                         inserted_id = row[0]
                 conn.commit()
                 return inserted_id if returning else cur.rowcount
-    
+
     def test_connection(self) -> bool:
         """测试数据库连接"""
         try:
@@ -185,6 +223,7 @@ class DatabaseManager:
                     return True
         except Exception:
             return False
+
 
 def get_db_manager():
     """获取数据库管理器实例"""

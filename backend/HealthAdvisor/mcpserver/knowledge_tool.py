@@ -3,6 +3,7 @@ from typing import Dict, List, Any, Optional
 import re
 import sys
 import os
+import uuid
 # Add parent directory to sys.path
 _ha_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _ha_dir not in sys.path:
@@ -231,6 +232,167 @@ def _vector_literal(vec: List[float]) -> str:
     return "[" + ",".join(f"{float(x):.8f}" for x in vec) + "]"
 
 
+def _coerce_int(value: Any, default: int) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return int(default)
+
+
+def _chunk_text(text: str, chunk_size: int, overlap: int) -> List[str]:
+    t = re.sub(r"\s+", " ", (text or "").strip())
+    if not t:
+        return []
+    chunk_size = max(50, int(chunk_size))
+    overlap = max(0, int(overlap))
+    if overlap >= chunk_size:
+        overlap = max(0, chunk_size // 5)
+    chunks: List[str] = []
+    start = 0
+    n = len(t)
+    while start < n:
+        end = min(n, start + chunk_size)
+        chunk = t[start:end].strip()
+        if chunk:
+            chunks.append(chunk)
+        if end >= n:
+            break
+        start = end - overlap
+        if start < 0:
+            start = 0
+        if chunks and start <= 0:
+            start = end
+    return chunks
+
+
+def _upsert_medical_kb_chunks(
+    user_id: str,
+    source_id: str,
+    text: str,
+    title: str = "",
+    record_type: str = "",
+    overwrite: bool = True,
+) -> Dict[str, Any]:
+    uid = (user_id or "").strip() or _GLOBAL_KB_USER_ID
+    sid = (source_id or "").strip()
+    if not sid:
+        return {"status": "error", "message": "source_id 不能为空"}
+    t = (text or "").strip()
+    if not t:
+        return {"status": "error", "message": "text 不能为空"}
+
+    es = _get_embedding_service()
+    if es is None:
+        return {"status": "error", "message": "EmbeddingService 不可用"}
+
+    chunk_size = _coerce_int(os.getenv("RAG_CHUNK_SIZE", "800"), 800)
+    overlap = _coerce_int(os.getenv("RAG_CHUNK_OVERLAP", "120"), 120)
+    max_chunks = _coerce_int(os.getenv("RAG_MAX_CHUNKS", "200"), 200)
+
+    chunks = _chunk_text(t, chunk_size=chunk_size, overlap=overlap)
+    if max_chunks > 0:
+        chunks = chunks[:max_chunks]
+    if not chunks:
+        return {"status": "error", "message": "无法分块"}
+
+    embeddings = es.generate_batch_embeddings(chunks)
+    if not embeddings:
+        return {"status": "error", "message": "生成嵌入失败"}
+
+    db = get_db_manager()
+    _ensure_rag_schema(db)
+
+    if overwrite:
+        db.execute_update(
+            """
+            DELETE FROM rag_chunks
+            WHERE user_id = %s
+              AND source_type = 'medical_kb'
+              AND source_id = %s
+              AND embedding_model = %s
+            """,
+            (uid, sid, _RAG_EMBEDDING_MODEL),
+        )
+
+    inserted = 0
+    for idx, (chunk, emb) in enumerate(zip(chunks, embeddings)):
+        if not emb or len(emb) != _RAG_VECTOR_DIM:
+            continue
+        qv = _vector_literal(emb)
+        rid = str(uuid.uuid4())
+        db.execute_update(
+            """
+            INSERT INTO rag_chunks (
+                id,
+                user_id,
+                source_type,
+                source_id,
+                record_type,
+                title,
+                chunk_index,
+                chunk_text,
+                embedding_model,
+                embedding_dim,
+                embedding,
+                created_at,
+                updated_at
+            )
+            VALUES (
+                %s,
+                %s,
+                'medical_kb',
+                %s,
+                %s,
+                %s,
+                %s,
+                %s,
+                %s,
+                %s,
+                %s::vector(384),
+                now(),
+                now()
+            )
+            ON CONFLICT (
+                user_id,
+                source_type,
+                source_id,
+                chunk_index,
+                embedding_model
+            )
+            DO UPDATE SET
+                record_type = EXCLUDED.record_type,
+                title = EXCLUDED.title,
+                chunk_text = EXCLUDED.chunk_text,
+                embedding_dim = EXCLUDED.embedding_dim,
+                embedding = EXCLUDED.embedding,
+                updated_at = now()
+            """,
+            (
+                rid,
+                uid,
+                sid,
+                (record_type or "").strip() or None,
+                (title or "").strip() or None,
+                int(idx),
+                chunk,
+                _RAG_EMBEDDING_MODEL,
+                int(_RAG_VECTOR_DIM),
+                qv,
+            ),
+        )
+        inserted += 1
+
+    return {
+        "status": "success",
+        "user_id": uid,
+        "source_id": sid,
+        "chunks": len(chunks),
+        "inserted": inserted,
+        "embedding_model": _RAG_EMBEDDING_MODEL,
+        "embedding_dim": _RAG_VECTOR_DIM,
+    }
+
+
 def _rag_search(
     query: str,
     user_id: str,
@@ -397,6 +559,107 @@ def analyze_health_concern(
                 }
             )
         return {"status": "success", "concern": concern, "evidence": related}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+@mcp.tool()
+def upsert_medical_kb_document(
+    source_id: str,
+    text: str,
+    title: str = "",
+    record_type: str = "",
+    user_id: str = "",
+    overwrite: bool = True,
+) -> Dict[str, Any]:
+    try:
+        return _upsert_medical_kb_chunks(
+            user_id=user_id,
+            source_id=source_id,
+            text=text,
+            title=title,
+            record_type=record_type,
+            overwrite=overwrite,
+        )
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+@mcp.tool()
+def delete_medical_kb_document(
+    source_id: str, user_id: str = "", embedding_model: str = ""
+) -> Dict[str, Any]:
+    uid = (user_id or "").strip() or _GLOBAL_KB_USER_ID
+    sid = (source_id or "").strip()
+    if not sid:
+        return {"status": "error", "message": "source_id 不能为空"}
+    model = (embedding_model or "").strip() or _RAG_EMBEDDING_MODEL
+    try:
+        db = get_db_manager()
+        _ensure_rag_schema(db)
+        affected = db.execute_update(
+            """
+            DELETE FROM rag_chunks
+            WHERE user_id = %s
+              AND source_type = 'medical_kb'
+              AND source_id = %s
+              AND embedding_model = %s
+            """,
+            (uid, sid, model),
+        )
+        return {
+            "status": "success",
+            "user_id": uid,
+            "source_id": sid,
+            "deleted": int(affected or 0),
+            "embedding_model": model,
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+@mcp.tool()
+def list_medical_kb_documents(user_id: str = "", limit: int = 50) -> Dict[str, Any]:
+    uid = (user_id or "").strip() or _GLOBAL_KB_USER_ID
+    limit = _coerce_limit(limit, default=50, max_limit=200)
+    try:
+        db = get_db_manager()
+        _ensure_rag_schema(db)
+        rows = db.execute_query(
+            """
+            SELECT
+                source_id,
+                max(updated_at) AS updated_at,
+                max(created_at) AS created_at,
+                max(title) AS title,
+                max(record_type) AS record_type,
+                count(*) AS chunks
+            FROM rag_chunks
+            WHERE user_id = %s AND source_type = 'medical_kb'
+            GROUP BY source_id
+            ORDER BY max(updated_at) DESC NULLS LAST
+            LIMIT %s
+            """,
+            (uid, limit),
+        )
+        items: List[Dict[str, Any]] = []
+        for r in rows:
+            items.append(
+                {
+                    "source_id": str(r.get("source_id")),
+                    "title": r.get("title"),
+                    "record_type": r.get("record_type"),
+                    "chunks": int(r.get("chunks") or 0),
+                    "updated_at": str(r.get("updated_at")),
+                    "created_at": str(r.get("created_at")),
+                }
+            )
+        return {
+            "status": "success",
+            "user_id": uid,
+            "count": len(items),
+            "items": items,
+        }
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
