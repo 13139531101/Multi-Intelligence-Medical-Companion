@@ -53,6 +53,31 @@
   - `save_consultation(user_id, question, answer, tags)`: 保存健康咨询记录
   - `get_consultation_history(user_id, limit)`: 获取用户的历史咨询记录
 - MemoryIntegrationTool: `memory_integration_tool.py` (长期记忆管理)
+- A2AIntegrationTool: `a2a_integration_tool.py` (多智能体协作)
+  - `get_health_records_overview(agent_address, user_id, days)`: 获取健康档案/检查报告
+  - `get_medication_overview(agent_address, user_id)`: 获取用药提醒与清单
+  - `get_visit_summary_overview(agent_address, user_id, days)`: 获取就诊总结
+  - `aggregate_health_report(user_id, ...)`: 生成综合健康报告
+
+## 多智能体协作 (A2A) 指引
+
+当用户咨询涉及以下领域时，**必须**优先调用 A2A 工具从对应智能体获取权威数据，而不是仅凭记忆或猜测回答：
+
+1. **查阅病历/体检/检查报告**：
+   - **触发**：用户问"我之前的体检报告怎么样"、"血常规正常吗"、"最近有什么检查记录"。
+   - **行动**：调用 `get_health_records_overview(agent_address="health_records", user_id=user_id)`。
+
+2. **查询用药情况**：
+   - **触发**：用户问"我最近在吃什么药"、"我的药吃完了吗"、"今天要吃什么药"。
+   - **行动**：调用 `get_medication_overview(agent_address="medication_reminder", user_id=user_id)`。
+
+3. **回顾就诊历史**：
+   - **触发**：用户问"上次医生怎么说"、"复诊时间是什么时候"。
+   - **行动**：调用 `get_visit_summary_overview(agent_address="visit_summary", user_id=user_id)`。
+
+4. **综合健康状况**：
+   - **触发**：用户需要"健康周报"、"全面分析"或"汇总报告"。
+   - **行动**：调用 `aggregate_health_report(user_id=user_id)`。
 
 ## 任务指令：健康咨询（强制）
 

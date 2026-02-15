@@ -2,9 +2,7 @@
   "mcpServers": {
     "ReminderTool": {
       "command": "python",
-      "args": [
-        "mcpserver/reminder_tool.py"
-      ],
+      "args": ["mcpserver/reminder_tool.py"],
       "cwd": "/app/MedicationReminder",
       "env": {
         "PG_DSN": "postgresql://pha:pha_pass@postgres:5432/personal_health_assistant",
@@ -14,9 +12,7 @@
     },
     "NotificationTool": {
       "command": "python",
-      "args": [
-        "mcpserver/notification_tool.py"
-      ],
+      "args": ["mcpserver/notification_tool.py"],
       "cwd": "/app/MedicationReminder",
       "env": {
         "PG_DSN": "postgresql://pha:pha_pass@postgres:5432/personal_health_assistant",
@@ -24,15 +20,24 @@
         "MEMORY_DATABASE_URL": "postgresql://pha:pha_pass@postgres:5432/personal_health_assistant"
       }
     },
+    "DrugSafetyTool": {
+      "command": "python",
+      "args": ["mcpserver/drug_safety_tool.py"],
+      "cwd": "/app/MedicationReminder",
+      "env": {
+        "HEALTH_ADVISOR_URL": "http://health_advisor:10011",
+        "PG_DSN": "postgresql://pha:pha_pass@postgres:5432/personal_health_assistant",
+        "DATABASE_URL": "postgresql://pha:pha_pass@postgres:5432/personal_health_assistant",
+        "PYTHONPATH": "/app:/app/MedicationReminder"
+      }
+    },
     "MemoryIntegrationTool": {
       "command": "python",
-      "args": [
-        "memory_integration_tool.py"
-      ],
+      "args": ["memory_integration_tool.py"],
       "cwd": "/app/MedicationReminder",
       "env": {
         "DATABASE_URL": "sqlite:///medication_reminder_memory.db",
-        "EMBEDDING_MODEL": "text-embedding-3-small",
+        "EMBEDDING_MODEL": "text-embedding-v2",
         "LOG_LEVEL": "INFO"
       }
     }

@@ -61,6 +61,19 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 app = FastAPI()
 
+@app.on_event("startup")
+async def startup_event():
+    """应用启动时尝试初始化记忆系统"""
+    try:
+        # 尝试调用后端模块的预热逻辑（如果已导入）
+        if health_api and hasattr(health_api, "_warmup_optional_tools"):
+            logger.info("Triggering backend warmup/memory initialization...")
+            await health_api._warmup_optional_tools()
+        else:
+            logger.warning("Backend health_api module not loaded or missing warmup function.")
+    except Exception as e:
+        logger.warning(f"Startup warmup failed: {e}")
+
 def _env_int(name: str, default: int) -> int:
     try:
         v = int(str(os.getenv(name, "")).strip())

@@ -3,7 +3,14 @@
     "KnowledgeTool": {
       "command": "python",
       "args": ["mcpserver/knowledge_tool.py"],
-      "cwd": "/app/HealthAdvisor"
+      "cwd": "/app/HealthAdvisor",
+      "env": {
+        "DB_HOST": "postgres",
+        "DB_PORT": "5432",
+        "DB_USER": "pha",
+        "DB_PASSWORD": "pha_pass",
+        "DB_NAME": "personal_health_assistant"
+      }
     },
     "DatabaseTool": {
       "command": "python",

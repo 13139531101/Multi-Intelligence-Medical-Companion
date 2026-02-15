@@ -29,12 +29,15 @@ COPY frontend/hostAgentAPI ./
 
 # Provide backend modules used by Host API integrations (WeChat subscribe messages, etc.)
 COPY backend/notification_service.py ./backend/notification_service.py
+COPY backend/health_records_api.py ./backend/health_records_api.py
+COPY backend/HealthRecordsManager ./backend/HealthRecordsManager
+COPY backend/AgentMemorySystem ./backend/AgentMemorySystem
 
 # Provide A2AServer package required by Host API
 COPY backend/A2AServer/src/A2AServer ./A2AServer
 
-# Ensure Python can resolve local package
-ENV PYTHONPATH=/app
+# Ensure Python can resolve local package and backend modules
+ENV PYTHONPATH=/app:/app/backend
 
 # Point Host API to the bundled backend module directory
 ENV BACKEND_DIR=/app/backend

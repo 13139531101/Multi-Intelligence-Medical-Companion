@@ -293,14 +293,14 @@ class MCPClient:
         while attempt < retries:
             try:
                 try:
-                    timeout_env = os.environ.get("MCP_READ_TIMEOUT_SEC", "45")
+                    timeout_env = os.environ.get("MCP_READ_TIMEOUT_SEC", "300")
                     timeout_sec = int(timeout_env)
                     if timeout_sec < 10:
                         timeout_sec = 10
-                    if timeout_sec > 120:
-                        timeout_sec = 120
+                    if timeout_sec > 300:
+                        timeout_sec = 300
                 except Exception:
-                    timeout_sec = 45
+                    timeout_sec = 300
                 logger.info(f"执行工具: {tool_name}...，最多等待{timeout_sec}秒")
                 response = await self.session.call_tool(tool_name, arguments, read_timeout_seconds=timedelta(seconds=timeout_sec))
                 response_data = response.model_dump() if hasattr(response, 'model_dump') else response

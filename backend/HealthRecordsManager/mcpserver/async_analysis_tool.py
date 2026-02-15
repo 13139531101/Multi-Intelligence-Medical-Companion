@@ -5,6 +5,7 @@ import time
 import threading
 import asyncio
 from datetime import datetime
+from mcp.server.fastmcp import FastMCP
 
 # Add backend to path to import notification_service
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -16,6 +17,8 @@ try:
     from notification_service import notification_service
 except ImportError:
     notification_service = None
+
+mcp = FastMCP("AsyncAnalysisTool")
 
 # Mock AI Analysis (replace with actual logic or import from ai_analysis_tool)
 def mock_analyze_trends(user_id, feature, period):
@@ -66,6 +69,7 @@ def background_task(user_id, feature, period, openid):
     except Exception as e:
         print(f"Background task failed: {e}")
 
+@mcp.tool()
 def analyze_health_trends_async(user_id: str, feature: str, period: str = "90d") -> str:
     """
     Start an asynchronous health trend analysis.
@@ -105,9 +109,4 @@ def analyze_health_trends_async(user_id: str, feature: str, period: str = "90d")
     return f"已启动针对 {feature} 的健康趋势分析任务。分析预计需要几分钟，完成后将通过微信服务通知发送给您。"
 
 if __name__ == "__main__":
-    # Simple test
-    # python mcpserver/async_analysis_tool.py
-    import sys
-    # Mocking input for testing
-    if len(sys.argv) > 1:
-        print(analyze_health_trends_async("test_user", "blood_pressure"))
+    mcp.run()
