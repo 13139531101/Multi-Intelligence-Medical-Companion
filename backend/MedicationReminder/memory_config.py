@@ -18,7 +18,7 @@ class MedicationReminderMemoryConfig:
     def __init__(self):
         """初始化配置"""
         # 数据库配置
-        self.database_url = os.getenv('DATABASE_URL', 'sqlite:///medication_reminder_memory.db')
+        self.database_url = os.getenv('DATABASE_URL', 'postgresql://pha:pha_pass@postgres:5432/personal_health_assistant')
         self.database_pool_size = int(os.getenv('DATABASE_POOL_SIZE', '10'))
         self.database_timeout = int(os.getenv('DATABASE_TIMEOUT', '30'))
         

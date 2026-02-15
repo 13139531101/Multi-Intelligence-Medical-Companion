@@ -20,7 +20,7 @@ class VisitSummaryMemoryConfig:
     """
     
     # 数据库配置
-    database_url: str = field(default_factory=lambda: os.getenv('MEMORY_DATABASE_URL', 'sqlite:///visit_summary_memory.db'))
+    database_url: str = field(default_factory=lambda: os.getenv('MEMORY_DATABASE_URL', 'postgresql://pha:pha_pass@postgres:5432/personal_health_assistant'))
     database_pool_size: int = 10
     database_timeout: int = 30
     
