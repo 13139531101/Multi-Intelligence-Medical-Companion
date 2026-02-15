@@ -36,7 +36,7 @@
       "args": ["memory_integration_tool.py"],
       "cwd": "/app/MedicationReminder",
       "env": {
-        "DATABASE_URL": "sqlite:///medication_reminder_memory.db",
+        "DATABASE_URL": "postgresql://pha:pha_pass@postgres:5432/personal_health_assistant",
         "EMBEDDING_MODEL": "text-embedding-v2",
         "LOG_LEVEL": "INFO"
       }
