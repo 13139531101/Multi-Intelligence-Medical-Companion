@@ -58,7 +58,7 @@ def main():
         
         # 导入并启动应用
         import uvicorn
-        from health_records_api import app
+        from api.main import app
         
         # 启动服务器
         uvicorn.run(
