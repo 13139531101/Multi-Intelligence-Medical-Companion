@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import axios from "axios";
 import {
   Activity,
@@ -15,10 +15,6 @@ import {
 import {
   LineChart,
   Line,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
   ResponsiveContainer,
 } from "recharts";
 
@@ -65,7 +61,7 @@ function App() {
   const [searchResults, setSearchResults] = useState([]);
 
   // Mock Chart Data
-  const [chartData, setChartData] = useState([
+  const [chartData] = useState([
     { name: "00:00", cpu: 10, mem: 20 },
     { name: "04:00", cpu: 15, mem: 22 },
     { name: "08:00", cpu: 45, mem: 35 },
@@ -76,11 +72,11 @@ function App() {
 
   const headers = adminToken ? { "X-Admin-Token": adminToken } : {};
 
-  const fetchSummary = async () => {
+  const fetchSummary = useCallback(async () => {
     setLoading(true);
     try {
       const res = await axios.get(`${API_BASE}/admin/monitor/summary`, {
-        headers,
+        headers: adminToken ? { "X-Admin-Token": adminToken } : {},
       });
       setSummary(res.data);
     } catch (err) {
@@ -88,13 +84,13 @@ function App() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [adminToken]);
 
   useEffect(() => {
     fetchSummary();
     const interval = setInterval(fetchSummary, 30000); // Auto refresh every 30s
     return () => clearInterval(interval);
-  }, [adminToken]);
+  }, [fetchSummary]);
 
   const handleSearch = async () => {
     if (!searchQuery) return;

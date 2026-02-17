@@ -28,12 +28,24 @@
     <view class="summary-items" wx:if="{{summaries.length > 0}}">
       <view class="summary-item" wx:for="{{summaries}}" wx:key="id">
         <view class="item-header">
-          <text class="visit-date">{{item.visit_date}}</text>
+          <text class="hospital-name collapsed">{{item.hospitalDisplay}}</text>
+          <view class="item-meta">
+            <text class="visit-date">{{item.visitDateDisplay}}</text>
+            <text class="status-badge {{item.statusClass}}" wx:if="{{item.statusDisplay}}">{{item.statusDisplay}}</text>
+          </view>
         </view>
         <view class="item-body">
           <view class="summary-row" wx:if="{{item.summaryText}}">
             <text class="label">摘要：</text>
             <view class="summary-text {{item.expanded ? 'expanded' : 'collapsed'}}">{{item.expanded ? item.summaryText : item.summaryPreview}}</view>
+          </view>
+          <view class="summary-row" wx:elif="{{item.statusClass === 'processing'}}">
+            <text class="label">摘要：</text>
+            <view class="summary-text collapsed">后台整理中，请稍候...</view>
+          </view>
+          <view class="summary-row" wx:elif="{{item.statusClass === 'failed'}}">
+            <text class="label">摘要：</text>
+            <view class="summary-text collapsed">整理失败，请重试上传</view>
           </view>
           <view class="images-row" wx:if="{{item.fileUrls && item.fileUrls.length}}">
             <image class="thumb" wx:for="{{item.fileUrls}}" wx:key="*this" wx:for-item="url" src="{{url}}" mode="aspectFill" catchtap="previewImage" data-urls="{{item.fileUrls}}" data-current="{{url}}"></image>

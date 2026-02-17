@@ -108,6 +108,32 @@
   flex-shrink: 0;
 }
 
+.item-meta {
+  display: flex;
+  align-items: center;
+  gap: 12rpx;
+  flex-shrink: 0;
+}
+
+.status-badge {
+  font-size: 22rpx;
+  padding: 4rpx 12rpx;
+  border-radius: 999rpx;
+  line-height: 1;
+  background: #f2f2f2;
+  color: #666;
+}
+
+.status-badge.processing {
+  background: rgba(255, 149, 0, 0.12);
+  color: #ff9500;
+}
+
+.status-badge.failed {
+  background: rgba(255, 59, 48, 0.12);
+  color: #ff3b30;
+}
+
 .item-body {
   margin-bottom: 20rpx;
 }

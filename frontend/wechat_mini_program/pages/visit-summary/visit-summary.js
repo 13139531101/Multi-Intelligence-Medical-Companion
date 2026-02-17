@@ -23,6 +23,19 @@ Page({
 
       if (res) {
         const normalized = (Array.isArray(res) ? res : []).map((item) => {
+          const fmtDate = (v) => {
+            const s = String(v || "").trim();
+            if (!s || s === "null" || s === "undefined") return "";
+            return s;
+          };
+          const fmtDateTime = (v) => {
+            const s = String(v || "").trim();
+            if (!s || s === "null" || s === "undefined") return "";
+            const m = s.match(/^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2})/);
+            if (m) return `${m[1]} ${m[2]}`;
+            return s.replace("T", " ").slice(0, 16);
+          };
+
           const compactText = (raw, maxLen) => {
             const s = String(raw || "").trim();
             if (!s) return "";
@@ -40,13 +53,13 @@ Page({
             })
             .filter(Boolean);
           const fileUrls = fileIds.map(
-            (id) => `${SERVER_URL}/api/health-records/files/${id}`
+            (id) => `${SERVER_URL}/api/health-records/files/${id}`,
           );
 
           let agentMedNames = [];
           const tests = Array.isArray(item.tests) ? item.tests : [];
           const agentBlock = tests.find(
-            (t) => t && t.type === "agent_summary" && t.data && t.data.content
+            (t) => t && t.type === "agent_summary" && t.data && t.data.content,
           );
           const agentMeds =
             agentBlock &&
@@ -75,11 +88,31 @@ Page({
           medTags = Array.from(new Set(medTags)).slice(0, 8);
 
           const summaryText = String(
-            (item.summary_content || item.notes || "").trim()
+            (item.summary_content || item.notes || "").trim(),
           );
           const hospitalDisplay =
             compactText(item.hospital, 16) ||
             (item.hospital ? "未知医院" : "未知医院");
+
+          const statusRaw = String(item.status || "")
+            .trim()
+            .toLowerCase();
+          let statusDisplay = "";
+          let statusClass = "";
+          if (statusRaw === "processing" || statusRaw === "pending") {
+            statusDisplay = "整理中";
+            statusClass = "processing";
+          } else if (statusRaw === "failed") {
+            statusDisplay = "失败";
+            statusClass = "failed";
+          }
+
+          const visitDateDisplay =
+            fmtDate(item.visit_date) ||
+            fmtDateTime(item.created_at) ||
+            fmtDateTime(item.updated_at) ||
+            "";
+
           const diagnosisText = String((item.diagnosis || "").trim());
           const diagnosisDisplay = compactText(diagnosisText, 22) || "未识别";
           const previewParts = [];
@@ -93,7 +126,7 @@ Page({
           if (medTags.length) {
             const medShort = medTags.slice(0, 2).join("、");
             previewParts.push(
-              `用药：${medShort}${medTags.length > 2 ? "等" : ""}`
+              `用药：${medShort}${medTags.length > 2 ? "等" : ""}`,
             );
           }
           const examinationText = String((item.examination || "").trim());
@@ -114,6 +147,9 @@ Page({
           return {
             ...item,
             hospitalDisplay,
+            visitDateDisplay,
+            statusDisplay,
+            statusClass,
             diagnosisDisplay,
             fileIds,
             fileUrls,
@@ -139,44 +175,114 @@ Page({
     }
   },
 
+  async pollSummary(summaryId) {
+    const id = String(summaryId || "").trim();
+    if (!id) return;
+
+    const startTs = Date.now();
+    const pollOnce = async () => {
+      if (Date.now() - startTs > 3 * 60 * 1000) return;
+      try {
+        const detail = await request(`/api/visit-summaries/${id}`);
+        const status = String((detail && detail.status) || "")
+          .trim()
+          .toLowerCase();
+        if (status === "done") {
+          await this.loadSummaries();
+          wx.showToast({ title: "整理完成", icon: "success" });
+          return;
+        }
+        if (status === "failed") {
+          await this.loadSummaries();
+          wx.showToast({ title: "整理失败", icon: "none" });
+          return;
+        }
+      } catch (e) {
+        // ignore
+      }
+      setTimeout(pollOnce, 3000);
+    };
+
+    setTimeout(pollOnce, 2000);
+  },
+
   chooseImage() {
     const that = this;
-    wx.chooseMedia({
-      count: 1,
-      mediaType: ["image"],
-      sourceType: ["album", "camera"],
+    wx.showActionSheet({
+      itemList: ["从相册选择(可多选)", "拍照(单张)"],
       success(res) {
-        const tempFilePath = res.tempFiles[0].tempFilePath;
-        that.uploadImage(tempFilePath);
+        if (res.tapIndex === 0) {
+          wx.chooseImage({
+            count: 9,
+            sizeType: ["compressed"],
+            sourceType: ["album"],
+            success(imgRes) {
+              const paths = (imgRes.tempFilePaths || []).filter(Boolean);
+              if (!paths.length) return;
+              that.uploadImages(paths);
+            },
+          });
+          return;
+        }
+
+        wx.chooseImage({
+          count: 1,
+          sizeType: ["compressed"],
+          sourceType: ["camera"],
+          success(imgRes) {
+            const paths = (imgRes.tempFilePaths || []).filter(Boolean);
+            if (!paths.length) return;
+            that.uploadImages(paths);
+          },
+        });
       },
     });
   },
 
   async uploadImage(filePath) {
+    return this.uploadImages([filePath]);
+  },
+
+  async uploadImages(filePaths) {
     const that = this;
-    wx.showLoading({
-      title: "识别整理中...",
-      mask: true,
-    });
 
     const userInfo = wx.getStorageSync("userInfo");
 
     try {
-      const data = await uploadFile(
-        filePath,
-        "/api/visit-summaries/analyze-image",
-        {
-          user_id: userInfo.user_id || "",
-        }
-      );
+      const paths = Array.isArray(filePaths) ? filePaths.filter(Boolean) : [];
+      if (!paths.length) return;
+
+      const batchId = `batch_${Date.now()}_${Math.random()
+        .toString(36)
+        .substr(2, 8)}`;
+
+      for (let i = 0; i < paths.length; i++) {
+        wx.showLoading({
+          title: `上传中(${i + 1}/${paths.length})...`,
+          mask: true,
+        });
+        await uploadFile(paths[i], "/api/visit-summaries/batch/collect-image", {
+          user_id: (userInfo && userInfo.user_id) || "",
+          batch_id: batchId,
+        });
+      }
+
+      wx.showLoading({ title: "提交中...", mask: true });
+      const created = await request("/api/visit-summaries/batch/complete", {
+        method: "POST",
+        data: { batch_id: batchId },
+      });
 
       wx.hideLoading();
       wx.showToast({
-        title: "整理完成",
+        title: "已提交",
         icon: "success",
       });
       // 刷新列表
-      that.loadSummaries();
+      await that.loadSummaries();
+      if (created && created.id) {
+        that.pollSummary(created.id);
+      }
     } catch (err) {
       wx.hideLoading();
       console.error(err);

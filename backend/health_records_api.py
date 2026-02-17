@@ -239,6 +239,8 @@ class VisitSummary(BaseModel):
     files: Optional[List[str]] = []
     tests: Optional[List[Dict[str, Any]]] = []
     summary_content: Optional[str] = None
+    status: Optional[str] = None
+    error_message: Optional[str] = None
     generated_by: Optional[str] = None
     is_deleted: Optional[int] = None
     created_at: Optional[datetime] = None
@@ -263,6 +265,8 @@ class VisitSummaryCreate(BaseModel):
     files: Optional[List[str]] = []
     tests: Optional[List[Dict[str, Any]]] = []
     summary_content: Optional[str] = None
+    status: Optional[str] = None
+    error_message: Optional[str] = None
     generated_by: Optional[str] = None
 
 
@@ -722,6 +726,8 @@ def init_database():
                     notes TEXT,
                     files JSONB,
                     tests JSONB,
+                    status TEXT DEFAULT 'done',
+                    error_message TEXT,
                     is_deleted SMALLINT DEFAULT 0,
                     created_at TIMESTAMPTZ DEFAULT now(),
                     updated_at TIMESTAMPTZ DEFAULT now()
@@ -744,6 +750,8 @@ def init_database():
                 "ALTER TABLE visit_summaries ADD COLUMN IF NOT EXISTS notes TEXT",
                 "ALTER TABLE visit_summaries ADD COLUMN IF NOT EXISTS files JSONB",
                 "ALTER TABLE visit_summaries ADD COLUMN IF NOT EXISTS tests JSONB",
+                "ALTER TABLE visit_summaries ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'done'",
+                "ALTER TABLE visit_summaries ADD COLUMN IF NOT EXISTS error_message TEXT",
                 "ALTER TABLE visit_summaries ADD COLUMN IF NOT EXISTS is_deleted SMALLINT DEFAULT 0",
                 "ALTER TABLE visit_summaries ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT now()",
                 "ALTER TABLE visit_summaries ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT now()",
@@ -1748,6 +1756,115 @@ def _try_generate_visit_summary_with_agent(
 
         if not documents:
             documents = [{"type": "auto", "content": text}]
+
+        res = generate_visit_summary(documents, summary_type="comprehensive")
+        if not isinstance(res, dict) or not res.get("success"):
+            return None, None, None
+        data = res.get("data") or {}
+        content = data.get("content") if isinstance(data, dict) else None
+        if not isinstance(content, dict):
+            return None, None, None
+
+        diagnosis_list: list[str] = []
+        diag = (
+            content.get("diagnosis_treatment", {}).get("diagnosis")
+            if isinstance(content.get("diagnosis_treatment"), dict)
+            else None
+        )
+        if isinstance(diag, list):
+            diagnosis_list = [str(x).strip() for x in diag if str(x).strip()]
+        elif isinstance(diag, str) and diag.strip():
+            diagnosis_list = [diag.strip()]
+
+        meds = (
+            content.get("medications")
+            if isinstance(content.get("medications"), list)
+            else []
+        )
+        med_lines: list[str] = []
+        med_names: list[str] = []
+        for m in meds:
+            if not isinstance(m, dict):
+                continue
+            name = str(m.get("name") or "").strip()
+            dosage = str(m.get("dosage") or "").strip()
+            usage = str(m.get("usage") or "").strip()
+            duration = str(m.get("duration") or "").strip()
+            if name:
+                med_names.append(name)
+                s = name
+                if dosage:
+                    s = f"{s} {dosage}"
+                if duration:
+                    s = f"{s} {duration}"
+                if usage and usage != s:
+                    s = f"{s}；{usage}"
+                med_lines.append(s)
+
+        test_results = (
+            content.get("test_results")
+            if isinstance(content.get("test_results"), list)
+            else []
+        )
+        test_lines: list[str] = []
+        for t in test_results:
+            if not isinstance(t, dict):
+                continue
+            tn = str(t.get("test_name") or "").strip()
+            val = str(t.get("value") or "").strip()
+            unit = str(t.get("unit") or "").strip()
+            status = str(t.get("status") or "").strip()
+            if tn and val:
+                seg = f"{tn} {val}{unit}"
+                if status:
+                    seg = f"{seg}（{status}）"
+                test_lines.append(seg)
+
+        lines: list[str] = []
+        if diagnosis_list:
+            lines.append("诊断：" + "；".join(diagnosis_list))
+        if med_lines:
+            lines.append("用药：\n" + "\n".join(med_lines[:20]))
+        if test_lines:
+            lines.append("检查：\n" + "\n".join(test_lines[:30]))
+        summary_text = "\n\n".join([ln for ln in lines if ln.strip()]).strip() or None
+
+        fields: dict[str, Any] = {
+            "diagnosis": "；".join(diagnosis_list) if diagnosis_list else None,
+            "medications": meds,
+            "medication_names": list(dict.fromkeys([n for n in med_names if n])),
+        }
+        return summary_text, fields, data
+    except Exception:
+        return None, None, None
+
+
+def _try_generate_visit_summary_with_agent_multi(
+    ocr_texts: list[str],
+) -> tuple[str | None, dict[str, Any] | None, dict[str, Any] | None]:
+    try:
+        texts = [(t or "").strip() for t in (ocr_texts or [])]
+        texts = [t for t in texts if t]
+        if not texts:
+            return None, None, None
+        try:
+            from VisitSummaryGenerator.mcpserver.document_tool import (
+                generate_visit_summary,
+            )
+        except Exception:
+            return None, None, None
+
+        documents: list[dict[str, Any]] = []
+        seen_contents: set[str] = set()
+        for t in texts:
+            if len(t) < 8:
+                continue
+            if t in seen_contents:
+                continue
+            seen_contents.add(t)
+            documents.append({"type": "auto", "content": t})
+        if not documents:
+            return None, None, None
 
         res = generate_visit_summary(documents, summary_type="comprehensive")
         if not isinstance(res, dict) or not res.get("success"):
@@ -4024,6 +4141,352 @@ def _extract_visit_summary_fields(ocr_text: str) -> dict[str, Any]:
     }
 
 
+_VISIT_SUMMARY_BATCHES: dict[str, dict[str, Any]] = {}
+
+
+class VisitSummaryBatchCompleteRequest(BaseModel):
+    batch_id: str = Field(..., min_length=4)
+    visit_date: Optional[str] = None
+
+
+def _prune_visit_summary_batches() -> None:
+    ttl_seconds = int(os.getenv("VISIT_SUMMARY_BATCH_TTL_SECONDS", "3600"))
+    now_ts = time.time()
+    for bid, b in list(_VISIT_SUMMARY_BATCHES.items()):
+        try:
+            created = float(b.get("created_ts") or 0.0)
+        except Exception:
+            created = 0.0
+        if created <= 0:
+            _VISIT_SUMMARY_BATCHES.pop(bid, None)
+            continue
+        if now_ts - created > ttl_seconds:
+            _VISIT_SUMMARY_BATCHES.pop(bid, None)
+
+
+def _merge_visit_summary_fields(items: list[dict[str, Any]]) -> dict[str, Any]:
+    merged: dict[str, Any] = {
+        "visit_date": None,
+        "hospital": None,
+        "department": None,
+        "doctor": None,
+        "chief_complaint": None,
+        "symptoms": None,
+        "examination": None,
+        "diagnosis": None,
+        "treatment": None,
+        "prescription": None,
+        "follow_up": None,
+        "notes": None,
+    }
+
+    def first_non_empty(key: str) -> None:
+        if merged.get(key):
+            return
+        for it in items:
+            v = (it.get(key) if isinstance(it, dict) else None) or None
+            if isinstance(v, str) and not v.strip():
+                v = None
+            if v:
+                merged[key] = v
+                return
+
+    for k in ["hospital", "department", "doctor", "chief_complaint", "symptoms", "treatment", "follow_up"]:
+        first_non_empty(k)
+
+    for it in items:
+        vd = it.get("visit_date") if isinstance(it, dict) else None
+        if isinstance(vd, date):
+            merged["visit_date"] = vd
+            break
+
+    def merge_text(key: str, sep: str = "\n") -> None:
+        parts: list[str] = []
+        for it in items:
+            v = it.get(key) if isinstance(it, dict) else None
+            if isinstance(v, str) and v.strip():
+                parts.append(v.strip())
+        if not parts:
+            return
+        uniq: list[str] = []
+        seen: set[str] = set()
+        for p in parts:
+            if p in seen:
+                continue
+            seen.add(p)
+            uniq.append(p)
+        merged[key] = sep.join(uniq).strip()
+
+    merge_text("examination")
+    merge_text("diagnosis", sep="；")
+    merge_text("prescription")
+    merge_text("notes", sep="\n\n")
+    return merged
+
+
+async def _process_visit_summary_batch_item_ocr(
+    batch_id: str,
+    user_id: str,
+    file_id: str,
+    file_path: str,
+    mime_type: str,
+    original_filename: str,
+) -> None:
+    try:
+        p = Path(file_path)
+        file_bytes = await anyio.to_thread.run_sync(p.read_bytes)
+        if not file_bytes:
+            raise ValueError("empty file")
+
+        if not extract_text_from_image:
+            raise ValueError("ocr tool missing")
+
+        b64 = base64.b64encode(file_bytes).decode("utf-8")
+        raw_ocr = await anyio.to_thread.run_sync(
+            lambda: (
+                extract_text_from_image.fn(b64)
+                if hasattr(extract_text_from_image, "fn")
+                else extract_text_from_image(b64)
+            )
+        )
+        if isinstance(raw_ocr, str):
+            ocr_err_prefixes = (
+                "阿里云OCR(2021)调用失败",
+                "阿里云OCR(2021)配置缺失",
+                "阿里云OCR(2021) SDK未安装",
+                "阿里云OCR调用失败",
+                "阿里云OCR配置缺失",
+                "阿里云OCR SDK未安装",
+                "图片Base64数据不合法",
+                "本地OCR兜底不可用",
+                "本地OCR兜底失败",
+                "本地OCR兜底异常",
+                "OCR识别失败",
+                "不支持的OCR服务提供商",
+            )
+            if raw_ocr.startswith(ocr_err_prefixes):
+                raise ValueError(raw_ocr[:200])
+        ocr_text = _normalize_ocr_text(raw_ocr)
+        extracted = _extract_visit_summary_fields(ocr_text) if ocr_text.strip() else {}
+
+        batch = _VISIT_SUMMARY_BATCHES.get(batch_id)
+        if not isinstance(batch, dict) or batch.get("user_id") != user_id:
+            return
+        items = batch.get("items")
+        if not isinstance(items, list):
+            return
+        for it in items:
+            if not isinstance(it, dict):
+                continue
+            if str(it.get("file_id") or "") != str(file_id):
+                continue
+            it["ocr_text"] = ocr_text
+            it["extracted"] = extracted
+            it["ocr_status"] = "done"
+            it.pop("ocr_error", None)
+            break
+    except Exception as e:
+        batch = _VISIT_SUMMARY_BATCHES.get(batch_id)
+        if not isinstance(batch, dict) or batch.get("user_id") != user_id:
+            return
+        items = batch.get("items")
+        if not isinstance(items, list):
+            return
+        for it in items:
+            if not isinstance(it, dict):
+                continue
+            if str(it.get("file_id") or "") != str(file_id):
+                continue
+            it["ocr_status"] = "failed"
+            it["ocr_error"] = str(e)[:300]
+            break
+
+
+async def _finalize_visit_summary_batch(
+    summary_id: str,
+    user_id: str,
+    batch_id: str,
+    visit_date_override: date | None,
+) -> None:
+    started = datetime.now()
+    batch = _VISIT_SUMMARY_BATCHES.get(batch_id)
+    try:
+        if not isinstance(batch, dict) or batch.get("user_id") != user_id:
+            raise ValueError("batch missing")
+
+        tasks_map = batch.get("tasks")
+        tasks = list(tasks_map.values()) if isinstance(tasks_map, dict) else []
+        timeout_sec = float(os.getenv("VISIT_SUMMARY_BATCH_PROCESS_TIMEOUT_SECONDS", "900"))
+        if tasks:
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*tasks, return_exceptions=True),
+                    timeout=timeout_sec,
+                )
+            except asyncio.TimeoutError:
+                raise ValueError("batch processing timeout")
+
+        items = batch.get("items")
+        if not isinstance(items, list) or not items:
+            raise ValueError("empty batch")
+
+        file_ids: list[str] = []
+        ocr_texts: list[str] = []
+        extracted_list: list[dict[str, Any]] = []
+        ocr_failed = 0
+        for it in items:
+            if not isinstance(it, dict):
+                continue
+            fid = str(it.get("file_id") or "").strip()
+            if fid:
+                file_ids.append(fid)
+            if str(it.get("ocr_status") or "") == "failed":
+                ocr_failed += 1
+            txt = str(it.get("ocr_text") or "")
+            if txt.strip():
+                ocr_texts.append(txt.strip())
+            ext = it.get("extracted")
+            if isinstance(ext, dict):
+                extracted_list.append(ext)
+
+        if not ocr_texts:
+            raise ValueError("no ocr text")
+
+        extracted_merged = _merge_visit_summary_fields(extracted_list)
+        if visit_date_override:
+            extracted_merged["visit_date"] = visit_date_override
+
+        combined_text = "\n\n".join(ocr_texts).strip()
+        agent_summary_text, agent_fields, agent_raw = _try_generate_visit_summary_with_agent_multi(
+            ocr_texts
+        )
+        llm_summary = await _maybe_llm_summary(combined_text, extracted_merged)
+        summary_content = (
+            llm_summary
+            or agent_summary_text
+            or _generate_ai_summary(combined_text, extracted_merged)
+        )
+
+        diagnosis_val = extracted_merged.get("diagnosis")
+        if (not diagnosis_val) and isinstance(agent_fields, dict):
+            diagnosis_val = agent_fields.get("diagnosis") or diagnosis_val
+        extracted_merged["diagnosis"] = diagnosis_val
+
+        prescription_val = extracted_merged.get("prescription")
+        if (not prescription_val) and isinstance(agent_fields, dict):
+            med_names = agent_fields.get("medication_names")
+            if isinstance(med_names, list) and med_names:
+                prescription_val = "；".join(
+                    [str(x).strip() for x in med_names if str(x).strip()]
+                )
+        if prescription_val:
+            extracted_merged["prescription"] = prescription_val
+
+        notes_val = extracted_merged.get("notes")
+        if summary_content:
+            if notes_val:
+                notes_val = f"{notes_val}\n\n{summary_content}"
+            else:
+                notes_val = summary_content
+        summary_content = _sanitize_text_value(summary_content)
+        notes_val = _sanitize_text_value(notes_val)
+        agent_raw = _ensure_jsonable(agent_raw)
+
+        cleaned_fields = {
+            "doctor": _sanitize_text_value(extracted_merged.get("doctor")),
+            "hospital": _sanitize_text_value(extracted_merged.get("hospital")),
+            "department": _sanitize_text_value(extracted_merged.get("department")),
+            "chief_complaint": _sanitize_text_value(extracted_merged.get("chief_complaint")),
+            "symptoms": _sanitize_text_value(extracted_merged.get("symptoms")),
+            "examination": _sanitize_text_value(extracted_merged.get("examination")),
+            "diagnosis": _sanitize_text_value(diagnosis_val),
+            "treatment": _sanitize_text_value(extracted_merged.get("treatment")),
+            "prescription": _sanitize_text_value(extracted_merged.get("prescription")),
+            "follow_up": _sanitize_text_value(extracted_merged.get("follow_up")),
+        }
+
+        tests_val: list[dict[str, Any]] = []
+        tests_val.append(
+            {
+                "type": "batch",
+                "data": {
+                    "batch_id": batch_id,
+                    "total": len(file_ids),
+                    "ocr_failed": int(ocr_failed),
+                    "started_at": started.isoformat(),
+                    "completed_at": datetime.now().isoformat(),
+                },
+            }
+        )
+        if agent_raw:
+            tests_val.append({"type": "agent_summary", "data": agent_raw})
+
+        with get_db_connection() as conn:
+            with conn.cursor(row_factory=dict_row) as cursor:
+                cursor.execute(
+                    """
+                    UPDATE visit_summaries
+                    SET
+                        visit_date = %s,
+                        doctor = %s,
+                        hospital = %s,
+                        department = %s,
+                        chief_complaint = %s,
+                        symptoms = %s,
+                        examination = %s,
+                        diagnosis = %s,
+                        treatment = %s,
+                        prescription = %s,
+                        follow_up = %s,
+                        summary_content = %s,
+                        notes = %s,
+                        tests = %s,
+                        status = %s,
+                        error_message = NULL,
+                        updated_at = %s
+                    WHERE id = %s AND user_id = %s
+                    """,
+                    (
+                        extracted_merged.get("visit_date"),
+                        cleaned_fields["doctor"],
+                        cleaned_fields["hospital"],
+                        cleaned_fields["department"],
+                        cleaned_fields["chief_complaint"],
+                        cleaned_fields["symptoms"],
+                        cleaned_fields["examination"],
+                        cleaned_fields["diagnosis"],
+                        cleaned_fields["treatment"],
+                        cleaned_fields["prescription"],
+                        cleaned_fields["follow_up"],
+                        summary_content,
+                        notes_val,
+                        Json(tests_val),
+                        "done",
+                        datetime.now(),
+                        summary_id,
+                        user_id,
+                    ),
+                )
+                conn.commit()
+    except Exception as e:
+        try:
+            with get_db_connection() as conn:
+                with conn.cursor(row_factory=dict_row) as cursor:
+                    cursor.execute(
+                        """
+                        UPDATE visit_summaries
+                        SET status = %s, error_message = %s, updated_at = %s
+                        WHERE id = %s AND user_id = %s
+                        """,
+                        ("failed", str(e)[:800], datetime.now(), summary_id, user_id),
+                    )
+                    conn.commit()
+        except Exception:
+            pass
+    finally:
+        _VISIT_SUMMARY_BATCHES.pop(batch_id, None)
+
+
 @app.post("/api/visit-summaries/analyze-image", response_model=VisitSummary)
 async def analyze_visit_summary_image(
     file: UploadFile = File(...),
@@ -4266,6 +4729,244 @@ async def analyze_visit_summary_image(
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         limiter.release()
+
+
+@app.post("/api/visit-summaries/batch/collect-image")
+async def collect_visit_summary_image(
+    file: UploadFile = File(...),
+    batch_id: str = Form(...),
+    user_id: str = Form(None),
+    request: Request = None,
+):
+    limiter = _get_upload_limiter()
+    await limiter.acquire()
+    try:
+        uid = _resolve_user_id(request, user_id)
+        if not uid:
+            raise HTTPException(status_code=401, detail="未认证用户")
+
+        bid = (batch_id or "").strip()
+        if len(bid) < 4:
+            raise HTTPException(status_code=400, detail="batch_id 无效")
+
+        ct = (getattr(file, "content_type", None) or "").strip().lower()
+        if not ct.startswith("image/"):
+            raise HTTPException(status_code=400, detail="仅支持图片上传")
+
+        file_id = generate_id()
+        ext = Path(file.filename or "").suffix
+        saved_name = f"{file_id}{ext}"
+        saved_path = UPLOAD_DIR / saved_name
+
+        max_size = 10 * 1024 * 1024
+        chunk_size = int(
+            os.getenv("HEALTH_RECORDS_UPLOAD_CHUNK_BYTES", str(1024 * 1024))
+        )
+        file_size = 0
+        try:
+            with open(saved_path, "wb") as out:
+                while True:
+                    chunk = await file.read(chunk_size)
+                    if not chunk:
+                        break
+                    file_size += len(chunk)
+                    if file_size > max_size:
+                        try:
+                            out.close()
+                        except Exception:
+                            pass
+                        try:
+                            os.remove(saved_path)
+                        except Exception:
+                            pass
+                        raise HTTPException(
+                            status_code=400, detail="文件大小超过限制（10MB）"
+                        )
+                    await anyio.to_thread.run_sync(out.write, chunk)
+        finally:
+            try:
+                await file.close()
+            except Exception:
+                pass
+
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO file_attachments (id, record_id, filename, original_filename, file_path, file_size, mime_type)
+                    VALUES (%s, NULL, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        file_id,
+                        saved_name,
+                        file.filename or saved_name,
+                        str(saved_path),
+                        file_size,
+                        ct,
+                    ),
+                )
+                conn.commit()
+
+        _prune_visit_summary_batches()
+        batch = _VISIT_SUMMARY_BATCHES.get(bid)
+        if not batch:
+            batch = {
+                "user_id": uid,
+                "created_ts": time.time(),
+                "items": [],
+                "tasks": {},
+            }
+            _VISIT_SUMMARY_BATCHES[bid] = batch
+        if batch.get("user_id") != uid:
+            raise HTTPException(status_code=403, detail="batch_id 不属于当前用户")
+
+        batch_items = batch.get("items")
+        if not isinstance(batch_items, list):
+            batch_items = []
+            batch["items"] = batch_items
+        tasks_map = batch.get("tasks")
+        if not isinstance(tasks_map, dict):
+            tasks_map = {}
+            batch["tasks"] = tasks_map
+        batch_items.append(
+            {
+                "file_id": str(file_id),
+                "original_filename": (file.filename or saved_name),
+                "file_path": str(saved_path),
+                "mime_type": ct,
+                "ocr_status": "pending",
+            }
+        )
+        tasks_map[str(file_id)] = asyncio.create_task(
+            _process_visit_summary_batch_item_ocr(
+                batch_id=bid,
+                user_id=uid,
+                file_id=str(file_id),
+                file_path=str(saved_path),
+                mime_type=ct,
+                original_filename=(file.filename or saved_name),
+            )
+        )
+
+        return {
+            "batch_id": bid,
+            "count": len(batch_items),
+            "file_id": str(file_id),
+        }
+    finally:
+        limiter.release()
+
+
+@app.post("/api/visit-summaries/batch/complete", response_model=VisitSummary)
+async def complete_visit_summary_batch(
+    payload: VisitSummaryBatchCompleteRequest,
+    user_id: Optional[str] = Query(None),
+    request: Request = None,
+):
+    uid = _resolve_user_id(request, user_id)
+    if not uid:
+        raise HTTPException(status_code=401, detail="未认证用户")
+
+    bid = (payload.batch_id or "").strip()
+    batch = _VISIT_SUMMARY_BATCHES.get(bid)
+    if not batch:
+        raise HTTPException(status_code=404, detail="未找到批量任务")
+    if batch.get("user_id") != uid:
+        raise HTTPException(status_code=403, detail="无权访问该批量任务")
+
+    batch_items = batch.get("items") if isinstance(batch, dict) else None
+    if not isinstance(batch_items, list) or not batch_items:
+        raise HTTPException(status_code=400, detail="批量任务为空")
+
+    vd_override = _parse_date_str(payload.visit_date) if payload.visit_date else None
+    summary_id = generate_id()
+    summary_title = "就诊记录批量汇总"
+    file_ids: list[str] = []
+    for it in batch_items:
+        if not isinstance(it, dict):
+            continue
+        fid = str(it.get("file_id") or "").strip()
+        if fid:
+            file_ids.append(fid)
+
+    with get_db_connection() as conn:
+        with conn.cursor(row_factory=dict_row) as cursor:
+            cursor.execute(
+                """
+                INSERT INTO visit_summaries (
+                    id, user_id, title, visit_date, doctor, hospital, department,
+                    chief_complaint, symptoms, examination, diagnosis, treatment,
+                    prescription, follow_up, summary_content, notes, files, tests, is_deleted,
+                    status, error_message, created_at, updated_at
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s
+                ) RETURNING id
+                """,
+                (
+                    summary_id,
+                    uid,
+                    summary_title,
+                    vd_override,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    Json(file_ids),
+                    Json(
+                        [
+                            {
+                                "type": "batch",
+                                "data": {
+                                    "batch_id": bid,
+                                    "total": len(file_ids),
+                                    "submitted_at": datetime.now().isoformat(),
+                                },
+                            }
+                        ]
+                    ),
+                    0,
+                    "processing",
+                    None,
+                    datetime.now(),
+                    datetime.now(),
+                ),
+            )
+            new_id = cursor.fetchone()["id"]
+            conn.commit()
+            cursor.execute("SELECT * FROM visit_summaries WHERE id = %s", (new_id,))
+            row = cursor.fetchone()
+
+    for k in list(row.keys()):
+        row[k] = _sanitize_json_value(row.get(k))
+    for field in ["files", "tests"]:
+        if isinstance(row.get(field), str):
+            try:
+                row[field] = json.loads(row[field])
+            except Exception:
+                row[field] = []
+        elif row.get(field) is None:
+            row[field] = []
+
+    asyncio.create_task(
+        _finalize_visit_summary_batch(
+            summary_id=summary_id,
+            user_id=uid,
+            batch_id=bid,
+            visit_date_override=vd_override,
+        )
+    )
+    return VisitSummary(**row)
 
 
 @app.get("/api/consultations/history", response_model=List[Consultation])

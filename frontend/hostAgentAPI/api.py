@@ -895,6 +895,37 @@ try:
             request=None,
         )
 
+    @health_router.post("/api/visit-summaries/batch/collect-image")
+    async def collect_visit_summary_image(
+        file: UploadFile = File(...),
+        batch_id: str = Form(...),
+        user: dict = Depends(get_current_user),
+    ):
+        user_id = _get_user_id(user)
+        return await health_api.collect_visit_summary_image(
+            file=file,
+            batch_id=batch_id,
+            user_id=user_id,
+            request=None,
+        )
+
+    @health_router.post("/api/visit-summaries/batch/complete")
+    async def complete_visit_summary_batch(
+        payload: dict,
+        user: dict = Depends(get_current_user),
+    ):
+        user_id = _get_user_id(user)
+        req = (
+            health_api.VisitSummaryBatchCompleteRequest(**payload)
+            if isinstance(payload, dict)
+            else payload
+        )
+        return await health_api.complete_visit_summary_batch(
+            payload=req,
+            user_id=user_id,
+            request=None,
+        )
+
     app.include_router(health_router)
 except Exception as e:
     # 集成失败不阻塞 HostAPI，降级为警告以避免噪音
