@@ -2234,6 +2234,312 @@ async def sync_sqlite_to_hrm(api: Any, *, user_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+async def backfill_health_trends(
+    api: Any,
+    *,
+    days: int,
+    limit: int,
+    dry_run: bool,
+    user_id: str | None,
+    request: Request | None,
+) -> dict[str, Any]:
+    try:
+        uid = api._resolve_user_id(request, user_id)
+        if not uid:
+            raise HTTPException(status_code=401, detail="未认证用户")
+
+        total = 0
+        updated = 0
+        skipped = 0
+        updated_ids: list[str] = []
+
+        with api.get_db_connection() as conn:
+            with conn.cursor(row_factory=api.dict_row) as cursor:
+                interval = f"{days} days"
+                cursor.execute(
+                    """
+                    SELECT id, content, metadata, record_date, created_at
+                    FROM health_records
+                    WHERE user_id = %s
+                    AND (record_date >= now() - %s::interval OR created_at >= now() - %s::interval)
+                    ORDER BY created_at DESC
+                    LIMIT %s
+                    """,
+                    (uid, interval, interval, limit),
+                )
+                rows = cursor.fetchall() or []
+                for row in rows:
+                    total += 1
+                    meta_val = row.get("metadata")
+                    if isinstance(meta_val, str):
+                        meta_val = api.deserialize_metadata(meta_val)
+                    elif not isinstance(meta_val, dict):
+                        meta_val = {}
+
+                    extracted = api._ensure_dict_value(
+                        meta_val.get("extracted_info") or meta_val.get("extracted_data")
+                    )
+                    tests = extracted.get("test_results") or extracted.get("tests")
+                    if tests:
+                        skipped += 1
+                        continue
+
+                    text = row.get("content") or ""
+                    if not text and isinstance(extracted, dict):
+                        text = extracted.get("original_content") or ""
+                    if not text:
+                        skipped += 1
+                        continue
+
+                    test_results = None
+                    extractor = getattr(api, "extract_test_results", None)
+                    if extractor:
+                        try:
+                            test_results = (
+                                extractor.fn(text)
+                                if hasattr(extractor, "fn")
+                                else extractor(text)
+                            )
+                        except Exception:
+                            test_results = None
+
+                    if not test_results:
+                        extractor2 = getattr(api, "extract_medical_info", None)
+                        if extractor2:
+                            try:
+                                info_json = (
+                                    extractor2.fn(text)
+                                    if hasattr(extractor2, "fn")
+                                    else extractor2(text)
+                                )
+                                info_obj = (
+                                    json.loads(info_json)
+                                    if isinstance(info_json, str)
+                                    else info_json
+                                )
+                                if isinstance(info_obj, dict):
+                                    test_results = info_obj.get("test_results")
+                            except Exception:
+                                test_results = None
+
+                    if not test_results or not isinstance(test_results, dict):
+                        skipped += 1
+                        continue
+
+                    filtered_results = api._filter_test_results(test_results)
+                    if filtered_results is None or not filtered_results:
+                        skipped += 1
+                        continue
+
+                    extracted["test_results"] = filtered_results
+                    meta_val["extracted_info"] = extracted
+                    updated += 1
+
+                    if not dry_run:
+                        cursor.execute(
+                            """
+                            UPDATE health_records
+                            SET metadata = %s, updated_at = %s
+                            WHERE id = %s AND user_id = %s
+                            """,
+                            (api.Json(meta_val), datetime.now(), row.get("id"), uid),
+                        )
+
+                    updated_ids.append(str(row.get("id")))
+
+                if not dry_run and updated:
+                    conn.commit()
+
+        return {
+            "dry_run": dry_run,
+            "days": days,
+            "limit": limit,
+            "total_scanned": total,
+            "updated": updated,
+            "skipped": skipped,
+            "updated_ids": updated_ids[:50],
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        api.logger.error(f"回填健康趋势失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+async def get_health_trend_indicators(
+    api: Any,
+    *,
+    days: int,
+    include_points: bool,
+    user_id: str | None,
+    request: Request | None,
+) -> dict[str, Any]:
+    try:
+        uid = api._resolve_user_id(request, user_id)
+        if not uid:
+            raise HTTPException(status_code=401, detail="未认证用户")
+
+        store: dict = {}
+        with api.get_db_connection() as conn:
+            with conn.cursor(row_factory=api.dict_row) as cursor:
+                interval = f"{days} days"
+                cursor.execute(
+                    """
+                    SELECT id, record_date, created_at, metadata, content
+                    FROM health_records
+                    WHERE user_id = %s
+                    AND (record_date >= now() - %s::interval OR created_at >= now() - %s::interval)
+                    """,
+                    (uid, interval, interval),
+                )
+                rows = cursor.fetchall() or []
+                for row in rows:
+                    meta_val = row.get("metadata")
+                    if isinstance(meta_val, str):
+                        meta_val = api.deserialize_metadata(meta_val)
+                    elif not isinstance(meta_val, dict):
+                        meta_val = {}
+
+                    meta_val = api._prepare_metadata_with_tests(
+                        row.get("content"), meta_val
+                    )
+                    extracted = api._ensure_dict_value(
+                        meta_val.get("extracted_info") or meta_val.get("extracted_data")
+                    )
+                    tests = extracted.get("test_results") or extracted.get("tests")
+                    if tests:
+                        api._collect_test_points(
+                            store,
+                            tests,
+                            row.get("record_date") or row.get("created_at"),
+                            "health_records",
+                            str(row.get("id")) if row.get("id") is not None else None,
+                        )
+
+                cursor.execute(
+                    """
+                    SELECT id, visit_date, created_at, tests
+                    FROM visit_summaries
+                    WHERE user_id = %s AND COALESCE(is_deleted, 0) = 0
+                    AND (visit_date >= now() - %s::interval OR created_at >= now() - %s::interval)
+                    """,
+                    (uid, interval, interval),
+                )
+                rows = cursor.fetchall() or []
+                for row in rows:
+                    tests = row.get("tests")
+                    if isinstance(tests, str):
+                        tests = api._ensure_list_value(tests) or api._ensure_dict_value(
+                            tests
+                        )
+                    if tests:
+                        api._collect_test_points(
+                            store,
+                            tests,
+                            row.get("visit_date") or row.get("created_at"),
+                            "visit_summaries",
+                            str(row.get("id")) if row.get("id") is not None else None,
+                        )
+
+        indicators = api._finalize_indicator_items(store, include_points)
+        return {"days": days, "indicators": indicators}
+    except HTTPException:
+        raise
+    except Exception as e:
+        api.logger.error(f"获取健康趋势指标失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+async def get_health_trend_indicator(
+    api: Any,
+    *,
+    name: str,
+    days: int,
+    user_id: str | None,
+    request: Request | None,
+) -> dict[str, Any]:
+    try:
+        uid = api._resolve_user_id(request, user_id)
+        if not uid:
+            raise HTTPException(status_code=401, detail="未认证用户")
+
+        store: dict = {}
+        with api.get_db_connection() as conn:
+            with conn.cursor(row_factory=api.dict_row) as cursor:
+                interval = f"{days} days"
+                cursor.execute(
+                    """
+                    SELECT id, record_date, created_at, metadata, content
+                    FROM health_records
+                    WHERE user_id = %s
+                    AND (record_date >= now() - %s::interval OR created_at >= now() - %s::interval)
+                    """,
+                    (uid, interval, interval),
+                )
+                rows = cursor.fetchall() or []
+                for row in rows:
+                    meta_val = row.get("metadata")
+                    if isinstance(meta_val, str):
+                        meta_val = api.deserialize_metadata(meta_val)
+                    elif not isinstance(meta_val, dict):
+                        meta_val = {}
+
+                    meta_val = api._prepare_metadata_with_tests(
+                        row.get("content"), meta_val
+                    )
+                    extracted = api._ensure_dict_value(
+                        meta_val.get("extracted_info") or meta_val.get("extracted_data")
+                    )
+                    tests = extracted.get("test_results") or extracted.get("tests")
+                    if tests:
+                        api._collect_test_points(
+                            store,
+                            tests,
+                            row.get("record_date") or row.get("created_at"),
+                            "health_records",
+                            str(row.get("id")) if row.get("id") is not None else None,
+                        )
+
+                cursor.execute(
+                    """
+                    SELECT id, visit_date, created_at, tests
+                    FROM visit_summaries
+                    WHERE user_id = %s AND COALESCE(is_deleted, 0) = 0
+                    AND (visit_date >= now() - %s::interval OR created_at >= now() - %s::interval)
+                    """,
+                    (uid, interval, interval),
+                )
+                rows = cursor.fetchall() or []
+                for row in rows:
+                    tests = row.get("tests")
+                    if isinstance(tests, str):
+                        tests = api._ensure_list_value(tests) or api._ensure_dict_value(
+                            tests
+                        )
+                    if tests:
+                        api._collect_test_points(
+                            store,
+                            tests,
+                            row.get("visit_date") or row.get("created_at"),
+                            "visit_summaries",
+                            str(row.get("id")) if row.get("id") is not None else None,
+                        )
+
+        indicators = api._finalize_indicator_items(store, True)
+        selected = None
+        for item in indicators:
+            if item.get("name") == name:
+                selected = item
+                break
+
+        return {"days": days, "indicator": selected}
+    except HTTPException:
+        raise
+    except Exception as e:
+        api.logger.error(f"获取健康趋势详情失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 async def get_record_extracted_info(api: Any, *, record_id: str):
     try:
         with api.get_db_connection() as conn:
