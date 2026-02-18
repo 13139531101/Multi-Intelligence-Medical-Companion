@@ -33,6 +33,14 @@ _GLOBAL_KB_USER_ID = os.getenv("GLOBAL_KB_USER_ID", "__global__")
 _embedding_service: Any = None
 
 
+def _resolve_user_id(user_id: str) -> str:
+    uid = (user_id or "").strip()
+    if uid:
+        return uid
+    env_uid = os.getenv("A2A_CURRENT_USER_ID") or os.getenv("A2A_USER_ID") or ""
+    return (env_uid or "").strip()
+
+
 def _coerce_limit(value: Any, default: int = 10, max_limit: int = 50) -> int:
     try:
         n = int(value)
@@ -239,7 +247,14 @@ def _coerce_int(value: Any, default: int) -> int:
         return int(default)
 
 
-def _chunk_text(text: str, chunk_size: int, overlap: int) -> List[str]:
+def _chunk_mode() -> str:
+    v = (os.getenv("RAG_CHUNK_MODE", "") or "").strip().lower()
+    if v in ("sliding", "window"):
+        return "sliding"
+    return "paragraph"
+
+
+def _chunk_text_sliding(text: str, chunk_size: int, overlap: int) -> List[str]:
     t = re.sub(r"\s+", " ", (text or "").strip())
     if not t:
         return []
@@ -263,6 +278,92 @@ def _chunk_text(text: str, chunk_size: int, overlap: int) -> List[str]:
         if chunks and start <= 0:
             start = end
     return chunks
+
+
+def _chunk_text_paragraph(text: str, chunk_size: int, overlap: int) -> List[str]:
+    s = (text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not s:
+        return []
+    chunk_size = max(50, int(chunk_size))
+    overlap = max(0, int(overlap))
+    if overlap >= chunk_size:
+        overlap = max(0, chunk_size // 5)
+
+    paragraphs: List[str] = []
+    buf: List[str] = []
+    for line in s.split("\n"):
+        if line.strip():
+            buf.append(line.rstrip())
+            continue
+        if buf:
+            paragraphs.append("\n".join(buf).strip())
+            buf = []
+    if buf:
+        paragraphs.append("\n".join(buf).strip())
+
+    chunks: List[str] = []
+    prefix = ""
+    current = ""
+
+    def flush_current() -> None:
+        nonlocal prefix, current
+        c = (current or "").strip()
+        if not c:
+            current = prefix
+            return
+        chunks.append(c)
+        prefix = c[-overlap:] if overlap else ""
+        current = prefix
+
+    for p in paragraphs:
+        para = (p or "").strip()
+        if not para:
+            continue
+
+        if len(para) > chunk_size:
+            if (current or "").strip() and (current or "").strip() != (prefix or "").strip():
+                flush_current()
+
+            slices = _chunk_text_sliding(para, chunk_size=chunk_size, overlap=overlap)
+            for idx, sl in enumerate(slices):
+                if idx == 0 and prefix and len(prefix) + 2 + len(sl) <= chunk_size:
+                    c = (prefix + "\n\n" + sl).strip()
+                else:
+                    c = (sl or "").strip()
+                if c:
+                    chunks.append(c)
+                    prefix = c[-overlap:] if overlap else ""
+                    current = prefix
+            continue
+
+        sep = "\n\n" if (current or "").strip() else ""
+        candidate = (current + sep + para) if sep else (current + para)
+        if len(candidate) <= chunk_size:
+            current = candidate
+            continue
+
+        if (current or "").strip() and (current or "").strip() != (prefix or "").strip():
+            flush_current()
+
+        if prefix:
+            candidate2 = (prefix + "\n\n" + para).strip()
+            if len(candidate2) <= chunk_size:
+                current = candidate2
+            else:
+                current = para
+        else:
+            current = para
+
+    tail = (current or "").strip()
+    if tail:
+        chunks.append(tail)
+    return chunks
+
+
+def _chunk_text(text: str, chunk_size: int, overlap: int) -> List[str]:
+    if _chunk_mode() == "sliding":
+        return _chunk_text_sliding(text, chunk_size=chunk_size, overlap=overlap)
+    return _chunk_text_paragraph(text, chunk_size=chunk_size, overlap=overlap)
 
 
 def _upsert_medical_kb_chunks(
@@ -484,17 +585,18 @@ def _rag_search(
 def _kb_search(
     query: str, user_id: str, limit: int = 10
 ) -> List[Dict[str, Any]]:
+    uid = _resolve_user_id(user_id)
     rag_items = _rag_search(
         query,
-        user_id=user_id,
+        user_id=uid,
         limit=limit,
-        source_types=["medical_kb"],
+        source_types=["health_records", "visit_summaries", "medical_kb"],
         include_global=True,
     )
     if rag_items:
         return rag_items[:limit]
     return _keyword_search_medical_kb(
-        query, user_id=user_id, limit=limit, include_global=True
+        query, user_id=uid, limit=limit, include_global=True
     )[:limit]
 
 

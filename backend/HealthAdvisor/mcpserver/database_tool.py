@@ -1,13 +1,20 @@
 import json
 import logging
 import os
-import uuid
-from datetime import datetime
-from mcp.server.fastmcp import FastMCP
 import sys
-# Add parent directory to sys.path to import database_config
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from database_config import DatabaseManager
+import uuid
+from functools import lru_cache
+from typing import Any
+from mcp.server.fastmcp import FastMCP
+
+_ha_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _ha_dir not in sys.path:
+    sys.path.append(_ha_dir)
+
+try:
+    from database_config import DatabaseManager
+except Exception:
+    from HealthAdvisor.database_config import DatabaseManager  # type: ignore
 
 # Initialize FastMCP
 mcp = FastMCP("database_tool")
@@ -17,6 +24,25 @@ logger = logging.getLogger(__name__)
 
 # Initialize Database Manager
 db_manager = DatabaseManager()
+
+
+@lru_cache(maxsize=1)
+def _consultations_column_set() -> set[str]:
+    cols = db_manager.execute_query(
+        """
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_name='consultations'
+        """
+    )
+    return set(
+        [
+            c.get("column_name")
+            for c in (cols or [])
+            if isinstance(c, dict) and c.get("column_name")
+        ]
+    )
+
 
 def init_database():
     """Initialize the database tables."""
@@ -44,24 +70,43 @@ def init_database():
         """
         cols = db_manager.execute_query(check_col_query)
         if not cols:
-             logger.info("Adding missing column 'session_id' to consultations table")
-             db_manager.execute_update("ALTER TABLE consultations ADD COLUMN session_id TEXT")
+            logger.info(
+                "Adding missing column 'session_id' to consultations table"
+            )
+            db_manager.execute_update(
+                "ALTER TABLE consultations ADD COLUMN session_id TEXT"
+            )
 
+        _consultations_column_set.cache_clear()
         logger.info("Database initialized successfully")
     except Exception as e:
         logger.error(f"Database initialization failed: {e}")
 
+
 # Call initialization
 init_database()
+
+
+def _coerce_limit(limit: Any, *, default: int = 10, max_limit: int = 200) -> int:
+    try:
+        v = int(limit)
+    except Exception:
+        v = int(default)
+    if v < 1:
+        v = 1
+    if v > max_limit:
+        v = max_limit
+    return v
+
 
 @mcp.tool()
 def save_consultation(
     user_id: str,
     question: str,
     answer: str,
-    tags: list = None,
-    consultation_id: str = None,
-    session_id: str = None,
+    tags: list[str] | None = None,
+    consultation_id: str | None = None,
+    session_id: str | None = None,
 ) -> str:
     """
     保存健康咨询记录
@@ -78,20 +123,21 @@ def save_consultation(
         cid = (consultation_id or env_cid or str(uuid.uuid4())).strip()
         sid = (session_id or os.getenv("A2A_CURRENT_SESSION_ID") or cid).strip()
 
-        cols = db_manager.execute_query(
-            """
-            SELECT column_name
-            FROM information_schema.columns
-            WHERE table_name='consultations'
-            """,
-        )
-        colset = set([c.get("column_name") for c in (cols or []) if c and c.get("column_name")])
+        uid = (user_id or "").strip()
+        q = (question or "").strip()
+        a = (answer or "").strip()
+        if not uid:
+            raise RuntimeError("user_id不能为空")
+        if not q or not a:
+            raise RuntimeError("question/answer不能为空")
+
+        colset = _consultations_column_set()
         if "consultation_id" not in colset or "user_id" not in colset:
             raise RuntimeError("consultations table schema incompatible")
 
         insert_cols = ["user_id", "consultation_id"]
         insert_vals = ["%s", "%s"]
-        params = [user_id, cid]
+        params = [uid, cid]
 
         if "session_id" in colset:
             insert_cols.append("session_id")
@@ -100,15 +146,19 @@ def save_consultation(
         if "question" in colset:
             insert_cols.append("question")
             insert_vals.append("%s")
-            params.append(question)
+            params.append(q)
         if "answer" in colset:
             insert_cols.append("answer")
             insert_vals.append("%s")
-            params.append(answer)
+            params.append(a)
         if "tags" in colset:
             insert_cols.append("tags")
             insert_vals.append("%s::jsonb")
-            params.append(json.dumps(tags, ensure_ascii=False) if tags else "[]")
+            params.append(
+                json.dumps(list(tags or []), ensure_ascii=False)
+                if tags is not None
+                else "[]"
+            )
 
         update_sets = []
         if "session_id" in colset:
@@ -134,6 +184,7 @@ def save_consultation(
         logger.error(f"保存咨询记录失败: {e}")
         return json.dumps({'success': False, 'message': str(e)}, ensure_ascii=False)
 
+
 @mcp.tool()
 def get_consultation_history(user_id: str, limit: int = 10) -> str:
     """
@@ -143,6 +194,10 @@ def get_consultation_history(user_id: str, limit: int = 10) -> str:
     :return: 历史咨询记录列表
     """
     try:
+        uid = (user_id or "").strip()
+        if not uid:
+            raise RuntimeError("user_id不能为空")
+        limit_n = _coerce_limit(limit, default=10, max_limit=200)
         query = """
             SELECT consultation_id, question, answer, tags, created_at
             FROM consultations
@@ -151,7 +206,7 @@ def get_consultation_history(user_id: str, limit: int = 10) -> str:
             LIMIT %s
         """
 
-        results = db_manager.execute_query(query, (user_id, limit))
+        results = db_manager.execute_query(query, (uid, limit_n))
 
         return json.dumps({
             'success': True,
@@ -161,6 +216,7 @@ def get_consultation_history(user_id: str, limit: int = 10) -> str:
     except Exception as e:
         logger.error(f"获取咨询历史失败: {e}")
         return json.dumps({'success': False, 'message': str(e)}, ensure_ascii=False)
+
 
 if __name__ == "__main__":
     mcp.run()

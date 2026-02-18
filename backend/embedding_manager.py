@@ -133,6 +133,11 @@ class EmbeddingService:
         provider = (self.provider or "").strip().lower()
         base_url = (os.getenv("EMBEDDING_API_BASE") or "").strip()
         api_key = (os.getenv("EMBEDDING_API_KEY") or "").strip()
+        timeout_env = (os.getenv("EMBEDDING_TIMEOUT_SECONDS") or "").strip()
+        try:
+            timeout_seconds = float(timeout_env) if timeout_env else 30.0
+        except Exception:
+            timeout_seconds = 30.0
 
         if not base_url and (os.getenv("DASHSCOPE_API_BASE") or "").strip():
             base_url = (os.getenv("DASHSCOPE_API_BASE") or "").strip()
@@ -181,7 +186,9 @@ class EmbeddingService:
             self._remote_dimensions = desired_dim_int
         else:
             self._remote_dimensions = None
-        self._remote_client = OpenAI(api_key=api_key, base_url=base_url)
+        self._remote_client = OpenAI(
+            api_key=api_key, base_url=base_url, timeout=timeout_seconds
+        )
         self.model = None
         self.dimension = desired_dim_int
         logger.info(
@@ -204,30 +211,42 @@ class EmbeddingService:
         if not valid_texts:
             return results
 
-        kwargs: Dict[str, Any] = {
-            "model": self.model_name,
-            "input": valid_texts,
-        }
-        if self._remote_dimensions is not None and self.model_name in {
-            "text-embedding-v3",
-            "text-embedding-v4",
-        }:
-            kwargs["dimensions"] = int(self._remote_dimensions)
+        provider = (self.provider or "").strip().lower()
+        default_max_batch = 10 if provider in {"dashscope", "qwen", "bailian"} else 96
+        max_batch_env = (os.getenv("EMBEDDING_REMOTE_MAX_BATCH") or "").strip()
+        try:
+            max_batch = int(max_batch_env) if max_batch_env else int(default_max_batch)
+        except Exception:
+            max_batch = int(default_max_batch)
+        max_batch = max(1, min(1024, int(max_batch)))
 
-        resp = self._remote_client.embeddings.create(**kwargs)
-        data = getattr(resp, "data", None) or []
-        if len(data) != len(valid_texts):
-            raise RuntimeError("远程嵌入返回数量不匹配")
+        for start in range(0, len(valid_texts), max_batch):
+            batch_texts = valid_texts[start : start + max_batch]
+            kwargs: Dict[str, Any] = {
+                "model": self.model_name,
+                "input": batch_texts,
+            }
+            if self._remote_dimensions is not None and self.model_name in {
+                "text-embedding-v3",
+                "text-embedding-v4",
+            }:
+                kwargs["dimensions"] = int(self._remote_dimensions)
 
-        for out_idx, emb_obj in zip(valid_indices, data):
-            emb = getattr(emb_obj, "embedding", None)
-            if emb is None:
-                results[out_idx] = None
-                continue
-            vec = list(emb)
-            if self.dimension is not None:
-                vec = self._adapt_embedding_dimension(vec, int(self.dimension))
-            results[out_idx] = vec
+            resp = self._remote_client.embeddings.create(**kwargs)
+            data = getattr(resp, "data", None) or []
+            if len(data) != len(batch_texts):
+                raise RuntimeError("远程嵌入返回数量不匹配")
+
+            for local_i, emb_obj in enumerate(data):
+                out_idx = valid_indices[start + local_i]
+                emb = getattr(emb_obj, "embedding", None)
+                if emb is None:
+                    results[out_idx] = None
+                    continue
+                vec = list(emb)
+                if self.dimension is not None:
+                    vec = self._adapt_embedding_dimension(vec, int(self.dimension))
+                results[out_idx] = vec
 
         return results
 

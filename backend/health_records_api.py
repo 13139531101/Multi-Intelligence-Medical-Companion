@@ -288,19 +288,50 @@ def _vector_literal(vec: list[float]) -> str:
     return "[" + ",".join(f"{float(x):.8f}" for x in vec) + "]"
 
 
-def _split_text_for_rag(
-    text: str, chunk_size: int = 650, overlap: int = 120
-) -> list[str]:
-    s = (text or "").strip()
-    if not s:
-        return []
+def _rag_chunk_settings() -> dict[str, int]:
+    try:
+        chunk_size = int(os.getenv("RAG_CHUNK_SIZE", "650"))
+    except Exception:
+        chunk_size = 650
+    try:
+        overlap = int(os.getenv("RAG_CHUNK_OVERLAP", "120"))
+    except Exception:
+        overlap = 120
+    try:
+        max_chunks = int(os.getenv("RAG_MAX_CHUNKS", "0"))
+    except Exception:
+        max_chunks = 0
+
     if chunk_size <= 0:
         chunk_size = 650
     if overlap < 0:
         overlap = 0
+    if max_chunks < 0:
+        max_chunks = 0
     if overlap >= chunk_size:
         overlap = max(0, chunk_size // 5)
+    return {"chunk_size": chunk_size, "overlap": overlap, "max_chunks": max_chunks}
 
+
+def _rag_chunk_mode() -> str:
+    v = (os.getenv("RAG_CHUNK_MODE", "") or "").strip().lower()
+    if v in ("paragraph", "para", "sections", "section"):
+        return "paragraph"
+    return "sliding"
+
+
+def _rag_chunk_mode_for_source(source_type: str) -> str:
+    st = (source_type or "").strip().lower()
+    if st == "medical_kb":
+        return "paragraph"
+    return _rag_chunk_mode()
+
+
+def _split_text_for_rag_sliding(
+    s: str, *, chunk_size: int, overlap: int, max_chunks: int
+) -> list[str]:
+    if not s:
+        return []
     chunks: list[str] = []
     i = 0
     n = len(s)
@@ -309,10 +340,145 @@ def _split_text_for_rag(
         chunk = s[i:j].strip()
         if chunk:
             chunks.append(chunk)
+            if max_chunks and len(chunks) >= max_chunks:
+                break
         if j >= n:
             break
         i = max(0, j - overlap)
     return chunks
+
+
+def _split_text_for_rag_paragraph(
+    s: str, *, chunk_size: int, overlap: int, max_chunks: int
+) -> list[str]:
+    if not s:
+        return []
+
+    s = s.replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not s:
+        return []
+
+    paragraphs: list[str] = []
+    buf: list[str] = []
+    for line in s.split("\n"):
+        if line.strip():
+            buf.append(line.rstrip())
+            continue
+        if buf:
+            paragraphs.append("\n".join(buf).strip())
+            buf = []
+    if buf:
+        paragraphs.append("\n".join(buf).strip())
+
+    chunks: list[str] = []
+    prefix = ""
+    current = ""
+
+    def flush_current() -> None:
+        nonlocal prefix, current
+        c = (current or "").strip()
+        if not c:
+            current = prefix
+            return
+        chunks.append(c)
+        if max_chunks and len(chunks) >= max_chunks:
+            current = ""
+            prefix = ""
+            return
+        prefix = c[-overlap:] if overlap else ""
+        current = prefix
+
+    for p in paragraphs:
+        if max_chunks and len(chunks) >= max_chunks:
+            break
+        para = (p or "").strip()
+        if not para:
+            continue
+
+        if len(para) > chunk_size:
+            if (current or "").strip() and (current or "").strip() != (prefix or "").strip():
+                flush_current()
+                if max_chunks and len(chunks) >= max_chunks:
+                    break
+
+            slices = _split_text_for_rag_sliding(
+                para, chunk_size=chunk_size, overlap=overlap, max_chunks=0
+            )
+            for idx, sl in enumerate(slices):
+                if max_chunks and len(chunks) >= max_chunks:
+                    break
+                if idx == 0 and prefix and len(prefix) + 2 + len(sl) <= chunk_size:
+                    c = (prefix + "\n\n" + sl).strip()
+                else:
+                    c = (sl or "").strip()
+                if c:
+                    chunks.append(c)
+                    prefix = c[-overlap:] if overlap else ""
+                    current = prefix
+            continue
+
+        sep = "\n\n" if (current or "").strip() else ""
+        candidate = (current + sep + para) if sep else (current + para)
+        if len(candidate) <= chunk_size:
+            current = candidate
+            continue
+
+        if (current or "").strip() and (current or "").strip() != (prefix or "").strip():
+            flush_current()
+            if max_chunks and len(chunks) >= max_chunks:
+                break
+
+        if prefix:
+            candidate2 = (prefix + "\n\n" + para).strip()
+            if len(candidate2) <= chunk_size:
+                current = candidate2
+            else:
+                current = para
+        else:
+            current = para
+
+    tail = (current or "").strip()
+    if tail:
+        if not overlap or not chunks or tail != (chunks[-1][-overlap:] if overlap and len(chunks[-1]) >= overlap else ""):
+            chunks.append(tail)
+
+    if max_chunks:
+        return chunks[:max_chunks]
+    return chunks
+
+
+def _split_text_for_rag(
+    text: str,
+    chunk_size: int | None = None,
+    overlap: int | None = None,
+    max_chunks: int | None = None,
+    chunk_mode: str | None = None,
+) -> list[str]:
+    s = (text or "").strip()
+    if not s:
+        return []
+    st = _rag_chunk_settings()
+    chunk_size = int(st["chunk_size"] if chunk_size is None else chunk_size)
+    overlap = int(st["overlap"] if overlap is None else overlap)
+    max_chunks = int(st["max_chunks"] if max_chunks is None else max_chunks)
+
+    if chunk_size <= 0:
+        chunk_size = 650
+    if overlap < 0:
+        overlap = 0
+    if overlap >= chunk_size:
+        overlap = max(0, chunk_size // 5)
+    if max_chunks < 0:
+        max_chunks = 0
+
+    mode = (chunk_mode or "").strip().lower() or _rag_chunk_mode()
+    if mode == "paragraph":
+        return _split_text_for_rag_paragraph(
+            s, chunk_size=chunk_size, overlap=overlap, max_chunks=max_chunks
+        )
+    return _split_text_for_rag_sliding(
+        s, chunk_size=chunk_size, overlap=overlap, max_chunks=max_chunks
+    )
 
 
 def _ensure_rag_schema(cursor) -> None:
@@ -321,9 +487,15 @@ def _ensure_rag_schema(cursor) -> None:
         return
     try:
         try:
-            cursor.execute("CREATE EXTENSION IF NOT EXISTS vector")
+            cursor.execute(
+                "SELECT 1 FROM pg_extension WHERE extname = 'vector' LIMIT 1"
+            )
+            has_vector = bool(cursor.fetchone())
         except Exception:
-            pass
+            has_vector = False
+
+        if not has_vector:
+            cursor.execute("CREATE EXTENSION IF NOT EXISTS vector")
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS rag_documents (
@@ -363,25 +535,6 @@ def _ensure_rag_schema(cursor) -> None:
             );
             """
         )
-        try:
-            cursor.execute(
-                """
-                ALTER TABLE rag_chunks
-                DROP CONSTRAINT IF EXISTS rag_chunks_source_type_source_id_chunk_index_embedding_model_key
-                """
-            )
-        except Exception:
-            pass
-        try:
-            cursor.execute(
-                """
-                ALTER TABLE rag_chunks
-                ADD CONSTRAINT rag_chunks_user_source_chunk_model_key
-                UNIQUE (user_id, source_type, source_id, chunk_index, embedding_model)
-                """
-            )
-        except Exception:
-            pass
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_rag_documents_user ON rag_documents(user_id);"
         )
@@ -412,6 +565,13 @@ def _ensure_rag_schema(cursor) -> None:
         _rag_schema_ready = True
     except Exception:
         _rag_schema_ready = False
+        try:
+            conn = getattr(cursor, "connection", None)
+            if conn is not None:
+                conn.rollback()
+        except Exception:
+            pass
+        raise
 
 
 def _make_rag_text(
@@ -444,7 +604,37 @@ def _upsert_rag_document(
 
     _ensure_rag_schema(cursor)
 
-    chunks = _split_text_for_rag(text)
+    text_sha256 = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    try:
+        cursor.execute(
+            """
+            SELECT text_sha256
+            FROM rag_documents
+            WHERE user_id = %s
+              AND source_type = %s
+              AND source_id = %s
+              AND embedding_model = %s
+            LIMIT 1
+            """,
+            (user_id, source_type, source_id, es.model_name),
+        )
+        row = cursor.fetchone()
+        existing_sha = None
+        if row:
+            if isinstance(row, dict):
+                existing_sha = row.get("text_sha256")
+            elif isinstance(row, (list, tuple)):
+                existing_sha = row[0]
+            else:
+                existing_sha = getattr(row, "text_sha256", None)
+        if existing_sha and str(existing_sha) == text_sha256:
+            return 0
+    except Exception:
+        pass
+
+    chunks = _split_text_for_rag(
+        text, chunk_mode=_rag_chunk_mode_for_source(source_type)
+    )
     if not chunks:
         return 0
 
@@ -460,7 +650,6 @@ def _upsert_rag_document(
         return 0
 
     now = datetime.now()
-    text_sha256 = hashlib.sha256(text.encode("utf-8")).hexdigest()
 
     cursor.execute(
         """
@@ -3269,6 +3458,26 @@ class AdminMedicalKBImportRequest(BaseModel):
     global_kb: bool = True
     user_id: Optional[str] = None
     docs: List[AdminMedicalKBImportDoc] = Field(default_factory=list)
+
+
+class AdminMedicalKBImportFromAPIRequest(BaseModel):
+    global_kb: bool = True
+    user_id: Optional[str] = None
+    url: str
+    method: str = "GET"
+    headers: Optional[Dict[str, str]] = None
+    params: Optional[Dict[str, Any]] = None
+    json: Optional[Any] = None
+    timeout: float = Field(default=20.0, ge=1.0, le=120.0)
+
+    items_path: Optional[str] = None
+    doc_id_field: Optional[str] = None
+    title_field: Optional[str] = None
+    content_field: Optional[str] = None
+    content_fields: List[str] = Field(default_factory=list)
+
+    doc_type: Optional[str] = "medical_kb"
+    max_items: int = Field(default=50, ge=1, le=500)
 
 
 @app.post("/api/admin/medical-kb/import")

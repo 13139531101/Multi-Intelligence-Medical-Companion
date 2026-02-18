@@ -15,6 +15,13 @@ async def backfill_rag(payload: RAGBackfillRequest, request: Request = None):
     return await rag_service.backfill_rag(legacy, payload=payload, request=request)
 
 
+@router.post("/api/admin/rag/backfill")
+async def admin_backfill_rag(payload: RAGBackfillRequest, request: Request = None):
+    return await rag_service.admin_backfill_rag(
+        legacy, payload=payload, request=request
+    )
+
+
 @router.get("/api/admin/monitor/summary")
 async def admin_monitor_summary(request: Request = None):
     return await rag_service.admin_monitor_summary(legacy, request=request)

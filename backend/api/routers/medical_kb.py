@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, File, Form, Query, Request, UploadFile
 
 import health_records_api as legacy
 
@@ -34,6 +34,37 @@ async def admin_import_medical_kb(
     payload: legacy.AdminMedicalKBImportRequest, request: Request = None
 ):
     return await medical_kb_service.admin_import_medical_kb(
+        legacy, payload=payload, request=request
+    )
+
+
+@router.post("/api/admin/medical-kb/upload")
+async def admin_upload_medical_kb_file(
+    file: UploadFile = File(...),
+    global_kb: bool = Form(True),
+    user_id: Optional[str] = Form(None),
+    doc_id: Optional[str] = Form(None),
+    doc_type: Optional[str] = Form("medical_kb"),
+    title: Optional[str] = Form(None),
+    request: Request = None,
+):
+    return await medical_kb_service.admin_upload_medical_kb_file(
+        legacy,
+        file=file,
+        global_kb=global_kb,
+        user_id=user_id,
+        doc_id=doc_id,
+        doc_type=doc_type,
+        title=title,
+        request=request,
+    )
+
+
+@router.post("/api/admin/medical-kb/import-from-api")
+async def admin_import_medical_kb_from_api(
+    payload: legacy.AdminMedicalKBImportFromAPIRequest, request: Request = None
+):
+    return await medical_kb_service.admin_import_medical_kb_from_api(
         legacy, payload=payload, request=request
     )
 
