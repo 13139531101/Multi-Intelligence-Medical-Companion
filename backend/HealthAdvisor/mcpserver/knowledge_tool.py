@@ -4,6 +4,7 @@ import re
 import sys
 import os
 import uuid
+import httpx
 # Add parent directory to sys.path
 _ha_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _ha_dir not in sys.path:
@@ -137,7 +138,50 @@ def _keyword_search_medical_kb(
                 ),
             }
         )
-    return items
+    if not items:
+        return items
+
+    rerank_enabled = _env_flag("RAG_RERANK_ENABLED", default=True)
+    if rerank_enabled and len(items) > 1:
+        rerank_model = (os.getenv("RAG_RERANK_MODEL") or "").strip() or "gte-rerank-v2"
+        rerank_timeout = _coerce_int(os.getenv("RAG_RERANK_TIMEOUT_SECONDS", "10"), 10)
+        try:
+            docs = [str(r.get("chunk_text") or "") for r in rows]
+            results = _dashscope_rerank(
+                query,
+                docs,
+                top_n=len(docs),
+                model=rerank_model,
+                timeout_seconds=rerank_timeout,
+            )
+            if results:
+                scored: List[tuple[int, float]] = []
+                for it in results:
+                    try:
+                        idx = int(it.get("index"))
+                        sc = float(it.get("relevance_score"))
+                        scored.append((idx, sc))
+                    except Exception:
+                        continue
+                scored.sort(key=lambda x: x[1], reverse=True)
+                ordered: List[Dict[str, Any]] = []
+                seen = set()
+                for idx, sc in scored:
+                    if idx < 0 or idx >= len(items):
+                        continue
+                    if idx in seen:
+                        continue
+                    seen.add(idx)
+                    doc = dict(items[idx])
+                    doc["rerank_score"] = sc
+                    doc["score"] = sc
+                    ordered.append(doc)
+                if ordered:
+                    items = ordered + [items[i] for i in range(len(items)) if i not in seen]
+        except Exception:
+            pass
+
+    return items[:limit]
 
 
 def _ensure_rag_schema(db) -> None:
@@ -245,6 +289,80 @@ def _coerce_int(value: Any, default: int) -> int:
         return int(value)
     except Exception:
         return int(default)
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    v = os.getenv(name)
+    if v is None:
+        return bool(default)
+    s = str(v).strip().lower()
+    if s in {"1", "true", "yes", "y", "on"}:
+        return True
+    if s in {"0", "false", "no", "n", "off"}:
+        return False
+    return bool(default)
+
+
+def _dashscope_api_key() -> str:
+    return (
+        (os.getenv("DASHSCOPE_API_KEY") or "").strip()
+        or (os.getenv("RERANK_API_KEY") or "").strip()
+        or (os.getenv("EMBEDDING_API_KEY") or "").strip()
+        or (os.getenv("OPENAI_API_KEY") or "").strip()
+    )
+
+
+def _dashscope_rerank(
+    query: str,
+    documents: List[str],
+    *,
+    top_n: int,
+    model: str,
+    timeout_seconds: int,
+) -> Optional[List[Dict[str, Any]]]:
+    q = (query or "").strip()
+    if not q:
+        return None
+    docs = [str(d or "").strip() for d in (documents or [])]
+    docs = [d for d in docs if d]
+    if len(docs) < 2:
+        return None
+
+    api_key = _dashscope_api_key()
+    if not api_key:
+        return None
+
+    base_url = (os.getenv("RERANK_API_BASE") or "").strip() or "https://dashscope.aliyuncs.com"
+    url = base_url.rstrip("/") + "/api/v1/services/rerank/text-rerank/text-rerank"
+
+    m = (model or "").strip() or "gte-rerank-v2"
+    tn = max(1, min(int(top_n), len(docs)))
+
+    if m == "qwen3-rerank":
+        payload: Dict[str, Any] = {
+            "model": m,
+            "query": q,
+            "documents": docs,
+            "top_n": tn,
+        }
+    else:
+        payload = {
+            "model": m,
+            "input": {"query": q, "documents": docs},
+            "parameters": {"return_documents": False, "top_n": tn},
+        }
+
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    timeout = httpx.Timeout(timeout_seconds, connect=timeout_seconds)
+    with httpx.Client(timeout=timeout) as client:
+        resp = client.post(url, headers=headers, json=payload)
+        resp.raise_for_status()
+        data = resp.json()
+    out = (data or {}).get("output") or {}
+    results = out.get("results")
+    if not isinstance(results, list):
+        return None
+    return results
 
 
 def _chunk_mode() -> str:
@@ -527,6 +645,11 @@ def _rag_search(
     uids = _kb_user_ids(user_id, include_global=include_global)
     where_uid = "(" + " OR ".join(["user_id = %s"] * len(uids)) + ")"
 
+    rerank_enabled = _env_flag("RAG_RERANK_ENABLED", default=True)
+    rerank_candidates = _coerce_int(os.getenv("RAG_RERANK_CANDIDATES", "20"), 20)
+    rerank_candidates = max(1, min(50, int(rerank_candidates)))
+    fetch_limit = max(int(limit), int(rerank_candidates))
+
     rows = db.execute_query(
         f"""
         SELECT *
@@ -551,7 +674,7 @@ def _rag_search(
         ORDER BY distance ASC
         LIMIT %s
         """,
-        tuple([qv, qv] + uids + st + [limit]),
+        tuple([qv, qv] + uids + st + [fetch_limit]),
     )
 
     items: List[Dict[str, Any]] = []
@@ -572,6 +695,7 @@ def _rag_search(
                 "excerpt": _excerpt(r.get("chunk_text")),
                 "created_at": str(r.get("created_at")),
                 "score": score,
+                "vector_score": score,
                 "scope": (
                     "global"
                     if str(r.get("user_id")) == _GLOBAL_KB_USER_ID
@@ -579,7 +703,50 @@ def _rag_search(
                 ),
             }
         )
-    return items
+    if not items:
+        return items
+
+    if rerank_enabled and len(items) > 1:
+        rerank_model = (os.getenv("RAG_RERANK_MODEL") or "").strip() or "gte-rerank-v2"
+        rerank_timeout = _coerce_int(os.getenv("RAG_RERANK_TIMEOUT_SECONDS", "10"), 10)
+        try:
+            docs = [str(r.get("chunk_text") or "") for r in rows]
+            results = _dashscope_rerank(
+                query,
+                docs,
+                top_n=len(docs),
+                model=rerank_model,
+                timeout_seconds=rerank_timeout,
+            )
+            if results:
+                scored: List[tuple[int, float]] = []
+                for it in results:
+                    try:
+                        idx = int(it.get("index"))
+                        sc = float(it.get("relevance_score"))
+                        scored.append((idx, sc))
+                    except Exception:
+                        continue
+                scored.sort(key=lambda x: x[1], reverse=True)
+                ordered: List[Dict[str, Any]] = []
+                seen = set()
+                for idx, sc in scored:
+                    if idx < 0 or idx >= len(items):
+                        continue
+                    doc = items[idx]
+                    if idx in seen:
+                        continue
+                    seen.add(idx)
+                    doc = dict(doc)
+                    doc["rerank_score"] = sc
+                    doc["score"] = sc
+                    ordered.append(doc)
+                if ordered:
+                    items = ordered + [items[i] for i in range(len(items)) if i not in seen]
+        except Exception:
+            pass
+
+    return items[:limit]
 
 
 def _kb_search(
