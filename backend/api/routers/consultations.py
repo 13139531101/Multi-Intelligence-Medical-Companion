@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+"""
+咨询与对话历史（Consultations）相关路由（薄路由层）
+
+- 提供咨询会话（consultation）与消息（chat_messages）的创建、查询与删除。
+- 路由层只做参数声明与转发，业务逻辑由 consultations_service 实现。
+"""
+
 from typing import List, Optional
 
 from fastapi import APIRouter, Query, Request
@@ -21,6 +28,7 @@ async def get_consultation_history(
     include_health_records: bool = Query(False),
     request: Request = None,
 ):
+    """分页获取咨询历史（可选包含摘要/健康档案相关对话）。"""
     return await consultations_service.get_consultation_history(
         legacy,
         skip=skip,
@@ -38,6 +46,7 @@ async def create_consultation(
     user_id: Optional[str] = Query(None),
     request: Request = None,
 ):
+    """创建一次新的咨询会话。"""
     return await consultations_service.create_consultation(
         legacy,
         consultation=consultation,
@@ -52,6 +61,7 @@ async def delete_consultation(
     user_id: Optional[str] = Query(None),
     request: Request = None,
 ):
+    """删除咨询会话（以及与之关联的消息，具体行为以 service 实现为准）。"""
     return await consultations_service.delete_consultation(
         legacy,
         consultation_id=consultation_id,
@@ -66,6 +76,7 @@ async def save_consultation_message(
     user_id: Optional[str] = Query(None),
     request: Request = None,
 ):
+    """保存一条对话消息（用户/助手消息持久化）。"""
     return await consultations_service.save_consultation_message(
         legacy,
         message=message,
@@ -80,6 +91,7 @@ async def get_consultation_messages(
     user_id: Optional[str] = Query(None),
     request: Request = None,
 ):
+    """获取指定咨询会话下的消息列表。"""
     return await consultations_service.get_consultation_messages(
         legacy,
         consultation_id=consultation_id,

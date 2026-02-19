@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+"""
+健康档案（Health Records）相关路由（薄路由层）
+
+- 提供健康档案的 CRUD、文件上传（OCR/解析）、统计与洞察等接口。
+- 路由层负责参数声明与转发，业务逻辑在 health_records_service。
+"""
+
 from datetime import date
 from typing import List, Optional
 
@@ -33,6 +40,7 @@ async def get_health_records(
     user_id: Optional[str] = Query(None, description="用户ID过滤"),
     request: Request = None,
 ):
+    """分页查询健康档案列表（支持类型/重要性/日期/关键词筛选）。"""
     return await health_records_service.get_health_records(
         legacy,
         skip=skip,
@@ -53,6 +61,7 @@ async def get_health_record(
     user_id: Optional[str] = Query(None, description="用户ID过滤"),
     request: Request = None,
 ):
+    """获取单条健康档案详情。"""
     return await health_records_service.get_health_record(
         legacy,
         record_id=record_id,
@@ -67,6 +76,7 @@ async def create_health_record(
     user_id: Optional[str] = Query(None, description="用户ID"),
     request: Request = None,
 ):
+    """创建健康档案记录。"""
     return await health_records_service.create_health_record(
         legacy,
         record=record,
@@ -82,6 +92,7 @@ async def update_health_record(
     user_id: Optional[str] = Query(None, description="用户ID"),
     request: Request = None,
 ):
+    """更新健康档案记录（部分字段更新）。"""
     return await health_records_service.update_health_record(
         legacy,
         record_id=record_id,
@@ -97,6 +108,7 @@ async def delete_health_record(
     user_id: Optional[str] = Query(None, description="用户ID"),
     request: Request = None,
 ):
+    """删除健康档案记录。"""
     return await health_records_service.delete_health_record(
         legacy,
         record_id=record_id,
@@ -107,6 +119,7 @@ async def delete_health_record(
 
 @router.get("/api/health-records/statistics", response_model=HealthStatistics)
 async def get_health_statistics():
+    """获取健康档案统计信息（用于概览展示）。"""
     return await health_records_service.get_health_statistics(legacy)
 
 
@@ -117,6 +130,7 @@ async def get_health_insights(
     include_trends: bool = Query(True, description="包含趋势"),
     include_risks: bool = Query(True, description="包含风险"),
 ):
+    """获取健康洞察（聚合分析、趋势、风险与建议）。"""
     return await health_records_service.get_health_insights(
         legacy,
         analysis_type=analysis_type,
@@ -133,6 +147,7 @@ async def upload_file(
     skip_ocr: Optional[str] = Form(None),
     request: Request = None,
 ):
+    """上传单个文件并解析入库（默认走 OCR/结构化提取，可选跳过 OCR）。"""
     return await health_records_service.upload_file(
         legacy,
         file=file,
@@ -148,6 +163,7 @@ async def upload_multiple_files(
     user_id: str = Form(None),
     request: Request = None,
 ):
+    """批量上传文件并解析入库。"""
     return await health_records_service.upload_multiple_files(
         legacy,
         files=files,
@@ -158,11 +174,13 @@ async def upload_multiple_files(
 
 @router.post("/api/health-records/sync-to-hrm")
 async def sync_sqlite_to_hrm(user_id: str = Query(..., description="需要同步的用户ID")):
+    """将旧 SQLite 数据同步到健康档案管理模块（迁移/兼容用途）。"""
     return await health_records_service.sync_sqlite_to_hrm(legacy, user_id=user_id)
 
 
 @router.get("/api/health-records/{record_id}/extracted")
 async def get_record_extracted_info(record_id: str):
+    """获取某条档案的结构化抽取结果（用于前端展示/纠错）。"""
     return await health_records_service.get_record_extracted_info(
         legacy,
         record_id=record_id,
@@ -171,6 +189,7 @@ async def get_record_extracted_info(record_id: str):
 
 @router.get("/api/health-records/files/{file_id}")
 async def get_file_attachment(file_id: str):
+    """下载/预览档案关联的原始文件附件。"""
     return await health_records_service.get_file_attachment(
         legacy,
         file_id=file_id,

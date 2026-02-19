@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+"""
+健康趋势（Health Trends）相关路由（薄路由层）
+
+- 提供趋势指标的回填与查询接口，服务于首页趋势图与趋势详情。
+- 具体计算与数据聚合逻辑由 health_records_service 提供。
+"""
+
 from typing import Optional
 
 from fastapi import APIRouter, Query, Request
@@ -19,6 +26,7 @@ async def backfill_health_trends(
     user_id: Optional[str] = Query(None),
     request: Request = None,
 ):
+    """回填趋势数据（按天数范围聚合生成指标，支持 dry-run 预演）。"""
     return await health_records_service.backfill_health_trends(
         legacy,
         days=days,
@@ -36,6 +44,7 @@ async def get_health_trend_indicators(
     user_id: Optional[str] = Query(None),
     request: Request = None,
 ):
+    """获取趋势指标列表（可选是否携带折线点数据）。"""
     return await health_records_service.get_health_trend_indicators(
         legacy,
         days=days,
@@ -52,6 +61,7 @@ async def get_health_trend_indicator(
     user_id: Optional[str] = Query(None),
     request: Request = None,
 ):
+    """获取单个趋势指标详情（按 name 指定指标）。"""
     return await health_records_service.get_health_trend_indicator(
         legacy,
         name=name,

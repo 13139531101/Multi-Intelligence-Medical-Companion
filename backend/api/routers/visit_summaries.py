@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+"""
+就诊摘要（Visit Summaries）相关路由（薄路由层）
+
+- 提供摘要的增删改查、图片识别生成摘要，以及批量采集图片后合并生成摘要的能力。
+- 路由层只做参数声明与转发，具体逻辑在 visit_summaries_service。
+"""
+
 from typing import List, Optional
 
 from fastapi import APIRouter, File, Form, Query, Request, UploadFile
@@ -17,6 +24,7 @@ async def get_visit_summary_count(
     user_id: Optional[str] = Query(None),
     request: Request = None,
 ):
+    """统计就诊摘要数量（可按用户过滤）。"""
     return await visit_summaries_service.get_visit_summary_count(
         legacy,
         user_id=user_id,
@@ -31,6 +39,7 @@ async def get_visit_summaries(
     user_id: Optional[str] = Query(None),
     request: Request = None,
 ):
+    """分页获取就诊摘要历史列表（可按用户过滤）。"""
     return await visit_summaries_service.get_visit_summaries(
         legacy,
         skip=skip,
@@ -46,6 +55,7 @@ async def get_visit_summary_detail(
     user_id: Optional[str] = Query(None),
     request: Request = None,
 ):
+    """获取单条就诊摘要详情。"""
     return await visit_summaries_service.get_visit_summary_detail(
         legacy,
         summary_id=summary_id,
@@ -60,6 +70,7 @@ async def create_visit_summary(
     user_id: Optional[str] = Query(None),
     request: Request = None,
 ):
+    """创建就诊摘要（用于手工录入或前端编辑后提交）。"""
     return await visit_summaries_service.create_visit_summary(
         legacy,
         summary=summary,
@@ -75,6 +86,7 @@ async def analyze_visit_summary_image(
     visit_date: str = Form(None),
     request: Request = None,
 ):
+    """上传图片并识别生成就诊摘要（OCR + 结构化提取/生成）。"""
     return await visit_summaries_service.analyze_visit_summary_image(
         legacy,
         file=file,
@@ -91,6 +103,7 @@ async def collect_visit_summary_image(
     user_id: str = Form(None),
     request: Request = None,
 ):
+    """批次采集：向指定 batch_id 追加上传图片（稍后统一合并生成摘要）。"""
     return await visit_summaries_service.collect_visit_summary_image(
         legacy,
         file=file,
@@ -106,6 +119,7 @@ async def complete_visit_summary_batch(
     user_id: Optional[str] = Query(None),
     request: Request = None,
 ):
+    """批次完成：合并 batch_id 下的图片并生成最终就诊摘要。"""
     return await visit_summaries_service.complete_visit_summary_batch(
         legacy,
         payload=payload,
@@ -121,6 +135,7 @@ async def update_visit_summary(
     user_id: Optional[str] = Query(None),
     request: Request = None,
 ):
+    """更新就诊摘要内容（用于二次编辑/纠错）。"""
     return await visit_summaries_service.update_visit_summary(
         legacy,
         summary_id=summary_id,
@@ -136,6 +151,7 @@ async def delete_visit_summary(
     user_id: Optional[str] = Query(None),
     request: Request = None,
 ):
+    """删除就诊摘要。"""
     return await visit_summaries_service.delete_visit_summary(
         legacy,
         summary_id=summary_id,
