@@ -13,7 +13,7 @@ from fastapi import APIRouter, Query, Request
 
 import health_records_api as legacy
 
-import consultations_service
+from services import consultations_service
 from ..schemas.models import ChatMessageCreate, Consultation, ConsultationCreate
 
 router = APIRouter()

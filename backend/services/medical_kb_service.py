@@ -308,7 +308,7 @@ async def admin_import_medical_kb_from_api(
 
     headers = getattr(payload, "headers", None) or None
     params = getattr(payload, "params", None) or None
-    body_json = getattr(payload, "json", None)
+    body_json = getattr(payload, "body_json", None)
     timeout = float(getattr(payload, "timeout", None) or 20.0)
 
     def _do_request():

@@ -12,7 +12,7 @@ from fastapi import APIRouter, Request
 
 import health_records_api as legacy
 
-import rag_service
+from services import rag_service
 from ..schemas.models import RAGBackfillRequest
 
 router = APIRouter()

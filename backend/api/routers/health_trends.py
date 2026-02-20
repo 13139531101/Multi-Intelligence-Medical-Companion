@@ -13,7 +13,7 @@ from fastapi import APIRouter, Query, Request
 
 import health_records_api as legacy
 
-import health_records_service
+from services import health_records_service
 
 router = APIRouter()
 

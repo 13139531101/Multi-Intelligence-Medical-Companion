@@ -13,7 +13,7 @@ from fastapi import APIRouter, File, Form, Query, Request, UploadFile
 
 import health_records_api as legacy
 
-import visit_summaries_service
+from services import visit_summaries_service
 from ..schemas.models import VisitSummary, VisitSummaryBatchCompleteRequest, VisitSummaryCreate
 
 router = APIRouter()

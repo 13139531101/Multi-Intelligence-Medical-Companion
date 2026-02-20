@@ -14,7 +14,7 @@ from fastapi import APIRouter, File, Form, Query, Request, UploadFile
 
 import health_records_api as legacy
 
-import health_records_service
+from services import health_records_service
 from ..schemas.models import (
     HealthInsightsResponse,
     HealthRecord,

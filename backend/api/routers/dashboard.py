@@ -14,7 +14,7 @@ from fastapi import Query, Request
 
 import health_records_api as legacy
 
-import dashboard_service
+from services import dashboard_service
 from ..schemas.models import DashboardActivity, DashboardStats
 
 router = APIRouter()

@@ -10,6 +10,10 @@ from fastapi import (
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse as _FileResponse, HTMLResponse
 from pydantic import BaseModel, Field
+try:
+    from pydantic import ConfigDict
+except Exception:
+    ConfigDict = None
 from typing import List, Optional, Dict, Any
 from datetime import datetime, date
 import json
@@ -30,10 +34,10 @@ from psycopg_pool import ConnectionPool
 import jwt
 import re
 import anyio
-import visit_summaries_service
-import consultations_service
-import dashboard_service
-import health_records_service
+from services import consultations_service
+from services import dashboard_service
+from services import health_records_service
+from services import visit_summaries_service
 
 FileResponse = _FileResponse
 try:
@@ -3467,7 +3471,7 @@ class AdminMedicalKBImportFromAPIRequest(BaseModel):
     method: str = "GET"
     headers: Optional[Dict[str, str]] = None
     params: Optional[Dict[str, Any]] = None
-    json: Optional[Any] = None
+    body_json: Optional[Any] = Field(default=None, alias="json")
     timeout: float = Field(default=20.0, ge=1.0, le=120.0)
 
     items_path: Optional[str] = None
@@ -3478,6 +3482,12 @@ class AdminMedicalKBImportFromAPIRequest(BaseModel):
 
     doc_type: Optional[str] = "medical_kb"
     max_items: int = Field(default=50, ge=1, le=500)
+
+    if ConfigDict is not None:
+        model_config = ConfigDict(populate_by_name=True)
+    else:
+        class Config:
+            allow_population_by_field_name = True
 
 
 @app.post("/api/admin/medical-kb/import")
