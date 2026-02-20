@@ -149,9 +149,6 @@ Page({
   },
 
   async ensureMedicationSubscribeAuth() {
-    const cached = wx.getStorageSync("medicationSubscribeAccepted");
-    if (cached) return true;
-
     let templateId = "";
     try {
       const ids = await getWeChatTemplateIds();
@@ -168,9 +165,6 @@ Page({
         success: (res) => {
           const state = res ? res[templateId] : "";
           if (state === "accept") {
-            try {
-              wx.setStorageSync("medicationSubscribeAccepted", true);
-            } catch (e) {}
             resolve(true);
             return;
           }

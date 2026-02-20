@@ -1,6 +1,6 @@
-asyncio>=3.4.3
 httpx>=0.28.1
 httpx-sse>=0.4.0
+redis>=5.0.1
 pydantic>=2.10.6
 fastapi>=0.115.0
 uvicorn>=0.34.0

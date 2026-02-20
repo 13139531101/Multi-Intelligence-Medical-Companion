@@ -15,7 +15,7 @@ from auth import router as auth_router, get_current_user, DB_CONFIG
 from auth_middleware import get_current_user_optional
 from dotenv import load_dotenv
 import json
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from urllib.parse import unquote
 import httpx
 
@@ -2255,6 +2255,7 @@ def _build_wechat_medication_data(medication_name: str, dosage: str, scheduled_d
         "thing1": {"value": medication_name or ""},
         "thing2": {"value": dosage or ""},
         "time3": {"value": scheduled_dt.strftime("%Y-%m-%d %H:%M")},
+        "time8": {"value": scheduled_dt.strftime("%Y-%m-%d %H:%M")},
     }
 
 async def _wechat_medication_reminder_tick():
@@ -2267,13 +2268,27 @@ async def _wechat_medication_reminder_tick():
     interval_sec = int(os.getenv("WECHAT_MEDICATION_REMINDER_INTERVAL_SEC", "20") or "20")
     window_sec = int(os.getenv("WECHAT_MEDICATION_REMINDER_WINDOW_SEC", str(max(interval_sec, 60))) or "60")
 
-    now = datetime.now().replace(microsecond=0)
+    try:
+        tz_offset_hours = int(os.getenv("APP_TZ_OFFSET_HOURS", os.getenv("TZ_OFFSET_HOURS", "8")) or "8")
+    except Exception:
+        tz_offset_hours = 8
+    local_tz = timezone(timedelta(hours=tz_offset_hours))
+
+    now = datetime.now(timezone.utc).astimezone(local_tz).replace(microsecond=0)
     now_floor = now.replace(second=0)
     today = now_floor.date()
 
     sent = 0
     with psycopg.connect(**DB_CONFIG, row_factory=dict_row) as conn:
         with conn.cursor() as cur:
+            try:
+                cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS openid VARCHAR(64) UNIQUE")
+                conn.commit()
+            except Exception:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
             cur.execute(
                 """
                 SELECT mr.id AS reminder_id,
@@ -2319,7 +2334,7 @@ async def _wechat_medication_reminder_tick():
                     except Exception:
                         continue
 
-                    scheduled_dt = datetime.combine(today, tt)
+                    scheduled_dt = datetime.combine(today, tt).replace(tzinfo=local_tz)
                     delta = abs((scheduled_dt - now).total_seconds())
                     if scheduled_dt != now_floor and delta > window_sec:
                         continue

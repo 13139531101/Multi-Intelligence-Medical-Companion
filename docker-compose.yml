@@ -21,6 +21,20 @@ services:
       timeout: 5s
       retries: 5
 
+  redis:
+    image: redis:7-alpine
+    container_name: pha-redis
+    ports:
+      - "6379:6379"
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
   health_advisor:
     build:
       context: backend
@@ -214,6 +228,11 @@ services:
       - USE_LLM_SUMMARY=${USE_LLM_SUMMARY:-false}
       - LLM_BASE_URL=${LLM_BASE_URL:-}
       - LLM_MODEL=${LLM_MODEL:-}
+      - WECHAT_APP_ID=${WECHAT_APP_ID:-}
+      - WECHAT_APP_SECRET=${WECHAT_APP_SECRET:-}
+      - WECHAT_TEMPLATE_TASK_COMPLETE=${WECHAT_TEMPLATE_TASK_COMPLETE:-}
+      - WECHAT_TEMPLATE_HEALTH_ALERT=${WECHAT_TEMPLATE_HEALTH_ALERT:-}
+      - WECHAT_TEMPLATE_MEDICATION_REMINDER=${WECHAT_TEMPLATE_MEDICATION_REMINDER:-}
       # 为 Host API 注入数据库 DSN，供提醒工具等使用
       - DATABASE_URL=${DATABASE_URL:-postgresql://pha:pha_pass@postgres:5432/personal_health_assistant}
       - DB_HOST=${DB_HOST:-postgres}
@@ -232,6 +251,7 @@ services:
       - ALIYUN_REGION_ID=${ALIYUN_REGION_ID}
       - ALIYUN_OCR_ENDPOINT=${ALIYUN_OCR_ENDPOINT}
       - ALIYUN_OCR_TYPE=${ALIYUN_OCR_TYPE}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
     ports:
       - "13002:13002"
     mem_limit: 1g
@@ -239,6 +259,8 @@ services:
       - ./backend:/app/backend
       - hostapi_uploads:/app/uploads
     depends_on:
+      redis:
+        condition: service_healthy
       health_advisor:
         condition: service_healthy
       medication_reminder:
@@ -260,3 +282,4 @@ services:
 volumes:
   postgres_data:
   hostapi_uploads:
+  redis_data:

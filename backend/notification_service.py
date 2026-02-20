@@ -1,18 +1,19 @@
 import os
-import json
 import logging
 import time
-import asyncio
 import httpx
 from typing import Optional, Dict, Any
 
 logger = logging.getLogger(__name__)
+
 
 class WeChatNotificationService:
     def __init__(self):
         self.app_id = os.environ.get("WECHAT_APP_ID")
         self.app_secret = os.environ.get("WECHAT_APP_SECRET")
         self.token_cache = {}
+        self.redis_url = os.environ.get("REDIS_URL", "").strip()
+        self._redis_client = None
 
         # 模板ID - 需要在微信后台配置并添加到环境变量
         # 默认尝试从环境变量获取，如果没有则使用空字符串（发送时会失败但会有日志）
@@ -22,11 +23,34 @@ class WeChatNotificationService:
             "medication_reminder": os.environ.get("WECHAT_TEMPLATE_MEDICATION_REMINDER", ""),
         }
 
+    def _get_redis(self):
+        if not self.redis_url:
+            return None
+        if self._redis_client is not None:
+            return self._redis_client
+        try:
+            import redis
+
+            self._redis_client = redis.from_url(self.redis_url, decode_responses=True)
+            return self._redis_client
+        except Exception:
+            self._redis_client = None
+            return None
+
     async def get_access_token(self) -> Optional[str]:
         """获取微信 Access Token (带缓存)"""
         if not self.app_id or not self.app_secret:
             logger.error("Missing WECHAT_APP_ID or WECHAT_APP_SECRET")
             return None
+
+        redis_client = self._get_redis()
+        if redis_client is not None:
+            try:
+                cached = redis_client.get(f"wechat:access_token:{self.app_id}")
+                if cached:
+                    return str(cached)
+            except Exception:
+                pass
 
         now = time.time()
         if self.token_cache.get("access_token") and self.token_cache.get("expires_at", 0) > now:
@@ -40,10 +64,18 @@ class WeChatNotificationService:
                 data = resp.json()
 
                 if "access_token" in data:
-                    self.token_cache["access_token"] = data["access_token"]
+                    token = str(data["access_token"])
+                    self.token_cache["access_token"] = token
                     # 提前5分钟过期
-                    self.token_cache["expires_at"] = now + data.get("expires_in", 7200) - 300
-                    return data["access_token"]
+                    expires_in = int(data.get("expires_in", 7200) or 7200)
+                    ttl = max(60, expires_in - 300)
+                    self.token_cache["expires_at"] = now + ttl
+                    if redis_client is not None:
+                        try:
+                            redis_client.setex(f"wechat:access_token:{self.app_id}", ttl, token)
+                        except Exception:
+                            pass
+                    return token
                 else:
                     logger.error(f"Failed to get access token: {data}")
                     return None
@@ -102,6 +134,7 @@ class WeChatNotificationService:
         except Exception as e:
             logger.error(f"Code2Session error: {e}")
             return None
+
 
 # 全局单例
 notification_service = WeChatNotificationService()
