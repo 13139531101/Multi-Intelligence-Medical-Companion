@@ -1,6 +1,8 @@
 import os
 import logging
 import time
+import json
+import uuid
 import httpx
 from typing import Optional, Dict, Any
 
@@ -22,6 +24,7 @@ class WeChatNotificationService:
             "health_alert": os.environ.get("WECHAT_TEMPLATE_HEALTH_ALERT", ""),
             "medication_reminder": os.environ.get("WECHAT_TEMPLATE_MEDICATION_REMINDER", ""),
         }
+        self.queue_key = os.environ.get("WECHAT_SUBSCRIBE_QUEUE_KEY", "wechat:subscribe_queue").strip() or "wechat:subscribe_queue"
 
     def _get_redis(self):
         if not self.redis_url:
@@ -36,6 +39,85 @@ class WeChatNotificationService:
         except Exception:
             self._redis_client = None
             return None
+
+    def try_acquire_lock(self, key: str, ttl_sec: int) -> str | None:
+        redis_client = self._get_redis()
+        if redis_client is None:
+            return None
+        token = uuid.uuid4().hex
+        try:
+            ok = redis_client.set(str(key), token, nx=True, ex=max(1, int(ttl_sec)))
+            return token if ok else None
+        except Exception:
+            return None
+
+    def release_lock(self, key: str, token: str) -> bool:
+        redis_client = self._get_redis()
+        if redis_client is None:
+            return False
+        script = (
+            "if redis.call('get', KEYS[1]) == ARGV[1] then "
+            "return redis.call('del', KEYS[1]) "
+            "else return 0 end"
+        )
+        try:
+            res = redis_client.eval(script, 1, str(key), str(token))
+            return bool(res)
+        except Exception:
+            return False
+
+    def try_dedupe(self, key: str, ttl_sec: int) -> bool:
+        redis_client = self._get_redis()
+        if redis_client is None:
+            return True
+        try:
+            ok = redis_client.set(str(key), "1", nx=True, ex=max(1, int(ttl_sec)))
+            return bool(ok)
+        except Exception:
+            return True
+
+    def enqueue_subscribe_message(
+        self,
+        *,
+        openid: str,
+        template_id: str,
+        data: Dict[str, Any],
+        page: str = "pages/index/index",
+        dedupe_key: str = "",
+        dedupe_ttl_sec: int = 900,
+        extra: Dict[str, Any] | None = None,
+    ) -> bool:
+        redis_client = self._get_redis()
+        if redis_client is None:
+            return False
+        if not openid or not template_id:
+            return False
+        if dedupe_key:
+            try:
+                ok = redis_client.set(
+                    str(dedupe_key),
+                    "1",
+                    nx=True,
+                    ex=max(1, int(dedupe_ttl_sec)),
+                )
+                if not ok:
+                    return False
+            except Exception:
+                return False
+        payload = {
+            "openid": openid,
+            "template_id": template_id,
+            "page": page,
+            "data": data,
+            "extra": extra or {},
+            "attempt": 0,
+            "enqueued_at": time.time(),
+        }
+        try:
+            redis_client.rpush(self.queue_key, json.dumps(payload, ensure_ascii=False))
+            return True
+        except Exception:
+            return False
 
     async def get_access_token(self) -> Optional[str]:
         """获取微信 Access Token (带缓存)"""

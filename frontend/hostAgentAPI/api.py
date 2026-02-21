@@ -2258,6 +2258,118 @@ def _build_wechat_medication_data(medication_name: str, dosage: str, scheduled_d
         "time8": {"value": scheduled_dt.strftime("%Y-%m-%d %H:%M")},
     }
 
+async def _wechat_subscribe_worker_loop():
+    svc = _get_backend_notification_service()
+    if not svc:
+        return
+    try:
+        redis_client = svc._get_redis()
+    except Exception:
+        redis_client = None
+    if redis_client is None:
+        return
+
+    queue_key = getattr(svc, "queue_key", None) or os.environ.get("WECHAT_SUBSCRIBE_QUEUE_KEY", "wechat:subscribe_queue")
+    pop_timeout_sec = int(os.getenv("WECHAT_SUBSCRIBE_WORKER_POP_TIMEOUT_SEC", "5") or "5")
+    max_attempts = int(os.getenv("WECHAT_SUBSCRIBE_WORKER_MAX_ATTEMPTS", "3") or "3")
+    idle_sleep_sec = float(os.getenv("WECHAT_SUBSCRIBE_WORKER_IDLE_SLEEP_SEC", "0.5") or "0.5")
+
+    while True:
+        item = None
+        try:
+            item = await anyio.to_thread.run_sync(lambda: redis_client.blpop(queue_key, timeout=max(1, pop_timeout_sec)))
+        except Exception:
+            item = None
+
+        if not item:
+            await asyncio.sleep(max(0.1, idle_sleep_sec))
+            continue
+
+        payload_raw = None
+        try:
+            payload_raw = item[1] if isinstance(item, (list, tuple)) and len(item) >= 2 else None
+        except Exception:
+            payload_raw = None
+
+        if not payload_raw:
+            continue
+
+        msg = None
+        try:
+            msg = json.loads(payload_raw.decode("utf-8") if isinstance(payload_raw, (bytes, bytearray)) else str(payload_raw))
+        except Exception:
+            msg = None
+
+        if not isinstance(msg, dict):
+            continue
+
+        openid = str(msg.get("openid") or "").strip()
+        template_id = str(msg.get("template_id") or "").strip()
+        data = msg.get("data") if isinstance(msg.get("data"), dict) else {}
+        page = str(msg.get("page") or "pages/index/index")
+        extra = msg.get("extra") if isinstance(msg.get("extra"), dict) else {}
+        attempt = int(msg.get("attempt") or 0)
+
+        ok = False
+        try:
+            ok = await svc.send_subscribe_message(
+                openid=openid,
+                template_id=template_id,
+                data=data,
+                page=page,
+            )
+        except Exception:
+            ok = False
+
+        if not ok and attempt < max_attempts:
+            msg["attempt"] = attempt + 1
+            try:
+                redis_client.rpush(queue_key, json.dumps(msg, ensure_ascii=False))
+            except Exception:
+                pass
+            await asyncio.sleep(min(10.0, 2.0 ** attempt))
+            continue
+
+        try:
+            message_type = str(extra.get("type") or "").strip()
+            if message_type == "medication_reminder":
+                reminder_id = extra.get("reminder_id")
+                scheduled_time = extra.get("scheduled_time")
+                user_id = str(extra.get("user_id") or "").strip()
+                if reminder_id and scheduled_time:
+                    with psycopg.connect(**DB_CONFIG, row_factory=dict_row) as conn:
+                        with conn.cursor() as cur:
+                            cur.execute(
+                                """
+                                UPDATE reminder_logs
+                                SET status = %s, actual_time = NOW(), notes = %s
+                                WHERE reminder_id = %s AND scheduled_time = %s
+                                """,
+                                (
+                                    "notified" if ok else "notify_failed",
+                                    "wechat_subscribe_queue",
+                                    int(reminder_id),
+                                    scheduled_time,
+                                ),
+                            )
+                            if cur.rowcount == 0:
+                                cur.execute(
+                                    """
+                                    INSERT INTO reminder_logs (reminder_id, scheduled_time, status, notes, user_id)
+                                    VALUES (%s, %s, %s, %s, %s)
+                                    """,
+                                    (
+                                        int(reminder_id),
+                                        scheduled_time,
+                                        "notified" if ok else "notify_failed",
+                                        "wechat_subscribe_queue",
+                                        user_id,
+                                    ),
+                                )
+                            conn.commit()
+        except Exception:
+            pass
+
 async def _wechat_medication_reminder_tick():
     svc = _get_backend_notification_service()
     template_ids = getattr(svc, "template_ids", {}) if svc else {}
@@ -2279,6 +2391,23 @@ async def _wechat_medication_reminder_tick():
     today = now_floor.date()
 
     sent = 0
+    scan_lock_token = None
+    redis_available = False
+    try:
+        redis_available = svc._get_redis() is not None
+    except Exception:
+        redis_available = False
+    if redis_available:
+        try:
+            scan_lock_token = svc.try_acquire_lock(
+                "wechat:medication_reminder_scan_lock",
+                ttl_sec=max(10, interval_sec + window_sec),
+            )
+        except Exception:
+            scan_lock_token = None
+        if scan_lock_token is None:
+            return 0
+
     with psycopg.connect(**DB_CONFIG, row_factory=dict_row) as conn:
         with conn.cursor() as cur:
             try:
@@ -2349,32 +2478,90 @@ async def _wechat_medication_reminder_tick():
                     if cur.fetchone():
                         continue
 
+                    token = "local"
+                    if redis_available:
+                        try:
+                            dedupe_key = f"wechat:medication_reminder:dedupe:{reminder_id}:{scheduled_dt.isoformat()}"
+                            token = svc.try_acquire_lock(
+                                dedupe_key, ttl_sec=24 * 3600
+                            )
+                        except Exception:
+                            token = None
+                        if token is None:
+                            continue
+
                     data = _build_wechat_medication_data(
                         str(r.get("medication_name") or ""),
                         str(r.get("dosage") or ""),
                         scheduled_dt,
                         str(r.get("notes") or ""),
                     )
-                    ok = await svc.send_subscribe_message(
-                        openid=openid,
-                        template_id=template_id,
-                        data=data,
-                        page="pages/medication/medication",
-                    )
-                    status = "notified" if ok else "notify_failed"
                     cur.execute(
-                        "INSERT INTO reminder_logs (reminder_id, scheduled_time, status, notes, user_id) VALUES (%s, %s, %s, %s, %s)",
+                        """
+                        INSERT INTO reminder_logs (reminder_id, scheduled_time, status, notes, user_id)
+                        VALUES (%s, %s, %s, %s, %s)
+                        """,
                         (
                             reminder_id,
                             scheduled_dt,
-                            status,
-                            "wechat_subscribe",
+                            "queued",
+                            "wechat_subscribe_queue",
                             str(r.get("user_id") or ""),
                         ),
                     )
+                    conn.commit()
+
+                    enqueued = False
+                    try:
+                        enqueued = svc.enqueue_subscribe_message(
+                            openid=openid,
+                            template_id=template_id,
+                            data=data,
+                            page="pages/medication/medication",
+                            dedupe_key="",
+                            extra={
+                                "type": "medication_reminder",
+                                "reminder_id": reminder_id,
+                                "scheduled_time": scheduled_dt.isoformat(),
+                                "user_id": str(r.get("user_id") or ""),
+                            },
+                        )
+                    except Exception:
+                        enqueued = False
+
+                    if not enqueued:
+                        ok = False
+                        try:
+                            ok = await svc.send_subscribe_message(
+                                openid=openid,
+                                template_id=template_id,
+                                data=data,
+                                page="pages/medication/medication",
+                            )
+                        except Exception:
+                            ok = False
+                        cur.execute(
+                            """
+                            UPDATE reminder_logs
+                            SET status = %s, actual_time = NOW(), notes = %s
+                            WHERE reminder_id = %s AND scheduled_time = %s
+                            """,
+                            (
+                                "notified" if ok else "notify_failed",
+                                "wechat_subscribe_fallback",
+                                reminder_id,
+                                scheduled_dt,
+                            ),
+                        )
                     sent += 1
 
             conn.commit()
+
+    try:
+        if redis_available and scan_lock_token:
+            svc.release_lock("wechat:medication_reminder_scan_lock", scan_lock_token)
+    except Exception:
+        pass
 
     return sent
 
@@ -2395,6 +2582,15 @@ async def _start_wechat_medication_reminder_loop():
         asyncio.create_task(_wechat_medication_reminder_loop())
     except Exception as e:
         logging.warning(f"启动微信用药提醒扫描失败: {e}")
+
+@app.on_event("startup")
+async def _start_wechat_subscribe_worker():
+    if os.getenv("ENABLE_WECHAT_SUBSCRIBE_WORKER", "1") != "1":
+        return
+    try:
+        asyncio.create_task(_wechat_subscribe_worker_loop())
+    except Exception as e:
+        logging.warning(f"启动微信订阅消息队列worker失败: {e}")
 
 # 直接挂载到 app 的调试端点，便于排查提醒函数签名
 @app.get("/debug/reminder-signature")

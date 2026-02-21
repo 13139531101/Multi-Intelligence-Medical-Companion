@@ -307,6 +307,17 @@ async def finalize_visit_summary_batch(
 
         with api.get_db_connection() as conn:
             with conn.cursor(row_factory=api.dict_row) as cursor:
+                notify_openid = None
+                try:
+                    cursor.execute(
+                        "SELECT openid FROM users WHERE user_id = %s LIMIT 1",
+                        (user_id,),
+                    )
+                    urow = cursor.fetchone()
+                    if isinstance(urow, dict):
+                        notify_openid = (urow.get("openid") or "").strip() or None
+                except Exception:
+                    notify_openid = None
                 cursor.execute(
                     """
                     UPDATE visit_summaries
@@ -352,6 +363,94 @@ async def finalize_visit_summary_batch(
                     ),
                 )
                 conn.commit()
+
+        try:
+            from notification_service import notification_service as notify_svc
+
+            template_id = (
+                getattr(notify_svc, "template_ids", {}).get("task_complete", "")
+                if notify_svc
+                else ""
+            )
+            if notify_svc and template_id and notify_openid:
+                raw = os.getenv("WECHAT_VISIT_SUMMARY_TEMPLATE_DATA_JSON", "").strip()
+                visit_dt = extracted_merged.get("visit_date")
+                try:
+                    visit_dt_str = (
+                        visit_dt.isoformat()
+                        if hasattr(visit_dt, "isoformat")
+                        else str(visit_dt or "")
+                    )
+                except Exception:
+                    visit_dt_str = str(visit_dt or "")
+
+                vars_map = {
+                    "visit_date": visit_dt_str,
+                    "hospital": str(cleaned_fields.get("hospital") or "").strip(),
+                    "department": str(cleaned_fields.get("department") or "").strip(),
+                    "doctor": str(cleaned_fields.get("doctor") or "").strip(),
+                    "diagnosis": str(cleaned_fields.get("diagnosis") or "").strip(),
+                    "summary": str(summary_content or "").strip(),
+                    "datetime": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                    "date": datetime.now().strftime("%Y-%m-%d"),
+                    "time": datetime.now().strftime("%H:%M"),
+                }
+                if raw:
+                    try:
+                        mapping = json.loads(raw)
+                        if isinstance(mapping, dict):
+                            data = {}
+                            for k, v in mapping.items():
+                                try:
+                                    data[str(k)] = {"value": str(v).format(**vars_map)}
+                                except Exception:
+                                    data[str(k)] = {"value": str(v)}
+                        else:
+                            data = None
+                    except Exception:
+                        data = None
+                else:
+                    data = None
+                if not isinstance(data, dict):
+                    title = vars_map["hospital"] or "就诊摘要"
+                    subtitle = vars_map["diagnosis"] or "已生成"
+                    data = {
+                        "thing1": {"value": title},
+                        "thing2": {"value": subtitle},
+                        "time3": {"value": vars_map["datetime"]},
+                    }
+
+                dedupe_key = f"wechat:visit_summary:done:{summary_id}"
+                enqueued = False
+                try:
+                    enqueued = notify_svc.enqueue_subscribe_message(
+                        openid=notify_openid,
+                        template_id=template_id,
+                        data=data,
+                        page="pages/visit-summary/visit-summary",
+                        dedupe_key=dedupe_key,
+                        dedupe_ttl_sec=24 * 3600,
+                        extra={
+                            "type": "visit_summary_done",
+                            "summary_id": str(summary_id),
+                            "batch_id": str(batch_id),
+                            "user_id": str(user_id),
+                        },
+                    )
+                except Exception:
+                    enqueued = False
+                if not enqueued:
+                    try:
+                        await notify_svc.send_subscribe_message(
+                            openid=notify_openid,
+                            template_id=template_id,
+                            data=data,
+                            page="pages/visit-summary/visit-summary",
+                        )
+                    except Exception:
+                        pass
+        except Exception:
+            pass
     except Exception as e:
         try:
             with api.get_db_connection() as conn:
