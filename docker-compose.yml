@@ -226,6 +226,7 @@ services:
       - BACKEND_DIR=/app/backend
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
       - USE_LLM_SUMMARY=${USE_LLM_SUMMARY:-false}
+      - USE_LLM_INDICATOR_AUDIT=${USE_LLM_INDICATOR_AUDIT:-true}
       - LLM_BASE_URL=${LLM_BASE_URL:-}
       - LLM_MODEL=${LLM_MODEL:-}
       - WECHAT_APP_ID=${WECHAT_APP_ID:-}

@@ -1492,6 +1492,13 @@ async def upload_file(
                     }
 
                     try:
+                        metadata = api._prepare_metadata_with_tests(
+                            ocr_text_str, metadata
+                        )
+                    except Exception:
+                        pass
+
+                    try:
                         cursor.execute(
                             """
                             SELECT id FROM health_records
@@ -2012,6 +2019,12 @@ async def _process_pending_ocr(
                         **({"file_hash": file_hash} if file_hash else {}),
                     }
                 )
+                try:
+                    meta = api._prepare_metadata_with_tests(
+                        new_content or new_summary or "", meta
+                    )
+                except Exception:
+                    pass
                 cursor.execute(
                     """
                     UPDATE health_records
@@ -2380,6 +2393,8 @@ async def get_health_trend_indicators(
             raise HTTPException(status_code=401, detail="未认证用户")
 
         store: dict = {}
+        ocr_pending_count = 0
+        ocr_failed_count = 0
         with api.get_db_connection() as conn:
             with conn.cursor(row_factory=api.dict_row) as cursor:
                 interval = f"{days} days"
@@ -2399,6 +2414,14 @@ async def get_health_trend_indicators(
                         meta_val = api.deserialize_metadata(meta_val)
                     elif not isinstance(meta_val, dict):
                         meta_val = {}
+                    try:
+                        ocr_status = str(meta_val.get("ocr_status") or "").lower()
+                        if ocr_status in {"pending", "processing"}:
+                            ocr_pending_count += 1
+                        elif ocr_status == "failed":
+                            ocr_failed_count += 1
+                    except Exception:
+                        pass
 
                     meta_val = api._prepare_metadata_with_tests(
                         row.get("content"), meta_val
@@ -2442,7 +2465,16 @@ async def get_health_trend_indicators(
                         )
 
         indicators = api._finalize_indicator_items(store, include_points)
-        return {"days": days, "indicators": indicators}
+        try:
+            await api._maybe_llm_audit_trend_indicators(indicators)
+        except Exception:
+            pass
+        return {
+            "days": days,
+            "indicators": indicators,
+            "ocr_pending_count": ocr_pending_count,
+            "ocr_failed_count": ocr_failed_count,
+        }
     except HTTPException:
         raise
     except Exception as e:
@@ -2464,6 +2496,8 @@ async def get_health_trend_indicator(
             raise HTTPException(status_code=401, detail="未认证用户")
 
         store: dict = {}
+        ocr_pending_count = 0
+        ocr_failed_count = 0
         with api.get_db_connection() as conn:
             with conn.cursor(row_factory=api.dict_row) as cursor:
                 interval = f"{days} days"
@@ -2483,6 +2517,14 @@ async def get_health_trend_indicator(
                         meta_val = api.deserialize_metadata(meta_val)
                     elif not isinstance(meta_val, dict):
                         meta_val = {}
+                    try:
+                        ocr_status = str(meta_val.get("ocr_status") or "").lower()
+                        if ocr_status in {"pending", "processing"}:
+                            ocr_pending_count += 1
+                        elif ocr_status == "failed":
+                            ocr_failed_count += 1
+                    except Exception:
+                        pass
 
                     meta_val = api._prepare_metadata_with_tests(
                         row.get("content"), meta_val
@@ -2526,13 +2568,29 @@ async def get_health_trend_indicator(
                         )
 
         indicators = api._finalize_indicator_items(store, True)
+        try:
+            await api._maybe_llm_audit_trend_indicators(indicators)
+        except Exception:
+            pass
         selected = None
         for item in indicators:
             if item.get("name") == name:
                 selected = item
                 break
+        if (not selected) and name:
+            name2 = str(name).replace("（待核对）", "").strip()
+            if name2 and name2 != name:
+                for item in indicators:
+                    if str(item.get("name") or "").replace("（待核对）", "").strip() == name2:
+                        selected = item
+                        break
 
-        return {"days": days, "indicator": selected}
+        return {
+            "days": days,
+            "indicator": selected,
+            "ocr_pending_count": ocr_pending_count,
+            "ocr_failed_count": ocr_failed_count,
+        }
     except HTTPException:
         raise
     except Exception as e:

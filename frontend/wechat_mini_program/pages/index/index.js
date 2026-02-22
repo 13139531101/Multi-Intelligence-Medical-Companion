@@ -84,7 +84,7 @@ Page({
   async loadDashboardData() {
     try {
       await this.loadDashboardStats();
-      await this.loadTrendIndicators();
+      await this.loadTrendIndicators(false);
     } catch (error) {
       console.error("加载仪表板数据失败:", error);
     }
@@ -234,7 +234,7 @@ Page({
 
   // 查看详细趋势
   refreshTrends() {
-    this.loadTrendIndicators();
+    this.loadTrendIndicators(true);
   },
 
   formatIndicatorLatest(item) {
@@ -262,7 +262,7 @@ Page({
     };
   },
 
-  async loadTrendIndicators() {
+  async loadTrendIndicators(showHint = false) {
     this.setData({ trendLoading: true, trendError: "" });
     try {
       const response = await request("/api/health-trends/indicators", {
@@ -275,11 +275,34 @@ Page({
       const indicators = Array.isArray(response?.indicators)
         ? response.indicators.map((item) => this.normalizeIndicatorItem(item))
         : [];
+      const pending = Number(response?.ocr_pending_count || 0) || 0;
+      const failed = Number(response?.ocr_failed_count || 0) || 0;
+      const selectedName = this.data.trendSelectedName || "";
+      const selectedStillExists =
+        selectedName &&
+        indicators.some((x) => String(x?.name || "") === String(selectedName));
       this.setData({
         trendIndicators: indicators,
         trendLoading: false,
         trendError: indicators.length ? "" : "暂无趋势数据",
       });
+      if (!indicators.length || (selectedName && !selectedStillExists)) {
+        this.setData({ trendSelectedName: "", trendSelected: null });
+        this.clearTrendChart();
+      }
+      if (showHint) {
+        if (pending > 0) {
+          wx.showToast({
+            title: `有${pending}份档案识别中，稍后刷新`,
+            icon: "none",
+          });
+        } else if (failed > 0) {
+          wx.showToast({
+            title: `有${failed}份档案识别失败`,
+            icon: "none",
+          });
+        }
+      }
     } catch (error) {
       console.error("加载健康趋势失败:", error);
       this.setData({
@@ -287,6 +310,8 @@ Page({
         trendLoading: false,
         trendError: "趋势加载失败",
       });
+      this.setData({ trendSelectedName: "", trendSelected: null });
+      this.clearTrendChart();
     }
   },
 

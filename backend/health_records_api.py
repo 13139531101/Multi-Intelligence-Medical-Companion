@@ -1027,15 +1027,101 @@ def _ensure_list_value(value: Any) -> list:
     return []
 
 
+def _looks_like_unit(unit: str | None) -> bool:
+    s = (unit or "").strip()
+    if not s:
+        return False
+    s = s.replace("（", "(").replace("）", ")")
+    s = re.sub(r"\s+", "", s)
+    low = s.lower()
+    unit_tokens = {
+        "mmhg",
+        "mmol/l",
+        "mmol\\l",
+        "μmol/l",
+        "umol/l",
+        "umol\\l",
+        "mg/dl",
+        "mg\\dl",
+        "g/dl",
+        "g\\dl",
+        "g/l",
+        "g\\l",
+        "%",
+        "％",
+        "fl",
+        "pg",
+        "bpm",
+        "mm",
+        "cm",
+        "m",
+        "kg",
+        "g",
+        "mg",
+        "ng",
+        "μg",
+        "l",
+        "dl",
+        "ml",
+        "μl",
+        "ul",
+        "u/l",
+        "iu/l",
+    }
+    if low in unit_tokens:
+        return True
+    if "/" in low or "%" in low or "×" in s or "^" in s:
+        return True
+    return False
+
+
 def _is_valid_test_name(name: str, unit: str = "") -> bool:
     text = (name or "").strip()
     if not text:
         return False
     if len(text) > 24:
         return False
+    compact = re.sub(r"\s+", "", text)
+    if re.fullmatch(r"[0-9.]+", compact):
+        return False
+    if re.fullmatch(r"[一二三四五六七八九十百千万两]+", compact):
+        return False
+    if re.fullmatch(r"[+\-*/=<>≤≥]+", compact):
+        return False
+    lower = compact.lower()
+    unit_like_names = {
+        "pg",
+        "fl",
+        "cv",
+        "sd",
+        "ipv",
+        "xt40",
+        "xt-40",
+        "mmhg",
+        "mmol/l",
+        "μmol/l",
+        "umol/l",
+        "mg/dl",
+        "g/dl",
+        "g/l",
+        "%",
+        "％",
+    }
+    if lower in unit_like_names:
+        return False
+    if re.fullmatch(r"\d+[a-z]{2,8}\d{0,2}", lower):
+        return False
+    if re.fullmatch(r"xt\d{2,4}", lower):
+        return False
+    if ("号" in compact and len(compact) <= 8) or compact.endswith("号"):
+        return False
     blacklist = [
         "test",
         "测试",
+        "参考范围",
+        "参考值",
+        "参考",
+        "范围",
         "姓名",
         "性别",
         "年龄",
@@ -1049,6 +1135,10 @@ def _is_valid_test_name(name: str, unit: str = "") -> bool:
         "床号",
         "编号",
         "条码",
+        "病历号",
+        "门诊号",
+        "住院号",
+        "病案号",
         "报告",
         "检验",
         "检查",
@@ -1071,7 +1161,6 @@ def _is_valid_test_name(name: str, unit: str = "") -> bool:
     for bad in blacklist:
         if bad in text:
             return False
-    lower = text.lower()
     allowed_keywords = [
         "血压",
         "收缩压",
@@ -1108,9 +1197,20 @@ def _is_valid_test_name(name: str, unit: str = "") -> bool:
         "hdl",
         "ldl",
         "hgb",
+        "hb",
         "wbc",
         "rbc",
         "plt",
+        "mch",
+        "mcv",
+        "mchc",
+        "hct",
+        "rdw",
+        "rdwcv",
+        "rdwsd",
+        "mpv",
+        "pdw",
+        "pct",
         "alt",
         "ast",
         "glu",
@@ -1125,10 +1225,13 @@ def _is_valid_test_name(name: str, unit: str = "") -> bool:
     }
     if lower in allowed_abbr:
         return True
-    if re.fullmatch(r"[a-z]{2,6}\d{0,2}", lower):
+    if re.fullmatch(r"[a-z]{1,2}", lower) and lower in {"na", "k", "cl", "ca", "mg"}:
         return True
-    unit_text = (unit or "").strip()
-    if unit_text and len(unit_text) <= 12:
+    if re.fullmatch(r"[a-z]{2,6}\d{0,2}", lower) and lower not in unit_like_names:
+        return True
+    if re.fullmatch(r"[a-z]{2,8}[-/][a-z]{1,8}\d{0,2}", lower):
+        return True
+    if _looks_like_unit(unit):
         return True
     return False
 
@@ -1140,12 +1243,63 @@ def _filter_test_results(tests: Any) -> dict | None:
     for k, v in tests.items():
         if not k:
             continue
+        raw_key = str(k)
         unit = ""
         if isinstance(v, dict):
             unit = str(v.get("unit") or "").strip()
         if not _is_valid_test_name(str(k), unit):
             continue
-        cleaned[str(k).strip()] = v
+        key = _canonicalize_indicator_name(raw_key)
+        if not key:
+            continue
+        vv = v
+        if isinstance(v, dict):
+            vv = dict(v)
+            rns = vv.get("raw_names")
+            if isinstance(rns, list):
+                if raw_key not in rns and len(rns) < 20:
+                    rns.append(raw_key)
+            elif isinstance(rns, str):
+                if rns != raw_key:
+                    vv["raw_names"] = [rns, raw_key]
+                else:
+                    vv["raw_names"] = [raw_key]
+            else:
+                vv["raw_names"] = [raw_key]
+        if key not in cleaned:
+            cleaned[key] = vv
+            continue
+        prev = cleaned.get(key)
+        if isinstance(prev, dict) and isinstance(v, dict):
+            pv = prev.get("value")
+            nv = v.get("value")
+            pu = str(prev.get("unit") or "").strip()
+            nu = str(v.get("unit") or "").strip()
+            try:
+                pr = prev.get("raw_names")
+                vr = vv.get("raw_names") if isinstance(vv, dict) else None
+                if isinstance(pr, list) and isinstance(vr, list):
+                    for rn in vr:
+                        if rn not in pr and len(pr) < 20:
+                            pr.append(rn)
+            except Exception:
+                pass
+            if (pv is None or str(pv).strip() == "") and (
+                nv is not None and str(nv).strip() != ""
+            ):
+                cleaned[key] = vv
+                continue
+            if not pu and nu:
+                merged = dict(prev)
+                merged["unit"] = nu
+                if (pv is None or str(pv).strip() == "") and (
+                    nv is not None and str(nv).strip() != ""
+                ):
+                    merged["value"] = nv
+                cleaned[key] = merged
+                continue
+        elif isinstance(v, dict) and not isinstance(prev, dict):
+            cleaned[key] = vv
     return cleaned
 
 
@@ -1180,6 +1334,7 @@ def _canonicalize_indicator_name(name: str | None) -> str:
         return ""
     s = raw.replace("（", "(").replace("）", ")")
     s = re.sub(r"\s+", "", s)
+    s = s.replace("_", "-").replace("－", "-").replace("—", "-")
     suffix = ""
     if "-" in s:
         left, right = s.rsplit("-", 1)
@@ -1193,7 +1348,13 @@ def _canonicalize_indicator_name(name: str | None) -> str:
         if i >= 0:
             base = s[:i].strip()
             paren = s[i + 1 : -1].strip()
-    low = (paren or base).lower()
+    base = base.strip().strip("#*")
+    base = re.sub(r"^[0-9.]+", "", base)
+    base = re.sub(r"^[^0-9a-zA-Z\u4e00-\u9fa5]+", "", base)
+    paren_code = ""
+    if paren and not _looks_like_unit(paren):
+        paren_code = paren
+    low = (paren_code or base).lower()
     mapping = {
         "hgb": "血红蛋白",
         "hb": "血红蛋白",
@@ -1202,8 +1363,13 @@ def _canonicalize_indicator_name(name: str | None) -> str:
         "plt": "血小板",
         "mch": "平均红细胞血红蛋白量",
         "mcv": "平均红细胞体积",
+        "mchc": "平均红细胞血红蛋白浓度",
         "hct": "红细胞压积",
         "rdw": "红细胞分布宽度",
+        "rdw-cv": "红细胞分布宽度-CV",
+        "rdwcv": "红细胞分布宽度-CV",
+        "rdw-sd": "红细胞分布宽度-SD",
+        "rdwsd": "红细胞分布宽度-SD",
         "glu": "血糖",
         "glucose": "血糖",
         "hba1c": "糖化血红蛋白",
@@ -1224,17 +1390,63 @@ def _canonicalize_indicator_name(name: str | None) -> str:
         "ft4": "游离甲状腺素",
         "spo2": "血氧饱和度",
         "bp": "血压",
+        "neu": "中性粒细胞",
+        "neu%": "中性粒细胞百分比",
+        "neut": "中性粒细胞",
+        "neut%": "中性粒细胞百分比",
+        "lym": "淋巴细胞",
+        "lym%": "淋巴细胞百分比",
+        "mono": "单核细胞",
+        "mono%": "单核细胞百分比",
+        "mon": "单核细胞",
+        "mon%": "单核细胞百分比",
+        "eos": "嗜酸性粒细胞",
+        "eos%": "嗜酸性粒细胞百分比",
+        "eo": "嗜酸性粒细胞",
+        "eo%": "嗜酸性粒细胞百分比",
+        "bas": "嗜碱性粒细胞",
+        "bas%": "嗜碱性粒细胞百分比",
+        "baso": "嗜碱性粒细胞",
+        "baso%": "嗜碱性粒细胞百分比",
+        "bas0%": "嗜碱性粒细胞百分比",
+        "gran": "中性粒细胞",
+        "gran%": "中性粒细胞百分比",
+        "nrbc": "有核红细胞",
+        "nrbc%": "有核红细胞百分比",
+        "p-lcr": "大血小板比率",
+        "plcr": "大血小板比率",
+        "lcr": "大血小板比率",
+        "mpv": "平均血小板体积",
+        "pdw": "血小板分布宽度",
+        "pct": "血小板压积",
     }
     if low in mapping:
         return mapping[low] + suffix
     if base and any(ch.isalpha() for ch in base) and base.lower() in mapping:
         return mapping[base.lower()] + suffix
-    if paren and paren.lower() in mapping:
-        return mapping[paren.lower()] + suffix
+    if paren_code and paren_code.lower() in mapping:
+        return mapping[paren_code.lower()] + suffix
     if base:
         normalized = base
-        normalized = normalized.replace("血红蛋白浓度", "血红蛋白")
+        if normalized == "血红蛋白浓度":
+            normalized = "血红蛋白"
         normalized = normalized.replace("糖化血红蛋白(hba1c)", "糖化血红蛋白")
+        normalized = normalized.replace("红细胞计数", "红细胞")
+        normalized = normalized.replace("红细胞数", "红细胞")
+        normalized = normalized.replace("白细胞计数", "白细胞")
+        normalized = normalized.replace("白细胞数", "白细胞")
+        normalized = normalized.replace("血小板计数", "血小板")
+        normalized = normalized.replace("血小板数", "血小板")
+        normalized = normalized.replace("中性粒细胞计数", "中性粒细胞")
+        normalized = normalized.replace("淋巴细胞计数", "淋巴细胞")
+        normalized = normalized.replace("单核细胞计数", "单核细胞")
+        normalized = normalized.replace("嗜酸性粒细胞计数", "嗜酸性粒细胞")
+        normalized = normalized.replace("嗜碱性粒细胞计数", "嗜碱性粒细胞")
+        normalized = normalized.replace("中性粒细胞比值", "中性粒细胞百分比")
+        normalized = normalized.replace("淋巴细胞比值", "淋巴细胞百分比")
+        normalized = normalized.replace("单核细胞比值", "单核细胞百分比")
+        normalized = normalized.replace("嗜酸性粒细胞比值", "嗜酸性粒细胞百分比")
+        normalized = normalized.replace("嗜碱性粒细胞比值", "嗜碱性粒细胞百分比")
         return normalized + suffix
     return s + suffix
 
@@ -1259,6 +1471,31 @@ def _convert_value_for_indicator(
     return value, u
 
 
+def _quick_extract_test_results(text: str) -> dict:
+    results: dict = {}
+    s = (text or "").strip()
+    if not s:
+        return results
+    s = re.sub(r"[\r\n\t]+", " ", s)
+    s = re.sub(r"\s{2,}", " ", s)
+    patterns = [
+        r"([\u4e00-\u9fa5]{2,30}(?:\([^)]{1,12}\))?)\s+([-+]?\d+(?:\.\d+)?)\s+(?:\d+(?:\.\d+)?\s*(?:~|-|—)\s*\d+(?:\.\d+)?\s+)?([A-Za-z0-9μµ/%×x*^.\-~]+(?:/[A-Za-z0-9μµ%×x*^.\-~]+)?)",
+        r"([A-Za-z]{2,6}\d{0,2}%?)\)?\s+([-+]?\d+(?:\.\d+)?)\s+(?:\d+(?:\.\d+)?\s*(?:~|-|—)\s*\d+(?:\.\d+)?\s+)?([A-Za-z0-9μµ/%×x*^.\-~]+(?:/[A-Za-z0-9μµ%×x*^.\-~]+)?)?",
+    ]
+    for pat in patterns:
+        for match in re.findall(pat, s):
+            try:
+                name = str(match[0] or "").strip()
+                value = str(match[1] or "").strip()
+                unit = str(match[2] or "").strip() if len(match) > 2 else ""
+            except Exception:
+                continue
+            if not _is_valid_test_name(name, unit):
+                continue
+            results[name] = {"value": value, "unit": unit}
+    return results
+
+
 def _prepare_metadata_with_tests(
     content: str | None, metadata: Dict[str, Any] | None
 ) -> Dict[str, Any]:
@@ -1268,6 +1505,17 @@ def _prepare_metadata_with_tests(
     )
     tests = extracted.get("test_results") or extracted.get("tests")
     text = (content or "").strip()
+    existing_count = 0
+    if isinstance(tests, dict):
+        existing_count = len(tests)
+    elif isinstance(tests, list):
+        existing_count = len(tests)
+    if text and isinstance(tests, dict) and existing_count > 0 and existing_count < 3:
+        quick = _quick_extract_test_results(text)
+        if quick:
+            merged = dict(quick)
+            merged.update(tests)
+            tests = merged
     if (not tests) and text and extract_test_results:
         try:
             tests = (
@@ -1277,6 +1525,15 @@ def _prepare_metadata_with_tests(
             )
         except Exception:
             tests = None
+    if text and ((not tests) or (isinstance(tests, dict) and len(tests) < 3)):
+        quick = _quick_extract_test_results(text)
+        if quick:
+            if isinstance(tests, dict) and tests:
+                merged = dict(quick)
+                merged.update(tests)
+                tests = merged
+            else:
+                tests = quick
     if (not tests) and text and extract_medical_info:
         try:
             info_json = (
@@ -1320,8 +1577,19 @@ def _append_indicator_point(
         return
     item = store.get(normalized_name)
     if not item:
-        item = {"name": normalized_name, "unit": "", "points": []}
+        item = {"name": normalized_name, "unit": "", "points": [], "raw_names": []}
         store[normalized_name] = item
+    try:
+        raw = str(name or "").strip()
+        if raw:
+            raw_names = item.get("raw_names")
+            if isinstance(raw_names, list):
+                if raw not in raw_names and len(raw_names) < 30:
+                    raw_names.append(raw)
+            else:
+                item["raw_names"] = [raw]
+    except Exception:
+        pass
     normalized_unit = _normalize_unit_text(unit)
     date_str = _format_date_value(date_val)
     value_text = "" if value_raw is None else str(value_raw).strip()
@@ -1364,11 +1632,25 @@ def _collect_test_points(
             if isinstance(v, dict):
                 val = v.get("value")
                 unit = v.get("unit") or ""
+                name_val = str(k).strip()
+                try:
+                    rns = v.get("raw_names")
+                    if isinstance(rns, list) and rns:
+                        ascii_rns = [
+                            rn
+                            for rn in rns
+                            if any(ord(ch) < 128 for ch in str(rn))
+                        ]
+                        name_val = str(
+                            ascii_rns[0] if ascii_rns else rns[0]
+                        ).strip()
+                except Exception:
+                    name_val = str(k).strip()
                 bp = _split_bp_value(val)
                 if bp:
                     _append_indicator_point(
                         store,
-                        f"{k}-收缩压",
+                        f"{name_val}-收缩压",
                         unit or "mmHg",
                         date_val,
                         bp[0],
@@ -1377,7 +1659,7 @@ def _collect_test_points(
                     )
                     _append_indicator_point(
                         store,
-                        f"{k}-舒张压",
+                        f"{name_val}-舒张压",
                         unit or "mmHg",
                         date_val,
                         bp[1],
@@ -1387,7 +1669,7 @@ def _collect_test_points(
                 else:
                     _append_indicator_point(
                         store,
-                        str(k).strip(),
+                        name_val,
                         unit,
                         date_val,
                         val,
@@ -1435,6 +1717,8 @@ def _collect_test_points(
             continue
         val = item.get("value")
         unit = str(item.get("unit") or "").strip()
+        if name and not _is_valid_test_name(name, unit):
+            continue
         dt = item.get("date") or date_val
         bp = _split_bp_value(val)
         if bp and name:
@@ -1499,6 +1783,186 @@ def _finalize_indicator_items(store: dict, include_points: bool) -> list:
         key=lambda x: (x.get("latest") or {}).get("date") or "", reverse=True
     )
     return indicators
+
+
+async def _maybe_llm_audit_trend_indicators(indicators: list[dict]) -> None:
+    try:
+        def _parse_json_object(text: str) -> dict | None:
+            try:
+                s = (text or "").strip()
+                if not s:
+                    return None
+                if "```" in s:
+                    start = s.find("```")
+                    end = s.rfind("```")
+                    if start != -1 and end != -1 and end > start:
+                        inner = s[start + 3 : end]
+                        nl = inner.find("\n")
+                        if nl != -1:
+                            inner = inner[nl + 1 :]
+                        s = inner.strip()
+                if s.startswith("{") and s.endswith("}"):
+                    try:
+                        obj = json.loads(s)
+                        return obj if isinstance(obj, dict) else None
+                    except Exception:
+                        pass
+                i = s.find("{")
+                j = s.rfind("}")
+                if i != -1 and j != -1 and j > i:
+                    cand = s[i : j + 1].strip()
+                    cand = re.sub(r",\s*([}\]])", r"\1", cand)
+                    obj = json.loads(cand)
+                    return obj if isinstance(obj, dict) else None
+            except Exception:
+                return None
+            return None
+
+        raw_flag = os.getenv("USE_LLM_INDICATOR_AUDIT")
+        if raw_flag is None:
+            use_llm = False
+        else:
+            use_llm = str(raw_flag).lower() in ("1", "true", "yes")
+        if not use_llm:
+            return
+        try:
+            from openai import AsyncOpenAI
+        except Exception:
+            return
+        cache = globals().get("_INDICATOR_AUDIT_CACHE")
+        if not isinstance(cache, dict):
+            cache = {}
+            globals()["_INDICATOR_AUDIT_CACHE"] = cache
+        api_key = (
+            os.getenv("LLM_API_KEY")
+            or os.getenv("DEEPSEEK_API_KEY")
+            or os.getenv("OPENAI_API_KEY")
+        )
+        if not api_key:
+            return
+        base_url = (
+            os.getenv("LLM_BASE_URL")
+            or os.getenv("OPENAI_BASE_URL")
+            or "https://api.deepseek.com"
+        )
+        try:
+            bu = str(base_url or "").strip().rstrip("/")
+            if bu and (not bu.endswith("/v1")):
+                base_url = bu + "/v1"
+        except Exception:
+            pass
+        model = (
+            os.getenv("LLM_MODEL")
+            or os.getenv("DEEPSEEK_MODEL")
+            or "deepseek-chat"
+        )
+        to_audit: list[dict] = []
+        id_to_name: dict[str, str] = {}
+        name_to_id: dict[str, str] = {}
+        for item in indicators:
+            if not isinstance(item, dict):
+                continue
+            raw_names = item.get("raw_names")
+            if not isinstance(raw_names, list) or not raw_names:
+                continue
+            nm = str(item.get("name") or "").strip()
+            if not nm:
+                continue
+            audit_id = f"i{len(to_audit)}"
+            id_to_name[audit_id] = nm
+            name_to_id[nm] = audit_id
+            to_audit.append(
+                {
+                    "id": audit_id,
+                    "name": nm,
+                    "unit": str(item.get("unit") or ""),
+                    "raw_names": [str(x) for x in raw_names[:10]],
+                }
+            )
+            if len(to_audit) >= 40:
+                break
+        if not to_audit:
+            return
+        client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+        sys_prompt = (
+            "你是医学检验指标名称审校助手，只输出JSON。"
+            "任务：审查系统给出的中文指标名是否与原始缩写/原名一致。"
+            "要求：仅依据raw_names和常见检验缩写含义判断；不确定时is_correct=false且confidence<=0.5；禁止编造；reason不超过30字；不要markdown。"
+            "输出格式：{\"items\":[{\"id\":\"与输入一致\",\"is_correct\":true/false,\"suggested_name\":\"建议中文名或空\",\"confidence\":0到1,\"reason\":\"简短原因\"}]}"
+        )
+        audit_map: dict[str, dict] = {}
+        chunk_size = 10
+        for start in range(0, len(to_audit), chunk_size):
+            chunk = to_audit[start : start + chunk_size]
+            if not chunk:
+                continue
+            payload = {"items": chunk}
+            user_prompt = json.dumps(payload, ensure_ascii=False)
+            try:
+                import hashlib
+
+                cache_key = hashlib.sha1(
+                    user_prompt.encode("utf-8", errors="ignore")
+                ).hexdigest()
+            except Exception:
+                cache_key = None
+            parsed = cache.get(cache_key) if cache_key else None
+            try:
+                if parsed is None:
+                    req_kwargs = {
+                        "model": model,
+                        "messages": [
+                            {"role": "system", "content": sys_prompt},
+                            {"role": "user", "content": user_prompt},
+                        ],
+                        "temperature": 0.0,
+                        "max_tokens": 2000,
+                    }
+                    try:
+                        resp = await client.chat.completions.create(
+                            **req_kwargs, response_format={"type": "json_object"}
+                        )
+                    except Exception:
+                        resp = await client.chat.completions.create(**req_kwargs)
+                    text = (resp.choices[0].message.content or "").strip()
+                    parsed = _parse_json_object(text)
+                    if cache_key and isinstance(parsed, dict):
+                        cache[cache_key] = parsed
+            except Exception:
+                continue
+            items = parsed.get("items") if isinstance(parsed, dict) else None
+            if not isinstance(items, list) or not items:
+                continue
+            for it in items:
+                if not isinstance(it, dict):
+                    continue
+                _id = str(it.get("id") or "").strip()
+                if not _id:
+                    continue
+                audit_map[_id] = it
+        if not audit_map:
+            return
+        for item in indicators:
+            if not isinstance(item, dict):
+                continue
+            nm = str(item.get("name") or "").strip()
+            if not nm:
+                continue
+            audit_id = name_to_id.get(nm)
+            audit = audit_map.get(audit_id) if audit_id else None
+            if not audit:
+                continue
+            item["audit"] = audit
+            is_correct = bool(audit.get("is_correct"))
+            conf = audit.get("confidence")
+            suggested = str(audit.get("suggested_name") or "").strip()
+            if not is_correct and isinstance(conf, (int, float)) and conf >= 0.75:
+                if suggested:
+                    item["name"] = _canonicalize_indicator_name(suggested)
+                else:
+                    item["name"] = nm + "（待核对）"
+    except Exception:
+        return
 
 
 def _normalize_ocr_text(raw: str | None) -> str:
@@ -4363,6 +4827,10 @@ async def get_health_trend_indicators(
                             ),
                         )
         indicators = _finalize_indicator_items(store, include_points)
+        try:
+            await _maybe_llm_audit_trend_indicators(indicators)
+        except Exception:
+            pass
         return {"days": days, "indicators": indicators}
     except HTTPException:
         raise
@@ -4453,11 +4921,22 @@ async def get_health_trend_indicator(
                             ),
                         )
         indicators = _finalize_indicator_items(store, True)
+        try:
+            await _maybe_llm_audit_trend_indicators(indicators)
+        except Exception:
+            pass
         selected = None
         for item in indicators:
             if item.get("name") == name:
                 selected = item
                 break
+        if (not selected) and name:
+            name2 = str(name).replace("（待核对）", "").strip()
+            if name2 and name2 != name:
+                for item in indicators:
+                    if str(item.get("name") or "").replace("（待核对）", "").strip() == name2:
+                        selected = item
+                        break
         return {"days": days, "indicator": selected}
     except HTTPException:
         raise
