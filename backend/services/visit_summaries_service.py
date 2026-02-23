@@ -304,6 +304,14 @@ async def finalize_visit_summary_batch(
         )
         if agent_raw:
             tests_val.append({"type": "agent_summary", "data": agent_raw})
+        try:
+            display_fields = await api._maybe_llm_display_fields(
+                combined_text, extracted_merged, doc_kind="visit_summary"
+            )
+            if display_fields:
+                tests_val.append({"type": "display_fields_v1", "data": display_fields})
+        except Exception:
+            pass
 
         with api.get_db_connection() as conn:
             with conn.cursor(row_factory=api.dict_row) as cursor:
@@ -647,8 +655,26 @@ async def analyze_visit_summary_image(
             "follow_up": api._sanitize_text_value(extracted.get("follow_up")),
         }
 
+        display_fields = None
+        try:
+            display_fields = await api._maybe_llm_display_fields(
+                ocr_text, extracted, doc_kind="visit_summary"
+            )
+        except Exception:
+            display_fields = None
+
         with api.get_db_connection() as conn:
             with conn.cursor(row_factory=api.dict_row) as cursor:
+                tests_val: list[dict[str, Any]] = []
+                if agent_raw:
+                    tests_val.append({"type": "agent_summary", "data": agent_raw})
+                if display_fields:
+                    tests_val.append(
+                        {
+                            "type": "display_fields_v1",
+                            "data": display_fields,
+                        }
+                    )
                 cursor.execute(
                     """
                     INSERT INTO visit_summaries (
@@ -681,9 +707,7 @@ async def analyze_visit_summary_image(
                         summary_content,
                         notes_val,
                         api.Json([file_id]),
-                        api.Json(
-                            [{"type": "agent_summary", "data": agent_raw}] if agent_raw else []
-                        ),
+                        api.Json(tests_val),
                         0,
                         datetime.now(),
                         datetime.now(),

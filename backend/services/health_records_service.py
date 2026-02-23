@@ -1547,6 +1547,27 @@ async def upload_file(
                     if structured_summary and isinstance(metadata, dict):
                         metadata["structured_summary"] = structured_summary
 
+                    try:
+                        display_fields = await api._maybe_llm_display_fields(
+                            ocr_text_str,
+                            (
+                                metadata.get("extracted_info")
+                                if isinstance(metadata, dict)
+                                else None
+                            ),
+                            doc_kind=str(record_type or ""),
+                        )
+                    except Exception as e:
+                        api.logger.warning(
+                            f"调用 LLM display_fields 失败: {e}"
+                        )
+                        display_fields = None
+                    if display_fields and isinstance(metadata, dict):
+                        metadata["display_fields_v1"] = display_fields
+                        metadata["display_fields_generated_at"] = (
+                            datetime.now().isoformat()
+                        )
+
                     llm_summary = None
                     try:
                         llm_summary = await api._maybe_llm_summary(
@@ -2025,6 +2046,27 @@ async def _process_pending_ocr(
                     )
                 except Exception:
                     pass
+
+                try:
+                    structured_summary = api._build_structured_summary(extracted_info)
+                    if structured_summary:
+                        meta["structured_summary"] = structured_summary
+                except Exception:
+                    pass
+
+                try:
+                    display_fields = await api._maybe_llm_display_fields(
+                        new_content or "",
+                        extracted_info,
+                        doc_kind=str(new_record_type or ""),
+                    )
+                    if display_fields:
+                        meta["display_fields_v1"] = display_fields
+                        meta["display_fields_generated_at"] = (
+                            datetime.now().isoformat()
+                        )
+                except Exception:
+                    pass
                 cursor.execute(
                     """
                     UPDATE health_records
@@ -2293,7 +2335,9 @@ async def backfill_health_trends(
                         meta_val.get("extracted_info") or meta_val.get("extracted_data")
                     )
                     tests = extracted.get("test_results") or extracted.get("tests")
-                    if tests:
+                    existing_tests: dict | None = tests if isinstance(tests, dict) else None
+                    existing_count = len(existing_tests) if isinstance(existing_tests, dict) else 0
+                    if existing_count >= 25:
                         skipped += 1
                         continue
 
@@ -2338,6 +2382,10 @@ async def backfill_health_trends(
                     if not test_results or not isinstance(test_results, dict):
                         skipped += 1
                         continue
+                    if existing_tests and isinstance(existing_tests, dict):
+                        merged = dict(test_results)
+                        merged.update(existing_tests)
+                        test_results = merged
 
                     filtered_results = api._filter_test_results(test_results)
                     if filtered_results is None or not filtered_results:

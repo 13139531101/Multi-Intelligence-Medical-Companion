@@ -12,7 +12,7 @@ import time
 # API基础URL
 BASE_URL = "http://localhost:13002"
 
-def test_smart_chat(message):
+def run_smart_chat(message):
     """
     测试智能路由接口
     """
@@ -38,7 +38,7 @@ def test_smart_chat(message):
         print(f"请求失败: {str(e)}")
         return None
 
-def test_ping():
+def run_ping():
     """
     测试服务器连接
     """
@@ -58,7 +58,7 @@ def main():
     print("=== 智能路由API测试 ===")
     
     # 测试服务器连接
-    if not test_ping():
+    if not run_ping():
         print("请确保API服务器正在运行 (python api.py)")
         return
     
@@ -73,7 +73,7 @@ def main():
     
     results = []
     for message in test_messages:
-        result = test_smart_chat(message)
+        result = run_smart_chat(message)
         if result:
             results.append(result)
         time.sleep(1)  # 避免请求过快

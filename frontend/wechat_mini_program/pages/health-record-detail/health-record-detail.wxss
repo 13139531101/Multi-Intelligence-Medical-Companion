@@ -110,6 +110,65 @@
   background: #f5f5f5;
 }
 
+.kv-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14rpx;
+}
+
+.kv-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 16rpx;
+}
+
+.kv-name {
+  font-size: 26rpx;
+  color: #333;
+  max-width: 62%;
+}
+
+.kv-value {
+  font-size: 26rpx;
+  color: #111;
+  font-weight: 500;
+  max-width: 38%;
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.test-kv-value {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+  word-break: break-all;
+}
+
+.tests-scroll {
+  margin-top: 6rpx;
+}
+
+.section-subtitle {
+  margin-top: 18rpx;
+  margin-bottom: 10rpx;
+  font-size: 26rpx;
+  color: #666;
+  font-weight: 500;
+}
+
+.section-actions {
+  margin-top: 18rpx;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.toggle-btn {
+  font-size: 26rpx;
+  color: #1890ff;
+}
+
 .empty {
   text-align: center;
   color: #999;

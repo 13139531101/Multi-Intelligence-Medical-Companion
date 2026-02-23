@@ -1189,6 +1189,13 @@ def _is_valid_test_name(name: str, unit: str = "") -> bool:
         "白细胞",
         "红细胞",
         "血小板",
+        "中性粒细胞",
+        "淋巴细胞",
+        "单核细胞",
+        "嗜酸性粒细胞",
+        "嗜碱性粒细胞",
+        "网织红细胞",
+        "有核红细胞",
     ]
     if any(kw in text for kw in allowed_keywords):
         return True
@@ -1211,6 +1218,13 @@ def _is_valid_test_name(name: str, unit: str = "") -> bool:
         "mpv",
         "pdw",
         "pct",
+        "nrbc",
+        "ret",
+        "ret%",
+        "ret#",
+        "retic",
+        "retic%",
+        "retic#",
         "alt",
         "ast",
         "glu",
@@ -1413,6 +1427,13 @@ def _canonicalize_indicator_name(name: str | None) -> str:
         "gran%": "中性粒细胞百分比",
         "nrbc": "有核红细胞",
         "nrbc%": "有核红细胞百分比",
+        "ret": "网织红细胞",
+        "ret#": "网织红细胞",
+        "ret%": "网织红细胞百分比",
+        "retic": "网织红细胞",
+        "retic#": "网织红细胞",
+        "retic%": "网织红细胞百分比",
+        "irf": "未成熟网织红细胞比率",
         "p-lcr": "大血小板比率",
         "plcr": "大血小板比率",
         "lcr": "大血小板比率",
@@ -1479,8 +1500,18 @@ def _quick_extract_test_results(text: str) -> dict:
     s = re.sub(r"[\r\n\t]+", " ", s)
     s = re.sub(r"\s{2,}", " ", s)
     patterns = [
-        r"([\u4e00-\u9fa5]{2,30}(?:\([^)]{1,12}\))?)\s+([-+]?\d+(?:\.\d+)?)\s+(?:\d+(?:\.\d+)?\s*(?:~|-|—)\s*\d+(?:\.\d+)?\s+)?([A-Za-z0-9μµ/%×x*^.\-~]+(?:/[A-Za-z0-9μµ%×x*^.\-~]+)?)",
-        r"([A-Za-z]{2,6}\d{0,2}%?)\)?\s+([-+]?\d+(?:\.\d+)?)\s+(?:\d+(?:\.\d+)?\s*(?:~|-|—)\s*\d+(?:\.\d+)?\s+)?([A-Za-z0-9μµ/%×x*^.\-~]+(?:/[A-Za-z0-9μµ%×x*^.\-~]+)?)?",
+        (
+            r"([\u4e00-\u9fa5]{2,30}(?:\([^)]{1,12}\))?)\s+"
+            r"([-+]?\d+(?:\.\d+)?%?)\s+"
+            r"(?:\d+(?:\.\d+)?\s*(?:~|-|—)\s*\d+(?:\.\d+)?\s+)?"
+            r"([A-Za-z0-9μµ/%×x*^.\-~]+(?:/[A-Za-z0-9μµ%×x*^.\-~]+)?)?"
+        ),
+        (
+            r"([A-Za-z]{2,6}\d{0,2}%?)\)?\s+"
+            r"([-+]?\d+(?:\.\d+)?%?)\s+"
+            r"(?:\d+(?:\.\d+)?\s*(?:~|-|—)\s*\d+(?:\.\d+)?\s+)?"
+            r"([A-Za-z0-9μµ/%×x*^.\-~]+(?:/[A-Za-z0-9μµ%×x*^.\-~]+)?)?"
+        ),
     ]
     for pat in patterns:
         for match in re.findall(pat, s):
@@ -1492,6 +1523,9 @@ def _quick_extract_test_results(text: str) -> dict:
                 continue
             if not _is_valid_test_name(name, unit):
                 continue
+            if (not unit) and value.endswith("%"):
+                unit = "%"
+                value = value[:-1].strip()
             results[name] = {"value": value, "unit": unit}
     return results
 
@@ -1516,6 +1550,19 @@ def _prepare_metadata_with_tests(
             merged = dict(quick)
             merged.update(tests)
             tests = merged
+    if text and isinstance(tests, dict) and existing_count > 0 and existing_count < 25 and extract_test_results:
+        try:
+            more = (
+                extract_test_results.fn(text)
+                if hasattr(extract_test_results, "fn")
+                else extract_test_results(text)
+            )
+            if isinstance(more, dict) and more:
+                merged = dict(more)
+                merged.update(tests)
+                tests = merged
+        except Exception:
+            tests = tests
     if (not tests) and text and extract_test_results:
         try:
             tests = (
@@ -2725,6 +2772,270 @@ async def _maybe_llm_summary(
     except Exception as e:
         logger.error(f"LLM 摘要流程异常: {e}")
         return None
+
+
+def _extract_json_payload(text: str) -> dict | None:
+    s = (text or "").strip()
+    if not s:
+        return None
+    if s.startswith("```"):
+        s = re.sub(r"^```[a-zA-Z0-9_-]*\s*", "", s).strip()
+        s = re.sub(r"\s*```$", "", s).strip()
+    start = s.find("{")
+    end = s.rfind("}")
+    if start < 0 or end < 0 or end <= start:
+        return None
+    raw = s[start : end + 1].strip()
+    try:
+        obj = json.loads(raw)
+    except Exception:
+        return None
+    return obj if isinstance(obj, dict) else None
+
+
+def _build_display_fields_fallback(extracted: dict | None) -> dict[str, Any]:
+    if not isinstance(extracted, dict):
+        extracted = {}
+
+    diagnosis_val = extracted.get("diagnosis") or extracted.get("diagnoses")
+    diagnosis: list[str] = []
+    if isinstance(diagnosis_val, str):
+        dx = diagnosis_val.strip()
+        if dx:
+            diagnosis = [x.strip() for x in re.split(r"[；;，,\n]+", dx) if x.strip()]
+    elif isinstance(diagnosis_val, list):
+        diagnosis = [str(x).strip() for x in diagnosis_val if str(x).strip()]
+
+    medications: list[str] = []
+    meds_val = extracted.get("medications") or extracted.get("medication_names")
+    if isinstance(meds_val, list):
+        for m in meds_val:
+            if isinstance(m, str):
+                name = m.strip()
+                if name:
+                    medications.append(name)
+            elif isinstance(m, dict):
+                name = str(m.get("name") or m.get("drug") or "").strip()
+                if name:
+                    medications.append(name)
+    elif isinstance(meds_val, str):
+        medications = [
+            x.strip() for x in re.split(r"[；;，,\n]+", meds_val) if x.strip()
+        ]
+
+    key_tests: list[dict[str, Any]] = []
+    tests_val = extracted.get("test_results") or extracted.get("tests")
+    if isinstance(tests_val, list):
+        for t in tests_val[:30]:
+            if not isinstance(t, dict):
+                continue
+            name = str(t.get("name") or t.get("test_name") or "").strip()
+            value = str(t.get("value") or t.get("result") or "").strip()
+            unit = str(t.get("unit") or "").strip()
+            if name and (value or unit):
+                key_tests.append({"name": name, "value": value, "unit": unit})
+    elif isinstance(tests_val, dict):
+        for k, v in list(tests_val.items())[:30]:
+            name = str(k or "").strip()
+            if not name:
+                continue
+            if isinstance(v, dict):
+                value = str(v.get("value") or "").strip()
+                unit = str(v.get("unit") or "").strip()
+            else:
+                value = str(v or "").strip()
+                unit = ""
+            if value or unit:
+                key_tests.append({"name": name, "value": value, "unit": unit})
+
+    date_val = extracted.get("date") or extracted.get("visit_date")
+    date_text = str(date_val or "").strip()
+    if hasattr(date_val, "isoformat"):
+        try:
+            date_text = date_val.isoformat()
+        except Exception:
+            date_text = str(date_val or "").strip()
+
+    return {
+        "doc_type": str(extracted.get("document_type") or "").strip(),
+        "date": date_text,
+        "hospital": str(extracted.get("hospital") or "").strip(),
+        "department": str(extracted.get("department") or "").strip(),
+        "doctor": str(extracted.get("doctor") or "").strip(),
+        "diagnosis": diagnosis[:4],
+        "medications": list(dict.fromkeys([x for x in medications if x]))[:8],
+        "key_tests": key_tests[:12],
+        "key_points": [],
+        "advice": [],
+        "follow_up": [],
+    }
+
+
+def _normalize_display_fields(obj: dict | None) -> dict[str, Any] | None:
+    if not isinstance(obj, dict):
+        return None
+
+    def norm_str(v: Any) -> str:
+        return str(v or "").strip()
+
+    def norm_str_list(v: Any, max_items: int) -> list[str]:
+        if isinstance(v, str):
+            items = [x.strip() for x in re.split(r"[；;，,\n]+", v) if x.strip()]
+        elif isinstance(v, list):
+            items = [str(x).strip() for x in v if str(x).strip()]
+        else:
+            items = []
+        uniq: list[str] = []
+        seen = set()
+        for it in items:
+            if it in seen:
+                continue
+            seen.add(it)
+            uniq.append(it)
+            if len(uniq) >= max_items:
+                break
+        return uniq
+
+    def norm_tests(v: Any, max_items: int) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        if isinstance(v, list):
+            for t in v:
+                if not isinstance(t, dict):
+                    continue
+                name = norm_str(t.get("name") or t.get("test_name"))
+                value = norm_str(t.get("value") or t.get("result"))
+                unit = norm_str(t.get("unit"))
+                if not name:
+                    continue
+                if not (value or unit):
+                    continue
+                out.append({"name": name, "value": value, "unit": unit})
+                if len(out) >= max_items:
+                    break
+        return out
+
+    normalized: dict[str, Any] = {
+        "doc_type": norm_str(obj.get("doc_type")),
+        "date": norm_str(obj.get("date")),
+        "hospital": norm_str(obj.get("hospital")),
+        "department": norm_str(obj.get("department")),
+        "doctor": norm_str(obj.get("doctor")),
+        "diagnosis": norm_str_list(obj.get("diagnosis"), 4),
+        "medications": norm_str_list(obj.get("medications"), 8),
+        "key_tests": norm_tests(obj.get("key_tests") or obj.get("tests"), 12),
+        "key_points": norm_str_list(obj.get("key_points"), 6),
+        "advice": norm_str_list(obj.get("advice"), 6),
+        "follow_up": norm_str_list(obj.get("follow_up"), 4),
+    }
+    if any(
+        [
+            normalized["date"],
+            normalized["hospital"],
+            normalized["department"],
+            normalized["doctor"],
+            normalized["diagnosis"],
+            normalized["medications"],
+            normalized["key_tests"],
+            normalized["key_points"],
+            normalized["advice"],
+            normalized["follow_up"],
+        ]
+    ):
+        return normalized
+    return None
+
+
+async def _maybe_llm_display_fields(
+    ocr_text: str, extracted: dict | None, *, doc_kind: str = ""
+) -> dict[str, Any] | None:
+    raw_flag = os.getenv("USE_LLM_DISPLAY_FIELDS")
+    if raw_flag is None:
+        use_llm = True
+    else:
+        use_llm = str(raw_flag).lower() in ("1", "true", "yes")
+    if not use_llm:
+        return _normalize_display_fields(_build_display_fields_fallback(extracted))
+
+    try:
+        from openai import AsyncOpenAI
+    except Exception as e:
+        logger.warning(f"OpenAI 客户端导入失败: {e}")
+        return _normalize_display_fields(_build_display_fields_fallback(extracted))
+
+    api_key = (
+        os.getenv("LLM_API_KEY")
+        or os.getenv("DEEPSEEK_API_KEY")
+        or os.getenv("OPENAI_API_KEY")
+    )
+    if not api_key:
+        return _normalize_display_fields(_build_display_fields_fallback(extracted))
+
+    base_url = (
+        os.getenv("LLM_BASE_URL")
+        or os.getenv("OPENAI_BASE_URL")
+        or "https://api.deepseek.com"
+    )
+    model = os.getenv("LLM_MODEL") or os.getenv("DEEPSEEK_MODEL") or "deepseek-chat"
+
+    client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+    text_clean = (ocr_text or "").strip()
+    extracted_str = ""
+    if isinstance(extracted, dict) and extracted:
+        try:
+            extracted_str = json.dumps(extracted, ensure_ascii=False)
+        except Exception:
+            extracted_str = str(extracted)
+
+    kind = str(doc_kind or "").strip()
+    sys_prompt = (
+        "你是医疗文档关键信息抽取助手。你只能依据输入文本抽取信息，禁止编造、推断或引用外部知识。"
+        "你必须只输出JSON对象，不要输出解释、前后缀、Markdown或代码块。"
+        "若字段缺失请输出空字符串或空数组。"
+    )
+    schema_hint = (
+        "{"
+        '"doc_type":"",'
+        '"date":"",'
+        '"hospital":"",'
+        '"department":"",'
+        '"doctor":"",'
+        '"diagnosis":[""],'
+        '"medications":[""],'
+        '"key_tests":[{"name":"","value":"","unit":""}],'
+        '"key_points":[""],'
+        '"advice":[""],'
+        '"follow_up":[""]'
+        "}"
+    )
+    user_prompt = (
+        f"doc_kind={kind}\n\n"
+        f"【已抽取结构化信息(JSON)】\n{extracted_str}\n\n"
+        f"【OCR全文】\n{text_clean}\n\n"
+        "任务：抽取“一眼看懂”的关键信息，输出严格JSON对象。"
+        "要求：只使用上述文本中的内容；不要改写数值与单位；不要输出'无'或'未提供'等占位；"
+        "诊断/用药/要点等只列最重要的若干条；key_tests仅列明确出现的检查项目与数值。"
+        f"\n输出JSON结构示例：{schema_hint}"
+    )
+    try:
+        resp = await client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": sys_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0.0,
+            max_tokens=900,
+        )
+        raw = (resp.choices[0].message.content or "").strip()
+    except Exception as e:
+        logger.warning(f"LLM 结构化字段请求失败: {e}")
+        return _normalize_display_fields(_build_display_fields_fallback(extracted))
+
+    parsed = _extract_json_payload(raw)
+    normalized = _normalize_display_fields(parsed)
+    if normalized:
+        return normalized
+    return _normalize_display_fields(_build_display_fields_fallback(extracted))
 
 
 def _normalize_document_type(value: str | None) -> str:

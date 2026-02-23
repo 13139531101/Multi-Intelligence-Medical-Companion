@@ -3,7 +3,7 @@
   <!-- 页面标题 -->
   <view class="page-header">
     <view class="page-title">健康档案</view>
-    <view class="page-desc">管理您的健康档案信息</view>
+    <view class="page-desc">沉淀检查结果，用于趋势与长期追踪</view>
   </view>
 
   <!-- 搜索和筛选 -->
@@ -100,7 +100,7 @@
         <view class="upload-section">
           <view class="upload-btn" bindtap="uploadFile">
             <view class="upload-icon">📎</view>
-            <view class="upload-text">拍照/选择文件</view>
+            <view class="upload-text">拍照/上传检查报告(用于趋势)</view>
           </view>
           <view class="file-info" wx:if="{{formData.file_name}}">
             <view class="file-name">{{formData.file_name}}</view>

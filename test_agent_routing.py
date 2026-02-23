@@ -43,7 +43,7 @@ def get_auth_token():
         print(f"Auth request failed: {e}")
         return None
 
-def test_routing(token):
+def run_routing(token):
     print("\nTesting Agent Routing...")
     headers = {
         "Authorization": f"Bearer {token}",
@@ -133,4 +133,4 @@ def test_routing(token):
 if __name__ == "__main__":
     token = get_auth_token()
     if token:
-        test_routing(token)
+        run_routing(token)

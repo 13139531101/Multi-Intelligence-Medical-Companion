@@ -10,16 +10,47 @@
     </view>
   </view>
 
-  <view class="section" wx:if="{{record.display_description}}">
-    <view class="section-title">内容</view>
-    <view class="section-content">{{record.display_description}}</view>
-  </view>
-
   <view class="section" wx:if="{{fileUrls.length}}">
-    <view class="section-title">图片</view>
+    <view class="section-title">原图</view>
     <view class="image-grid">
       <image class="thumb" wx:for="{{fileUrls}}" wx:key="*this" src="{{item}}" mode="aspectFill" catchtap="previewImage" data-urls="{{fileUrls}}" data-current="{{item}}"></image>
     </view>
+  </view>
+
+  <view class="section" wx:if="{{displayKvs.length || structuredSummary}}">
+    <view class="section-title">一眼看懂</view>
+    <view class="kv-list" wx:if="{{displayKvs.length}}">
+      <view class="kv-row" wx:for="{{displayKvs}}" wx:key="label">
+        <view class="kv-name">{{item.label}}</view>
+        <view class="kv-value">{{item.value}}</view>
+      </view>
+    </view>
+    <view class="section-content" wx:elif="{{structuredSummary}}">{{structuredSummary}}</view>
+  </view>
+
+  <view class="section" wx:if="{{testItems.length}}">
+    <view class="section-title">全部指标（{{testItems.length}}）</view>
+    <scroll-view class="tests-scroll" scroll-y style="height: {{testsScrollHeight}}px;">
+      <view class="kv-list">
+        <view class="kv-row" wx:for="{{visibleTestItems}}" wx:key="name">
+          <view class="kv-name">{{item.name}}</view>
+          <view class="kv-value test-kv-value">{{item.valueText}}</view>
+        </view>
+      </view>
+    </scroll-view>
+  </view>
+
+  <view class="section" wx:if="{{ocrPreview}}">
+    <view class="section-title">OCR全文</view>
+    <view class="section-content">{{ocrExpanded ? ocrText : ocrPreview}}</view>
+    <view class="section-actions" wx:if="{{ocrHasMore}}">
+      <view class="toggle-btn" bindtap="toggleOcr">{{ocrExpanded ? '收起' : '展开全文'}}</view>
+    </view>
+  </view>
+
+  <view class="section" wx:if="{{record.display_description && !structuredSummary && !ocrPreview}}">
+    <view class="section-title">内容</view>
+    <view class="section-content">{{record.display_description}}</view>
   </view>
 
   <view class="empty" wx:if="{{!isLoading && !record}}">

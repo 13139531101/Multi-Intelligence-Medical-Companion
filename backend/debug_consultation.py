@@ -32,6 +32,8 @@ DB_CONFIG = {
     "dbname": os.getenv("DB_NAME", os.getenv("POSTGRES_DB", "personal_health_assistant")),
 }
 
+
+
 async def test_fetch():
     print("Connecting to DB...")
     try:
@@ -49,13 +51,13 @@ async def test_fetch():
                     try:
                         import json
                         row['tags'] = json.loads(row['tags'])
-                    except:
+                    except Exception:
                         row['tags'] = []
                 elif row.get('tags') is None:
-                        row['tags'] = []
+                    row['tags'] = []
 
                 try:
-                    c = Consultation(**row)
+                    Consultation(**row)
                     print(f"Row {i} valid.")
                 except Exception as e:
                     print(f"Row {i} INVALID: {e}")

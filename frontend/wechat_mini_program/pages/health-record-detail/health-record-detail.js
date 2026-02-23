@@ -5,6 +5,16 @@ Page({
     record: null,
     isLoading: false,
     fileUrls: [],
+    structuredSummary: "",
+    displayKvs: [],
+    testItems: [],
+    visibleTestItems: [],
+    showAllTests: false,
+    testsScrollHeight: 320,
+    ocrText: "",
+    ocrPreview: "",
+    ocrExpanded: false,
+    ocrHasMore: false,
     tagLabelMap: {
       test_report: "检查报告",
       inspection_report: "检查报告",
@@ -22,6 +32,15 @@ Page({
   },
 
   onLoad(options) {
+    try {
+      const info = wx.getSystemInfoSync();
+      const base =
+        info && info.windowHeight ? Math.round(info.windowHeight * 0.45) : 320;
+      const h = Math.max(220, Math.min(base, 520));
+      this.setData({ testsScrollHeight: h });
+    } catch (e) {
+      this.setData({ testsScrollHeight: 320 });
+    }
     if (options && options.id) {
       this.loadRecord(options.id);
     }
@@ -45,16 +64,22 @@ Page({
       const contentText = record.content ? String(record.content) : "";
       const contentTrimmed = contentText.trim();
       const rawTrimmed = String(rawDesc || "").trim();
-      const displayDesc = contentTrimmed
-        ? contentTrimmed
-        : rawTrimmed
-          ? rawTrimmed
-          : files.length
-            ? "已上传附件，内容待识别"
-            : "暂无内容";
+      const displayKvs = this.buildDisplayKvs(record);
+      const structuredSummary = displayKvs.length
+        ? ""
+        : this.buildStructuredSummary(record);
+      const displayDesc = rawTrimmed
+        ? rawTrimmed
+        : files.length
+          ? "已上传附件，内容待识别"
+          : "暂无内容";
       const fileUrls = files.map((f) => this.resolveFileUrl(f)).filter(Boolean);
 
       const displayTitle = this.getDisplayTitle(record);
+      const tests = this.extractTestItems(record);
+      const testItems = tests.allItems || [];
+      const visibleTestItems = testItems;
+      const ocrInfo = this.buildOcrPreview(contentTrimmed, 650);
 
       this.setData({
         record: {
@@ -67,6 +92,15 @@ Page({
           display_title: displayTitle,
         },
         fileUrls,
+        structuredSummary,
+        displayKvs,
+        testItems,
+        visibleTestItems,
+        showAllTests: true,
+        ocrText: contentTrimmed,
+        ocrPreview: ocrInfo.preview,
+        ocrHasMore: ocrInfo.hasMore,
+        ocrExpanded: false,
       });
     } catch (error) {
       wx.showToast({
@@ -85,11 +119,162 @@ Page({
     return `${SERVER_URL}/api/health-records/files/${s}`;
   },
 
+  buildOcrPreview(text, maxLen = 650) {
+    const s = String(text || "").trim();
+    if (!s) return { preview: "", hasMore: false };
+    if (s.length <= maxLen) return { preview: s, hasMore: false };
+    return { preview: s.slice(0, maxLen) + "…", hasMore: true };
+  },
+
+  extractTestItems(record) {
+    try {
+      let metadata = record && record.metadata ? record.metadata : {};
+      if (typeof metadata === "string") {
+        try {
+          metadata = JSON.parse(metadata);
+        } catch (e) {
+          metadata = {};
+        }
+      }
+      if (!metadata || typeof metadata !== "object") metadata = {};
+      const df =
+        metadata.display_fields_v1 &&
+        typeof metadata.display_fields_v1 === "object"
+          ? metadata.display_fields_v1
+          : null;
+
+      const dfItems = [];
+      if (df && Array.isArray(df.key_tests) && df.key_tests.length) {
+        for (const t of df.key_tests) {
+          if (!t || typeof t !== "object") continue;
+          const name = String(t.name || "").trim();
+          const val = String(t.value || "").trim();
+          const unit = String(t.unit || "").trim();
+          if (!name) continue;
+          dfItems.push({
+            name,
+            valueText: val ? `${val}${unit}` : unit ? unit : "",
+          });
+        }
+      }
+
+      let info = metadata.extracted_info || metadata.extracted_data || {};
+      if (typeof info === "string") {
+        try {
+          info = JSON.parse(info);
+        } catch (e) {
+          info = {};
+        }
+      }
+      if (!info || typeof info !== "object") info = {};
+      const tests = info.test_results || info.tests || null;
+      const items = [];
+      if (Array.isArray(tests)) {
+        for (const t of tests) {
+          if (!t) continue;
+          if (typeof t === "string") {
+            const v = t.trim();
+            if (v) items.push({ name: v, valueText: "" });
+            continue;
+          }
+          if (typeof t === "object") {
+            const name = String(t.name || t.test_name || "").trim();
+            const val = String(t.value || t.result || "").trim();
+            const unit = String(t.unit || "").trim();
+            if (!name) continue;
+            items.push({
+              name,
+              valueText: val ? `${val}${unit}` : unit ? unit : "",
+            });
+          }
+        }
+      } else if (tests && typeof tests === "object") {
+        for (const [k, v] of Object.entries(tests)) {
+          const name = String(k || "").trim();
+          if (!name) continue;
+          if (!v || typeof v !== "object") {
+            const vv = String(v || "").trim();
+            items.push({ name, valueText: vv });
+            continue;
+          }
+          const val = String(v.value || "").trim();
+          const unit = String(v.unit || "").trim();
+          items.push({
+            name,
+            valueText: val ? `${val}${unit}` : unit ? unit : "",
+          });
+        }
+      }
+      let allItems = items.filter((x) => x && x.name).slice(0, 300);
+      if (!allItems.length && dfItems.length) {
+        allItems = dfItems.filter((x) => x && x.name).slice(0, 300);
+      }
+      return {
+        allItems,
+      };
+    } catch (e) {
+      return { allItems: [] };
+    }
+  },
+
+  buildDisplayKvs(record) {
+    try {
+      let metadata = record && record.metadata ? record.metadata : {};
+      if (typeof metadata === "string") {
+        try {
+          metadata = JSON.parse(metadata);
+        } catch (e) {
+          metadata = {};
+        }
+      }
+      if (!metadata || typeof metadata !== "object") return [];
+      const df = metadata.display_fields_v1;
+      if (!df || typeof df !== "object") return [];
+
+      const joinList = (v, maxItems) => {
+        if (!Array.isArray(v)) return "";
+        return v
+          .map((x) => String(x || "").trim())
+          .filter(Boolean)
+          .slice(0, maxItems)
+          .join("；");
+      };
+      const kvs = [];
+      const date = String(df.date || "").trim();
+      const hospital = String(df.hospital || "").trim();
+      const department = String(df.department || "").trim();
+      const doctor = String(df.doctor || "").trim();
+      const diagnosis = joinList(df.diagnosis, 4);
+      const meds = joinList(df.medications, 8);
+      const points = joinList(df.key_points, 6);
+      const advice = joinList(df.advice, 6);
+      const follow = joinList(df.follow_up, 4);
+
+      if (date) kvs.push({ label: "日期", value: date });
+      if (hospital) kvs.push({ label: "医院", value: hospital });
+      if (department) kvs.push({ label: "科室", value: department });
+      if (doctor) kvs.push({ label: "医生", value: doctor });
+      if (diagnosis) kvs.push({ label: "诊断", value: diagnosis });
+      if (meds) kvs.push({ label: "用药", value: meds });
+      if (points) kvs.push({ label: "要点", value: points });
+      if (advice) kvs.push({ label: "医嘱", value: advice });
+      if (follow) kvs.push({ label: "随访", value: follow });
+      return kvs;
+    } catch (e) {
+      return [];
+    }
+  },
+
   buildStructuredSummary(record) {
-    const metadata =
-      record && record.metadata && typeof record.metadata === "object"
-        ? record.metadata
-        : {};
+    let metadata = record && record.metadata ? record.metadata : {};
+    if (typeof metadata === "string") {
+      try {
+        metadata = JSON.parse(metadata);
+      } catch (e) {
+        metadata = {};
+      }
+    }
+    if (!metadata || typeof metadata !== "object") metadata = {};
     const storedSummary =
       typeof metadata.structured_summary === "string"
         ? metadata.structured_summary.trim()
@@ -337,6 +522,18 @@ Page({
       urls,
       current: current || urls[0],
     });
+  },
+
+  toggleOcr() {
+    this.setData({ ocrExpanded: !this.data.ocrExpanded });
+  },
+
+  toggleTests() {
+    const showAllTests = !this.data.showAllTests;
+    const visibleTestItems = showAllTests
+      ? this.data.testItems
+      : this.data.testItems.slice(0, 12);
+    this.setData({ showAllTests, visibleTestItems });
   },
 
   onFileTap(e) {

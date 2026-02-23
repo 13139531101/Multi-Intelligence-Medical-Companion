@@ -23,6 +23,16 @@ Page({
 
       if (res) {
         const normalized = (Array.isArray(res) ? res : []).map((item) => {
+          const readDisplayFields = (testsArr) => {
+            const tests = Array.isArray(testsArr) ? testsArr : [];
+            const block = tests.find(
+              (t) => t && t.type === "display_fields_v1" && t.data,
+            );
+            if (!block) return null;
+            const data = block.data;
+            return data && typeof data === "object" ? data : null;
+          };
+
           const fmtDate = (v) => {
             const s = String(v || "").trim();
             if (!s || s === "null" || s === "undefined") return "";
@@ -44,6 +54,24 @@ Page({
             return first.slice(0, maxLen) + "…";
           };
 
+          const extractKeyPoints = (raw, maxItems = 3) => {
+            const text = String(raw || "").trim();
+            if (!text) return [];
+            const pieces = text
+              .split(/\n|。|；|;|，|,/g)
+              .map((s) => String(s || "").trim())
+              .filter(Boolean)
+              .map((s) => (s.length > 40 ? s.slice(0, 40) + "…" : s));
+            const uniq = [];
+            for (const p of pieces) {
+              if (!p) continue;
+              if (uniq.includes(p)) continue;
+              uniq.push(p);
+              if (uniq.length >= maxItems) break;
+            }
+            return uniq;
+          };
+
           const files = Array.isArray(item.files) ? item.files : [];
           const fileIds = files
             .map((f) => {
@@ -58,6 +86,7 @@ Page({
 
           let agentMedNames = [];
           const tests = Array.isArray(item.tests) ? item.tests : [];
+          const df = readDisplayFields(tests);
           const agentBlock = tests.find(
             (t) => t && t.type === "agent_summary" && t.data && t.data.content,
           );
@@ -73,7 +102,11 @@ Page({
             .filter(Boolean);
 
           let medTags = [];
-          if (agentMedNames.length) {
+          if (df && Array.isArray(df.medications) && df.medications.length) {
+            medTags = df.medications
+              .map((s) => String(s || "").trim())
+              .filter(Boolean);
+          } else if (agentMedNames.length) {
             medTags = agentMedNames;
           } else if (item.prescription) {
             const raw = String(item.prescription || "");
@@ -90,9 +123,20 @@ Page({
           const summaryText = String(
             (item.summary_content || item.notes || "").trim(),
           );
+          const hospitalFromDf = df ? String(df.hospital || "").trim() : "";
+          const departmentFromDf = df ? String(df.department || "").trim() : "";
+          const doctorFromDf = df ? String(df.doctor || "").trim() : "";
           const hospitalDisplay =
-            compactText(item.hospital, 16) ||
+            compactText(hospitalFromDf || item.hospital, 16) ||
             (item.hospital ? "未知医院" : "未知医院");
+          const followUpFromDf =
+            df && Array.isArray(df.follow_up) ? df.follow_up : [];
+          const followUpText =
+            followUpFromDf
+              .map((s) => String(s || "").trim())
+              .filter(Boolean)
+              .join("；") || item.follow_up;
+          const followUpDisplay = compactText(followUpText, 26);
 
           const statusRaw = String(item.status || "")
             .trim()
@@ -113,7 +157,13 @@ Page({
             fmtDateTime(item.updated_at) ||
             "";
 
-          const diagnosisText = String((item.diagnosis || "").trim());
+          const diagnosisFromDf =
+            df && Array.isArray(df.diagnosis) ? df.diagnosis : [];
+          const diagnosisText =
+            diagnosisFromDf
+              .map((s) => String(s || "").trim())
+              .filter(Boolean)
+              .join("；") || String((item.diagnosis || "").trim());
           const diagnosisDisplay = compactText(diagnosisText, 22) || "未识别";
           const previewParts = [];
           if (
@@ -143,10 +193,24 @@ Page({
             summaryPreview = summaryPreview.slice(0, 120) + "…";
           const canExpand =
             Boolean(summaryText) && summaryText.length > summaryPreview.length;
+          const keyPointsFromDf =
+            df && Array.isArray(df.key_points) ? df.key_points : [];
+          const adviceFromDf = df && Array.isArray(df.advice) ? df.advice : [];
+          const keyPoints = [
+            ...keyPointsFromDf
+              .map((s) => String(s || "").trim())
+              .filter(Boolean),
+            ...adviceFromDf.map((s) => String(s || "").trim()).filter(Boolean),
+          ]
+            .filter(Boolean)
+            .slice(0, 3);
+          const keyPointsFallback = extractKeyPoints(summaryText, 3);
 
           return {
             ...item,
             hospitalDisplay,
+            departmentDisplay: compactText(departmentFromDf, 18),
+            doctorDisplay: compactText(doctorFromDf, 18),
             visitDateDisplay,
             statusDisplay,
             statusClass,
@@ -157,6 +221,8 @@ Page({
             summaryText,
             summaryPreview,
             canExpand,
+            followUpDisplay,
+            keyPoints: keyPoints.length ? keyPoints : keyPointsFallback,
             expanded: false,
           };
         });

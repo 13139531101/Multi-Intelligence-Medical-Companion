@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import List, Optional, Dict, Any
 
 import anyio
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from pydantic import BaseModel
 from contextlib import contextmanager
 from psycopg.rows import dict_row
@@ -22,8 +22,12 @@ try:
 except ImportError:
     # Fallback if imports fail due to path issues
     logging.warning("Could not import ocr_tool directly, using mock.")
-    def call_local_ocr(img): return "Mock OCR Result: 无法加载本地OCR工具"
-    def call_aliyun_ocr(img): return "Mock OCR Result: 无法加载阿里云OCR工具"
+
+    def call_local_ocr(img):
+        return "Mock OCR Result: 无法加载本地OCR工具"
+
+    def call_aliyun_ocr(img):
+        return "Mock OCR Result: 无法加载阿里云OCR工具"
 
 try:
     from HealthRecordsManager.mcpserver.data_extraction_tool import extract_test_results
@@ -32,11 +36,10 @@ except Exception:
 
 try:
     # Try to import database manager from health_records_api or similar
-    from health_records_api import get_db_connection, get_db_manager
+    from health_records_api import get_db_connection
 except ImportError:
     # Define a simple DB manager if not found
     import psycopg
-    from psycopg.rows import dict_row
     from psycopg_pool import ConnectionPool
 
     _db_pool: ConnectionPool | None = None
@@ -109,6 +112,7 @@ class VisitSummaryResponse(BaseModel):
     advice: str
     original_text: str
 
+
 def _extract_numeric_value(value: Any) -> Optional[float]:
     if value is None:
         return None
@@ -120,6 +124,7 @@ def _extract_numeric_value(value: Any) -> Optional[float]:
     import re
     match = re.search(r"\d+(?:\.\d+)?", text)
     return float(match.group(0)) if match else None
+
 
 def _extract_feature_value(feature: str, tests: Any) -> Optional[float]:
     key = (feature or "").strip().lower()
@@ -170,6 +175,7 @@ def _extract_feature_value(feature: str, tests: Any) -> Optional[float]:
             return _extract_numeric_value(value)
     return None
 
+
 def _structure_text_with_llm(text: str) -> Dict[str, Any]:
     """
     Use LLM (or rule-based fallback) to structure the OCR text.
@@ -198,6 +204,7 @@ def _structure_text_with_llm(text: str) -> Dict[str, Any]:
             result["advice"] += line + "; "
 
     return result
+
 
 @router.post("/upload", response_model=VisitSummaryResponse)
 async def upload_visit_record(
@@ -287,7 +294,7 @@ async def upload_visit_record(
                     summary_id,
                     user_id,
                     structured_data["visit_date"],
-                    json.dumps(structured_data, ensure_ascii=False), # Summary content as JSON for now
+                    json.dumps(structured_data, ensure_ascii=False),  # Summary content as JSON for now
                     structured_data["diagnosis"],
                     json.dumps(structured_data["prescription"], ensure_ascii=False),
                     structured_data["hospital"],
@@ -312,6 +319,7 @@ async def upload_visit_record(
     finally:
         limiter.release()
 
+
 @router.get("/list")
 async def list_visit_summaries(user_id: str):
     """
@@ -334,7 +342,7 @@ async def list_visit_summaries(user_id: str):
                 if isinstance(presc, str):
                     try:
                         presc = json.loads(presc)
-                    except:
+                    except Exception:
                         presc = []
                 elif not presc:
                     presc = []
@@ -351,6 +359,7 @@ async def list_visit_summaries(user_id: str):
             return {"data": results}
 
 # === Health Trends API ===
+
 
 @router.get("/trends")
 async def get_health_trends(user_id: str, feature: str, days: int = 90):

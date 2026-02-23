@@ -102,10 +102,12 @@ Page({
           const hasFiles =
             Array.isArray(record.files) && record.files.length > 0;
           const rawTrimmed = String(rawDesc || "").trim();
-          const displayDesc = contentTrimmed
-            ? contentTrimmed
-            : rawTrimmed
-              ? rawTrimmed
+          const displayDesc = rawTrimmed
+            ? rawTrimmed
+            : contentTrimmed
+              ? contentTrimmed.length <= 160
+                ? contentTrimmed
+                : "已识别，点击查看详情"
               : hasFiles
                 ? "已上传附件，内容待识别"
                 : "";
@@ -606,6 +608,10 @@ Page({
   // 上传文件
   async uploadFile() {
     try {
+      const ocrRes = await wx.showActionSheet({
+        itemList: ["立即识别(推荐)", "仅上传(稍后识别)"],
+      });
+      const skipOcr = ocrRes.tapIndex === 1;
       const actionRes = await wx.showActionSheet({
         itemList: ["拍照", "从相册选择"],
       });
@@ -624,13 +630,14 @@ Page({
         "";
       if (tempFilePath) {
         wx.showLoading({
-          title: "上传中...",
+          title: skipOcr ? "上传中..." : "识别中...",
         });
 
+        const formData = skipOcr ? { skip_ocr: "1" } : {};
         const uploadResult = await uploadFile(
           tempFilePath,
           "/api/health-records/upload",
-          { skip_ocr: "1" },
+          formData,
         );
         let parsedResult = uploadResult;
         if (typeof parsedResult === "string") {
@@ -658,7 +665,7 @@ Page({
           });
 
           wx.showToast({
-            title: "上传成功",
+            title: skipOcr ? "已上传" : "已识别",
             icon: "success",
           });
           if (parsedResult.record_id) {

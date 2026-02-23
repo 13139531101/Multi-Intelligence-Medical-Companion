@@ -1,5 +1,6 @@
 import os
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw
+
 
 def create_icon(filename, color, text_symbol=None, shape='circle'):
     size = (64, 64)
@@ -33,6 +34,7 @@ def create_icon(filename, color, text_symbol=None, shape='circle'):
     output_path = os.path.join(output_dir, filename)
     img.save(output_path, 'PNG')
     print(f"Created {output_path}")
+
 
 # Colors
 gray = "#7A7E83"

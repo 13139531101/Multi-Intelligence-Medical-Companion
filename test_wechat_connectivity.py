@@ -21,7 +21,7 @@ def get_local_ip():
     except Exception:
         return None
 
-def test_localhost_access():
+def run_localhost_access():
     """测试localhost访问"""
     print("=== 测试localhost访问 ===")
     try:
@@ -36,7 +36,7 @@ def test_localhost_access():
         print(f"✗ localhost访问异常: {e}")
         return False
 
-def test_ip_access(ip):
+def run_ip_access(ip):
     """测试IP地址访问"""
     print(f"\n=== 测试IP地址访问: {ip} ===")
     try:
@@ -51,7 +51,7 @@ def test_ip_access(ip):
         print(f"✗ IP地址 {ip} 访问异常: {e}")
         return False
 
-def test_auth_endpoints(base_url):
+def run_auth_endpoints(base_url):
     """测试认证接口"""
     print(f"\n=== 测试认证接口: {base_url} ===")
     
@@ -97,7 +97,7 @@ def main():
     print("微信小程序连接问题诊断工具\n")
     
     # 测试localhost访问
-    localhost_ok = test_localhost_access()
+    localhost_ok = run_localhost_access()
     
     # 获取本机IP
     local_ip = get_local_ip()
@@ -105,11 +105,11 @@ def main():
         print(f"\n本机IP地址: {local_ip}")
         
         # 测试IP访问
-        ip_ok = test_ip_access(local_ip)
+        ip_ok = run_ip_access(local_ip)
         
         if localhost_ok and ip_ok:
             # 测试认证接口
-            test_auth_endpoints(f"http://{local_ip}:13002")
+            run_auth_endpoints(f"http://{local_ip}:13002")
             
         # 生成配置建议
         generate_wechat_config(local_ip)
@@ -122,9 +122,10 @@ def main():
     else:
         print("✗ API服务器可能未启动或端口被占用")
         
-    if local_ip and not test_ip_access(local_ip):
+    if local_ip and not run_ip_access(local_ip):
         print("✗ 可能需要配置防火墙或网络设置")
         print("  建议：在Windows防火墙中允许端口13002的入站连接")
+        return
 
 if __name__ == "__main__":
     main()

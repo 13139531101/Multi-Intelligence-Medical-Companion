@@ -2,14 +2,14 @@
 <view class="container">
   <view class="page-header">
     <view class="page-title">就诊摘要</view>
-    <view class="page-desc">智能整理您的每次就诊记录</view>
+    <view class="page-desc">提取诊断/用药/检查/医嘱，方便回顾与复诊</view>
   </view>
 
   <!-- 上传区域 -->
   <view class="upload-section">
     <view class="upload-card" bindtap="chooseImage">
       <view class="upload-icon">📸</view>
-      <view class="upload-text">拍照/上传病历</view>
+      <view class="upload-text">拍照/上传就诊材料(生成摘要)</view>
       <view class="upload-sub">支持处方单、检查报告、病历本等</view>
     </view>
   </view>
@@ -35,16 +35,44 @@
           </view>
         </view>
         <view class="item-body">
+          <view class="summary-row" wx:if="{{item.departmentDisplay || item.doctorDisplay}}">
+            <text class="label">就诊：</text>
+            <view class="value">{{item.departmentDisplay}}{{item.departmentDisplay && item.doctorDisplay ? ' / ' : ''}}{{item.doctorDisplay}}</view>
+          </view>
+          <view class="summary-row" wx:if="{{item.diagnosisDisplay && item.diagnosisDisplay !== '未识别'}}">
+            <text class="label">诊断：</text>
+            <view class="value">{{item.diagnosisDisplay}}</view>
+          </view>
+
+          <view class="summary-row" wx:if="{{item.medTags && item.medTags.length}}">
+            <text class="label">用药：</text>
+            <view class="tags-row">
+              <view class="tag" wx:for="{{item.medTags}}" wx:key="*this">{{item}}</view>
+            </view>
+          </view>
+
+          <view class="summary-row" wx:if="{{item.followUpDisplay}}">
+            <text class="label">随访：</text>
+            <view class="value">{{item.followUpDisplay}}</view>
+          </view>
+
+          <view class="summary-row" wx:if="{{item.keyPoints && item.keyPoints.length}}">
+            <text class="label">要点：</text>
+            <view class="bullets">
+              <view class="bullet" wx:for="{{item.keyPoints}}" wx:key="*this">• {{item}}</view>
+            </view>
+          </view>
+
           <view class="summary-row" wx:if="{{item.summaryText}}">
-            <text class="label">摘要：</text>
+            <text class="label">原文：</text>
             <view class="summary-text {{item.expanded ? 'expanded' : 'collapsed'}}">{{item.expanded ? item.summaryText : item.summaryPreview}}</view>
           </view>
           <view class="summary-row" wx:elif="{{item.statusClass === 'processing'}}">
-            <text class="label">摘要：</text>
+            <text class="label">原文：</text>
             <view class="summary-text collapsed">后台整理中，请稍候...</view>
           </view>
           <view class="summary-row" wx:elif="{{item.statusClass === 'failed'}}">
-            <text class="label">摘要：</text>
+            <text class="label">原文：</text>
             <view class="summary-text collapsed">整理失败，请重试上传</view>
           </view>
           <view class="images-row" wx:if="{{item.fileUrls && item.fileUrls.length}}">

@@ -208,6 +208,21 @@
   border-radius: 8rpx;
 }
 
+.bullets {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 8rpx;
+  padding-top: 2rpx;
+}
+
+.bullet {
+  font-size: 26rpx;
+  color: #444;
+  line-height: 1.5;
+  word-break: break-all;
+}
+
 .item-footer {
   display: flex;
   justify-content: flex-end;

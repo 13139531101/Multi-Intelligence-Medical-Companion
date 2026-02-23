@@ -7,20 +7,14 @@
 # @Desc  : A2A测试用例
 
 import asyncio
-import base64
 import os
-import urllib
 import sys
 from uuid import uuid4
-import json
 import unittest
-import random
-import string
-from unittest.mock import patch, AsyncMock  # Import patch and AsyncMock for mocking
 
 # Assuming these modules are available in your environment
 from A2AServer.common.client import A2AClient, A2ACardResolver
-from A2AServer.common.A2Atypes import TaskState, Task, TextPart, FilePart, FileContent, AgentCard
+from A2AServer.common.A2Atypes import TextPart
 
 
 class A2AClientTestCase(unittest.IsolatedAsyncioTestCase):
@@ -30,6 +24,7 @@ class A2AClientTestCase(unittest.IsolatedAsyncioTestCase):
     AGENT_URL = "http://localhost:10004"
     if os.environ.get("AGENT_URL"):
         AGENT_URL = os.environ.get("AGENT_URL")
+
     async def asyncSetUp(self):
         """
         设置测试环境，初始化客户端等。
@@ -98,7 +93,18 @@ class A2AClientTestCase(unittest.IsolatedAsyncioTestCase):
             print(f"客户端初始化失败: {e}")
             raise
 
-    async def _send_prompt_and_get_result(self, client: A2AClient, agent_card_capabilities, prompt: str, session_id: str, task_id: str = None, file_path: str = "", use_push_notifications: bool = False, notification_receiver_host: str = None, notification_receiver_port: int = None):
+    async def _send_prompt_and_get_result(
+        self,
+        client: A2AClient,
+        agent_card_capabilities,
+        prompt: str,
+        session_id: str,
+        task_id: str = None,
+        file_path: str = "",
+        use_push_notifications: bool = False,
+        notification_receiver_host: str = None,
+        notification_receiver_port: int = None,
+    ):
         """
         发送单个 prompt 给 agent 并获取结果。
         """
@@ -154,7 +160,6 @@ class A2AClientTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(self.client, "客户端未成功初始化")
         self.assertIsNotNone(self.card, "Agent Card 未成功获取")
 
-
         session_id = uuid4().hex
         test_scenarios = [
             # {"prompt": "什么是LNG?", "session_id": session_id},
@@ -188,6 +193,7 @@ class A2AClientTestCase(unittest.IsolatedAsyncioTestCase):
             print(f"\n--- 场景 {i+1} 测试完成 ---")
 
         print("\n--- 所有测试场景完成 ---")
+
     async def test_send_prompt_and_get_result_price(self):
         """
         测试发送 prompt 并获取结果的场景。
@@ -227,6 +233,7 @@ class A2AClientTestCase(unittest.IsolatedAsyncioTestCase):
             print(f"\n--- 场景 {i+1} 测试完成 ---")
 
         print("\n--- 所有测试场景完成 ---")
+
     async def test_send_prompt_and_get_result_lng1(self):
         """
         测试发送 prompt 并获取结果的场景。
@@ -267,8 +274,8 @@ class A2AClientTestCase(unittest.IsolatedAsyncioTestCase):
 
         print("\n--- 所有测试场景完成 ---")
 
+
 if __name__ == "__main__":
     print("开始 A2A 客户端单元测试...")
-    # 测试test_send_prompt_and_get_result_rag 和test_send_prompt_and_get_result_price
     unittest.main()
     print("A2A 客户端单元测试完成。")

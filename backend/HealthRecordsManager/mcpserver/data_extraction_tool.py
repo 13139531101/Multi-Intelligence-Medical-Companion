@@ -183,7 +183,7 @@ def _is_valid_test_name(name: str, unit: str = "") -> bool:
     text = (name or "").strip()
     if not text:
         return False
-    if len(text) > 24:
+    if len(text) > 60:
         return False
     blacklist = [
         "test",
@@ -252,6 +252,22 @@ def _is_valid_test_name(name: str, unit: str = "") -> bool:
         "白细胞",
         "红细胞",
         "血小板",
+        "红细胞压积",
+        "红细胞分布宽度",
+        "平均红细胞体积",
+        "平均红细胞血红蛋白量",
+        "平均红细胞血红蛋白浓度",
+        "平均血小板体积",
+        "血小板分布宽度",
+        "血小板压积",
+        "大血小板比率",
+        "中性粒细胞",
+        "淋巴细胞",
+        "单核细胞",
+        "嗜酸性粒细胞",
+        "嗜碱性粒细胞",
+        "网织红细胞",
+        "有核红细胞",
     ]
     if any(kw in text for kw in allowed_keywords):
         return True
@@ -260,9 +276,27 @@ def _is_valid_test_name(name: str, unit: str = "") -> bool:
         "hdl",
         "ldl",
         "hgb",
+        "hb",
         "wbc",
         "rbc",
         "plt",
+        "mch",
+        "mcv",
+        "mchc",
+        "hct",
+        "rdw",
+        "rdwcv",
+        "rdwsd",
+        "mpv",
+        "pdw",
+        "pct",
+        "plcr",
+        "p-lcr",
+        "nrbc",
+        "nrbc%",
+        "ret",
+        "ret%",
+        "ret#",
         "alt",
         "ast",
         "glu",
@@ -365,12 +399,19 @@ def _llm_extract_test_results(text: str) -> dict | None:
     if len(trimmed) > 8000:
         trimmed = trimmed[:8000]
     client = OpenAI(api_key=api_key, base_url=base_url) if base_url else OpenAI(api_key=api_key)
-    system_prompt = "你是医学检验结果抽取助手，只输出JSON。"
+    system_prompt = (
+        "你是医学检验结果抽取助手。你必须只输出JSON对象，不要输出任何解释、Markdown或代码块。"
+        "你只能依据输入文本抽取，不得编造、推断或补充。"
+    )
     user_prompt = (
-        "从以下文本中抽取检验/检查指标，输出JSON格式："
+        "从以下文本中抽取“全部”检验/检查指标（越全越好），输出JSON格式："
         '{"test_results":{"指标名":{"value":数值或字符串,"unit":"单位"}}}。'
-        "优先抽取常见化验缩写与生命体征，例如：HGB、MCH、MCV、WBC、RBC、PLT、GLU、HbA1c、ALT、AST、Cr、UA、TC、TG、HDL、LDL、血压、心率、体温、血氧。"
-        "不要输出其它字段。\n\n"
+        "要求："
+        "1) 指标名尽量用报告中的中文名（若同时出现缩写/括号，优先中文名）；"
+        "2) value 保留原始数值文本（例如 6.8、0、0.014、128、39.3 等）；"
+        "3) unit 填单位（例如 10^9/L、g/L、% 、mmHg、℃ 等），若文本未给出则填空字符串；"
+        "4) 只输出检验指标，不要输出患者信息/医院信息/结论/建议等；"
+        "5) 只输出 JSON 对象。\n\n"
         f"{trimmed}"
     )
     try:
@@ -401,6 +442,8 @@ def extract_test_results(text: str) -> dict:
     if filtered:
         return filtered
     test_patterns = [
+        r"([\u4e00-\u9fa5]{2,60})\s*[：:]?\s*([-+]?\d+(?:\.\d+)?)\s*(%)",
+        r"([A-Za-z]{2,6}\d{0,2}%?)\s*[：:]?\s*([-+]?\d+(?:\.\d+)?)\s*(%)",
         r'([\u4e00-\u9fa5]+)\s*[：:]?\s*(\d+(?:\.\d+)?)\s*([a-zA-Z/μ]+)?',
         r'([\u4e00-\u9fa5]{2,30}(?:\([^)]{1,12}\))?)\s+([-+]?\d+(?:\.\d+)?)\s+(?:\d+(?:\.\d+)?\s*(?:~|-|—)\s*\d+(?:\.\d+)?\s+)?([A-Za-z0-9μµ/%×x*^.\-~]+(?:/[A-Za-z0-9μµ%×x*^.\-~]+)?)',
         r'([A-Za-z]{2,6}\d{0,2})\s*[：:]?\s*([-+]?\d+(?:\.\d+)?)\s*([a-zA-Z/%μµ]+)?',
