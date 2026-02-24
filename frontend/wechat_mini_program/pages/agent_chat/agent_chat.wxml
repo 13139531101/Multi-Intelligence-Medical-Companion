@@ -26,6 +26,22 @@
       <view class="message-bubble">
         <!-- 消息内容 -->
         <view class="message-content-scroll-wrapper {{(item.role === 'assistant' && item.isLong && item.collapsed) ? 'message-content-collapsed' : ''}}">
+          <view wx:if="{{item.role === 'assistant' && item.isStreaming && !item.rawText}}" class="streaming-status">
+            <view class="typing-indicator">
+              <view class="dot"></view>
+              <view class="dot"></view>
+              <view class="dot"></view>
+            </view>
+            <text class="streaming-text">AI思考中...</text>
+          </view>
+          <view wx:if="{{item.role === 'assistant' && item.thinkingRaw && !item.isStreaming}}" class="thinking-block">
+            <view class="thinking-toggle" bindtap="toggleThinking" data-index="{{idx}}">
+              <text>{{item.showThinking ? '收起思考过程' : '展开思考过程'}}</text>
+            </view>
+            <view wx:if="{{item.showThinking}}" class="thinking-content">
+              <rich-text class="thinking-rich" nodes="{{item.thinkingHtml}}"></rich-text>
+            </view>
+          </view>
           <block wx:for="{{item.contentParts}}" wx:key="index" wx:for-item="part">
             <rich-text wx:if="{{part.type === 'text'}}" class="message-content" nodes="{{part.content}}"></rich-text>
             <image wx:if="{{part.type === 'image'}}" src="{{part.url}}" mode="widthFix" class="message-image" bindtap="previewImage" data-src="{{part.url}}"></image>
@@ -47,14 +63,6 @@
         >
           {{item.collapsed ? '展开全文' : '收起'}}
         </button>
-        <view wx:if="{{item.role === 'assistant' && item.thinking}}" class="thinking-container">
-          <button class="thinking-toggle" bindtap="toggleThinking" data-index="{{idx}}">
-            {{item.showThinking ? '隐藏思考过程' : '查看思考过程'}}
-          </button>
-          <view wx:if="{{item.showThinking}}" class="thinking-content">
-            <rich-text nodes="{{item.thinking}}"></rich-text>
-          </view>
-        </view>
         
         <!-- 时间戳 -->
         <view class="message-time">{{item.timeString}}</view>
@@ -67,7 +75,7 @@
     </view>
     
     <!-- 加载状态 -->
-    <view wx:if="{{isSending}}" class="loading-container">
+    <view wx:if="{{isSending && !agentUrl}}" class="loading-container">
       <view class="loading-avatar">
         <text class="avatar-text">AI</text>
       </view>

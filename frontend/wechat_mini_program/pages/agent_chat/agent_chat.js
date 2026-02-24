@@ -44,19 +44,24 @@ Page({
   },
 
   // 在页面实例上维护已处理的事件ID集合
-  processedEventIds: new Set(),
+  processedEventIds: null,
   // 维护流式请求任务
   requestTask: null,
   // 流式回复内容缓存
   streamingContent: "",
+  streamingThinkingRaw: "",
   currentStreamingId: null,
   scrollTimer: null,
   lastScrollDetail: null,
+  streamingUpdateTimer: null,
+  debugLoggedKeys: null,
 
   /**
    * Lifecycle function--Called when page load
    */
   async onLoad(options) {
+    this.processedEventIds = new Set();
+    this.debugLoggedKeys = new Set();
     const agentType = options.agentType || options.mode || "default";
     const conversationId = options.id || null;
     const sessionId = conversationId || this.generateUUID();
@@ -87,7 +92,8 @@ Page({
   },
 
   formatTextToRichHtml(text) {
-    const raw = text === undefined || text === null ? "" : String(text);
+    const rawInput = text === undefined || text === null ? "" : String(text);
+    const raw = this.normalizeStreamingText(rawInput);
     let html = raw.replace(/\r\n/g, "\n");
     html = html
       .replace(/&/g, "&amp;")
@@ -98,11 +104,204 @@ Page({
     html = html.replace(/\*\*(.+?)\*\*/g, "<b>$1</b>");
     html = html.replace(
       /`([^`]+)`/g,
-      '<span style="font-family: monospace;">$1</span>'
+      '<span style="font-family: monospace;">$1</span>',
     );
     html = html.replace(/^\s*-\s+/gm, "&bull; ");
     html = html.replace(/\n/g, "<br/>");
     return `<div style="word-break: break-word;">${html}</div>`;
+  },
+
+  normalizeStreamingText(text) {
+    const raw = text === undefined || text === null ? "" : String(text);
+    const htmlLike = /<br\s*\/?>|<\/p>|<p(\s|>)/i.test(raw);
+    const normalized = raw
+      .replace(/<br\s*\/?>/gi, "\n")
+      .replace(/<\/p>\s*<p(\s|>)/gi, "\n")
+      .replace(/<\/?p(\s|>)[^>]*>/gi, "")
+      .replace(/\r\n/g, "\n")
+      .replace(/\u2028|\u2029/g, "\n");
+    const nlCount = (normalized.match(/\n/g) || []).length;
+    if (nlCount < 6) return normalized;
+    if (normalized.length > 0 && nlCount / normalized.length < 0.03) {
+      return normalized;
+    }
+    const density = nlCount / Math.max(normalized.length, 1);
+    const compacted = normalized.replace(
+      /([\u4e00-\u9fffA-Za-z0-9])\n+\s*(?=[\u4e00-\u9fffA-Za-z0-9，。！？；：、,.!?;:])/g,
+      "$1",
+    );
+    if (nlCount >= 30 && density > 0.08) {
+      return compacted
+        .replace(/([^\s])\n+\s*(?=[^\s])/g, "$1")
+        .replace(/\n{3,}/g, "\n\n");
+    }
+    if (htmlLike) {
+      return compacted.replace(/\n{3,}/g, "\n\n");
+    }
+    return compacted;
+  },
+
+  hashText32(text) {
+    const s = text === undefined || text === null ? "" : String(text);
+    let hash = 2166136261;
+    for (let i = 0; i < s.length; i++) {
+      hash ^= s.charCodeAt(i);
+      hash = Math.imul(hash, 16777619);
+    }
+    return hash >>> 0;
+  },
+
+  getTextDebugStats(text) {
+    const s = text === undefined || text === null ? "" : String(text);
+    const nlCount = (s.match(/\n/g) || []).length;
+    const brCount = (s.match(/<br\s*\/?>/gi) || []).length;
+    const pCount = (s.match(/<\/?p(\s|>)/gi) || []).length;
+    const htmlLike = brCount > 0 || pCount > 0;
+    const density = nlCount / Math.max(s.length, 1);
+    return {
+      len: s.length,
+      nlCount,
+      density: Number(density.toFixed(4)),
+      brCount,
+      pCount,
+      htmlLike,
+      hash32: this.hashText32(s),
+    };
+  },
+
+  shouldLogVertical(stats) {
+    if (!stats) return false;
+    if (stats.len < 10) return false;
+    if (stats.nlCount >= 10 && stats.density >= 0.08) return true;
+    if (stats.brCount >= 10 && stats.brCount / Math.max(stats.len, 1) > 0.02)
+      return true;
+    return false;
+  },
+
+  logVerticalDebug(key, rawText, normalizedText, extra = {}) {
+    if (this.data.agentType !== "consultation") return;
+    if (!key) return;
+    if (!this.debugLoggedKeys) this.debugLoggedKeys = new Set();
+    if (this.debugLoggedKeys.has(key)) return;
+    const rawStats = this.getTextDebugStats(rawText);
+    const normStats = this.getTextDebugStats(normalizedText);
+    if (!this.shouldLogVertical(rawStats) && !this.shouldLogVertical(normStats))
+      return;
+    this.debugLoggedKeys.add(key);
+    console.warn("[vertical-text-debug]", {
+      key,
+      agentType: this.data.agentType,
+      raw: rawStats,
+      normalized: normStats,
+      ...extra,
+    });
+  },
+
+  getPartsDebugStats(parts) {
+    const list = Array.isArray(parts) ? parts : [];
+    let textCount = 0;
+    let totalLen = 0;
+    let minLen = Infinity;
+    let maxLen = 0;
+    list.forEach((p) => {
+      if (!p || p.type !== "text") return;
+      const t = p.text === undefined || p.text === null ? "" : String(p.text);
+      const len = t.length;
+      textCount += 1;
+      totalLen += len;
+      if (len < minLen) minLen = len;
+      if (len > maxLen) maxLen = len;
+    });
+    const avgLen = textCount ? totalLen / textCount : 0;
+    return {
+      partCount: list.length,
+      textCount,
+      totalLen,
+      avgLen: Number(avgLen.toFixed(2)),
+      minLen: Number.isFinite(minLen) ? minLen : 0,
+      maxLen,
+    };
+  },
+
+  shouldLogSplitParts(stats) {
+    if (!stats) return false;
+    if (stats.textCount >= 40 && stats.avgLen <= 3) return true;
+    if (stats.textCount >= 80) return true;
+    return false;
+  },
+
+  logPartsDebug(key, stats, extra = {}) {
+    if (this.data.agentType !== "consultation") return;
+    if (!key) return;
+    const k = `parts:${key}`;
+    if (!this.debugLoggedKeys) this.debugLoggedKeys = new Set();
+    if (this.debugLoggedKeys.has(k)) return;
+    if (!this.shouldLogSplitParts(stats)) return;
+    this.debugLoggedKeys.add(k);
+    console.warn("[vertical-parts-debug]", { key, stats, ...extra });
+  },
+
+  mergeStreamingText(incomingText, reset = false) {
+    const incoming =
+      incomingText === undefined || incomingText === null
+        ? ""
+        : String(incomingText);
+    if (!incoming) return;
+    if (reset || !this.streamingContent) {
+      this.streamingContent = incoming;
+      return;
+    }
+    if (incoming.startsWith(this.streamingContent)) {
+      this.streamingContent = incoming;
+      return;
+    }
+    if (this.streamingContent.endsWith(incoming)) return;
+    this.streamingContent += incoming;
+  },
+
+  scheduleStreamingContentUpdate() {
+    if (!this.currentStreamingId) return;
+    if (this.streamingUpdateTimer) return;
+    this.streamingUpdateTimer = setTimeout(() => {
+      this.streamingUpdateTimer = null;
+      this.applyStreamingContentUpdate();
+    }, 50);
+  },
+
+  applyStreamingContentUpdate() {
+    if (!this.currentStreamingId) return;
+    const displayText = this.normalizeStreamingText(
+      this.streamingContent || "",
+    );
+    this.logVerticalDebug(
+      `streaming:${this.currentStreamingId}`,
+      this.streamingContent || "",
+      displayText,
+      { phase: "applyStreamingContentUpdate" },
+    );
+    const updatedMessages = this.data.messages.map((m) => {
+      if (m.id === this.currentStreamingId) {
+        const isLong = this.isLongAssistantText(displayText);
+        return {
+          ...m,
+          contentParts: displayText
+            ? [
+                {
+                  type: "text",
+                  content: this.formatTextToRichHtml(displayText),
+                },
+              ]
+            : m.contentParts,
+          rawText: displayText,
+          isLong,
+          collapsed: false,
+        };
+      }
+      return m;
+    });
+    this.setData({ messages: updatedMessages }, () =>
+      this.scheduleScrollToBottom(false, 0),
+    );
   },
 
   async ensureTaskSubscribeAuth() {
@@ -145,9 +344,20 @@ Page({
     } catch (e) {}
   },
 
+  isAssistantRole(role) {
+    if (!role) return false;
+    const r = String(role).toLowerCase();
+    return r === "assistant" || r === "ai" || r === "model" || r === "agent";
+  },
+
   isLongAssistantText(text) {
     const raw = text === undefined || text === null ? "" : String(text);
-    return raw.length >= 1200;
+    const nlCount = (raw.match(/\n/g) || []).length;
+    const lineCount = nlCount + 1;
+    if (raw.length >= 700) return true;
+    if (lineCount >= 18) return true;
+    if (nlCount >= 30 && nlCount / Math.max(raw.length, 1) > 0.12) return true;
+    return false;
   },
 
   refreshScrollViewHeight() {
@@ -207,7 +417,7 @@ Page({
         showJumpToBottom: false,
         unreadCount: 0,
       },
-      () => this.scheduleScrollToBottom(true)
+      () => this.scheduleScrollToBottom(true),
     );
   },
 
@@ -268,14 +478,19 @@ Page({
   extractTextFromMessage(message) {
     if (!message) return "";
     if (message.content !== undefined && message.content !== null) {
-      return String(message.content);
+      const raw = String(message.content);
+      return this.isAssistantRole(message.role)
+        ? this.normalizeStreamingText(raw)
+        : raw;
     }
     if (Array.isArray(message.parts) && message.parts.length > 0) {
       let s = "";
       message.parts.forEach((p) => {
         if (p && p.type === "text" && p.text) s += String(p.text);
       });
-      return s;
+      return this.isAssistantRole(message.role)
+        ? this.normalizeStreamingText(s)
+        : s;
     }
     return "";
   },
@@ -284,7 +499,17 @@ Page({
   processMessageContent(message) {
     let parts = [];
     const toRichTextNodes = (text) => {
-      return this.formatTextToRichHtml(text);
+      const raw = text === undefined || text === null ? "" : String(text);
+      const display = this.isAssistantRole(message?.role)
+        ? this.normalizeStreamingText(raw)
+        : raw;
+      this.logVerticalDebug(
+        `processMessageContent:${message?.id || this.hashText32(raw)}`,
+        raw,
+        display,
+        { phase: "processMessageContent", role: message?.role || "" },
+      );
+      return this.formatTextToRichHtml(display);
     };
 
     const parseFilesToParts = (files) => {
@@ -312,10 +537,35 @@ Page({
     };
 
     if (message.parts && message.parts.length > 0) {
+      const stats = this.getPartsDebugStats(message.parts);
+      const statsKey =
+        message.id ||
+        (message.metadata && message.metadata.message_id) ||
+        `anon_${this.hashText32(`${stats.textCount}_${stats.totalLen}`)}`;
+      this.logPartsDebug(statsKey, stats, {
+        phase: "processMessageContent",
+        role: message?.role || "",
+      });
+
+      let textBuffer = "";
+      const flushText = () => {
+        if (!textBuffer) return;
+        parts.push({ type: "text", content: toRichTextNodes(textBuffer) });
+        textBuffer = "";
+      };
+
       message.parts.forEach((p) => {
+        if (!p) return;
         if (p.type === "text") {
-          parts.push({ type: "text", content: toRichTextNodes(p.text) });
-        } else if (p.type === "file") {
+          const t =
+            p.text === undefined || p.text === null ? "" : String(p.text);
+          textBuffer += t;
+          return;
+        }
+
+        flushText();
+
+        if (p.type === "file" && p.file && p.file.uri) {
           const fileUrl = `${SERVER_URL}${p.file.uri}`;
           const isImage =
             p.file.mimeType && p.file.mimeType.startsWith("image/");
@@ -327,6 +577,8 @@ Page({
           });
         }
       });
+
+      flushText();
     } else if (message.content) {
       parts.push({ type: "text", content: toRichTextNodes(message.content) });
     }
@@ -380,7 +632,8 @@ Page({
     const normalizeRole = (role) => {
       if (!role) return "assistant";
       const r = String(role).toLowerCase();
-      if (r === "ai" || r === "assistant" || r === "model") return "assistant";
+      if (r === "ai" || r === "assistant" || r === "model" || r === "agent")
+        return "assistant";
       if (r === "user" || r === "human") return "user";
       return role;
     };
@@ -398,8 +651,8 @@ Page({
             id: item.id
               ? `${item.id}_q`
               : item.consultation_id
-              ? `${item.consultation_id}_q_${index}`
-              : `history_${index}_q`,
+                ? `${item.consultation_id}_q_${index}`
+                : `history_${index}_q`,
             role: "user",
             contentParts: [
               { type: "text", content: toRichTextNodes(item.question) },
@@ -412,19 +665,29 @@ Page({
           });
         }
         if (item.answer) {
-          const answerText = String(item.answer || "");
+          const rawAnswerText = String(item.answer || "");
+          const answerText = this.normalizeStreamingText(rawAnswerText);
+          this.logVerticalDebug(
+            `historyAnswer:${item.id || item.consultation_id || index}`,
+            rawAnswerText,
+            answerText,
+            { phase: "normalizeHistoryMessages", kind: "answerRecord" },
+          );
           const isLong = this.isLongAssistantText(answerText);
           result.push({
             id: item.id
               ? `${item.id}_a`
               : item.consultation_id
-              ? `${item.consultation_id}_a_${index}`
-              : `history_${index}_a`,
+                ? `${item.consultation_id}_a_${index}`
+                : `history_${index}_a`,
             role: "assistant",
             contentParts: [
-              { type: "text", content: toRichTextNodes(item.answer) },
+              { type: "text", content: toRichTextNodes(answerText) },
             ],
             rawText: answerText,
+            thinkingRaw: "",
+            thinkingHtml: "",
+            showThinking: false,
             isLong,
             collapsed: isLong,
             timestamp: baseTime + 0.1,
@@ -451,12 +714,143 @@ Page({
         role,
         contentParts,
         rawText,
+        thinkingRaw: "",
+        thinkingHtml: "",
+        showThinking: false,
         isLong,
         collapsed: isLong,
         timestamp: baseTime,
         timeString: this.formatTime(baseTime),
       });
     });
+    return result;
+  },
+
+  isThinkingLikeMessage(msg) {
+    if (!msg || msg.role === "user") return false;
+    const text =
+      msg.rawText === undefined || msg.rawText === null
+        ? ""
+        : String(msg.rawText);
+    if (!text) return false;
+    const nlCount = (text.match(/\n/g) || []).length;
+    const density = nlCount / Math.max(text.length, 1);
+    if (nlCount >= 15 && density > 0.06) return true;
+    if (text.length <= 800 && /(检索|搜索|查询|思考|推理|分析|整理)/.test(text))
+      return true;
+    if (
+      text.length <= 800 &&
+      /(我来帮您|我将|接下来我会|我可以为您|为了更|请您提供|请你提供|请提供)/.test(
+        text,
+      )
+    )
+      return true;
+    return false;
+  },
+
+  mergeThinkingMessages(messages) {
+    if (!Array.isArray(messages) || messages.length === 0) return messages;
+
+    if (this.data.agentType === "consultation") {
+      const result = [];
+      let assistantRun = [];
+
+      const flushAssistantRun = () => {
+        if (!assistantRun.length) return;
+        if (assistantRun.length === 1) {
+          result.push(assistantRun[0]);
+          assistantRun = [];
+          return;
+        }
+
+        const last = assistantRun[assistantRun.length - 1];
+        const combined = assistantRun
+          .slice(0, -1)
+          .map((m) => (m && m.rawText ? String(m.rawText) : ""))
+          .filter(Boolean)
+          .join("\n\n")
+          .trim();
+        assistantRun = [];
+
+        if (!combined) {
+          result.push(last);
+          return;
+        }
+
+        const existing = (last.thinkingRaw || "").trim();
+        const finalThinkingRaw = existing
+          ? `${combined}\n\n${existing}`
+          : combined;
+        result.push({
+          ...last,
+          thinkingRaw: finalThinkingRaw,
+          thinkingHtml: this.formatTextToRichHtml(finalThinkingRaw),
+          showThinking: false,
+        });
+      };
+
+      for (let i = 0; i < messages.length; i++) {
+        const msg = messages[i];
+        if (msg && msg.role === "assistant") {
+          if (msg.isStreaming) {
+            flushAssistantRun();
+            result.push(msg);
+            continue;
+          }
+          assistantRun.push(msg);
+          continue;
+        }
+        flushAssistantRun();
+        result.push(msg);
+      }
+
+      flushAssistantRun();
+      return result;
+    }
+
+    const result = [];
+    let pending = [];
+
+    const attachPending = (target) => {
+      if (!pending.length) return target;
+      const combined = pending
+        .map((m) => m.rawText)
+        .filter(Boolean)
+        .join("\n\n");
+      pending = [];
+      if (!combined) return target;
+      const nextRaw = (target.thinkingRaw || "").trim();
+      const finalThinkingRaw = nextRaw ? `${nextRaw}\n\n${combined}` : combined;
+      return {
+        ...target,
+        thinkingRaw: finalThinkingRaw,
+        thinkingHtml: this.formatTextToRichHtml(finalThinkingRaw),
+        showThinking: false,
+      };
+    };
+
+    for (let i = 0; i < messages.length; i++) {
+      const msg = messages[i];
+      if (msg && msg.role === "assistant" && this.isThinkingLikeMessage(msg)) {
+        pending.push(msg);
+        continue;
+      }
+      if (msg && msg.role === "assistant") {
+        result.push(attachPending(msg));
+        continue;
+      }
+      if (pending.length) {
+        result.push(...pending);
+        pending = [];
+      }
+      result.push(msg);
+    }
+
+    if (pending.length) {
+      result.push(...pending);
+      pending = [];
+    }
+
     return result;
   },
 
@@ -513,7 +907,7 @@ Page({
       let messages = [];
       if (
         ["consultation", "medication", "summary", "health_records"].includes(
-          this.data.agentType
+          this.data.agentType,
         )
       ) {
         try {
@@ -533,7 +927,7 @@ Page({
 
           if (!messages || messages.length === 0) {
             console.log(
-              "DB history empty, falling back to conversation memory..."
+              "DB history empty, falling back to conversation memory...",
             );
             messages = await listMessages(conversationId);
           }
@@ -548,20 +942,20 @@ Page({
       if (
         (!messages || messages.length === 0) &&
         ["consultation", "medication", "summary", "health_records"].includes(
-          this.data.agentType
+          this.data.agentType,
         )
       ) {
         try {
           console.log(
             "History still empty, trying consultation history for:",
-            conversationId
+            conversationId,
           );
           const historyList = await getConsultationHistory(0, 50);
           if (Array.isArray(historyList)) {
             const target = historyList.find(
               (item) =>
                 item.consultation_id === conversationId ||
-                item.id === conversationId
+                item.id === conversationId,
             );
             if (target) {
               messages = [target];
@@ -578,11 +972,13 @@ Page({
         console.log("Normalized history messages:", formattedMessages);
 
         formattedMessages.sort((a, b) => a.timestamp - b.timestamp);
+        const mergedFormattedMessages =
+          this.mergeThinkingMessages(formattedMessages);
         console.log("Sorted formatted messages:", formattedMessages);
 
         const currentIds = new Set(this.data.messages.map((m) => m.id));
         const mergedMessages = [];
-        formattedMessages.forEach((m) => {
+        mergedFormattedMessages.forEach((m) => {
           if (!currentIds.has(m.id)) {
             mergedMessages.push(m);
           }
@@ -591,7 +987,7 @@ Page({
         const finalMessages =
           this.data.messages.length > 0
             ? [...this.data.messages, ...mergedMessages]
-            : formattedMessages;
+            : mergedFormattedMessages;
 
         console.log("Final messages to render:", finalMessages);
 
@@ -602,7 +998,7 @@ Page({
             showJumpToBottom: false,
             unreadCount: 0,
           },
-          () => this.scheduleScrollToBottom(true)
+          () => this.scheduleScrollToBottom(true),
         );
       }
     } catch (error) {
@@ -722,6 +1118,10 @@ Page({
       clearTimeout(this.scrollTimer);
       this.scrollTimer = null;
     }
+    if (this.streamingUpdateTimer) {
+      clearTimeout(this.streamingUpdateTimer);
+      this.streamingUpdateTimer = null;
+    }
   },
 
   // 生成UUID
@@ -732,7 +1132,7 @@ Page({
         var r = (Math.random() * 16) | 0,
           v = c == "x" ? r : (r & 0x3) | 0x8;
         return v.toString(16);
-      }
+      },
     );
   },
 
@@ -764,14 +1164,16 @@ Page({
 
   toggleThinking(e) {
     const index = e.currentTarget.dataset.index;
-    const messages = this.data.messages;
+    const messages = Array.isArray(this.data.messages)
+      ? this.data.messages
+      : [];
     const msg = messages[index];
-    if (msg) {
-      msg.showThinking = !msg.showThinking;
-      this.setData({
-        messages: messages,
-      });
-    }
+    if (!msg) return;
+    const next = messages.map((m, i) => {
+      if (i !== index) return m;
+      return { ...m, showThinking: !m.showThinking };
+    });
+    this.setData({ messages: next });
   },
 
   async sendMessage() {
@@ -821,7 +1223,7 @@ Page({
       if (
         !this.data.isHistorySynced &&
         ["consultation", "medication", "summary", "health_records"].includes(
-          this.data.agentType
+          this.data.agentType,
         )
       ) {
         try {
@@ -859,10 +1261,11 @@ Page({
         const aiMessage = {
           id: aiMsgId,
           role: "assistant", // or "ai"
-          contentParts: [
-            { type: "text", content: this.formatTextToRichHtml("...") },
-          ],
+          contentParts: [],
           rawText: "",
+          thinkingRaw: "",
+          thinkingHtml: "",
+          showThinking: false,
           isLong: false,
           collapsed: false,
           timestamp: Date.now() / 1000,
@@ -879,6 +1282,7 @@ Page({
         this.scheduleScrollToBottom(true);
 
         this.streamingContent = "";
+        this.streamingThinkingRaw = "";
         this.currentStreamingId = aiMsgId;
 
         // 发送流式请求
@@ -912,18 +1316,8 @@ Page({
                     });
 
                     if (thinkingText) {
-                      const updatedMessages = this.data.messages.map((m) => {
-                        if (m.id === this.currentStreamingId) {
-                          return {
-                            ...m,
-                            thinking: (m.thinking || "") + thinkingText,
-                          };
-                        }
-                        return m;
-                      });
-                      this.setData({ messages: updatedMessages }, () =>
-                        this.scheduleScrollToBottom(false, 0)
-                      );
+                      this.streamingThinkingRaw =
+                        (this.streamingThinkingRaw || "") + thinkingText;
                     }
                   }
 
@@ -949,26 +1343,7 @@ Page({
 
                     if (artifactText) {
                       const appendFlag = artifact.append;
-                      const lastChunk = artifact.lastChunk;
-
-                      if (!appendFlag) {
-                        this.streamingContent = artifactText;
-                      } else {
-                        if (
-                          lastChunk &&
-                          this.streamingContent &&
-                          artifactText.startsWith(this.streamingContent)
-                        ) {
-                          this.streamingContent = artifactText;
-                        } else if (
-                          this.streamingContent &&
-                          artifactText &&
-                          this.streamingContent.endsWith(artifactText)
-                        ) {
-                        } else {
-                          this.streamingContent += artifactText;
-                        }
-                      }
+                      this.mergeStreamingText(artifactText, !appendFlag);
                       shouldUpdateContent = true;
                     }
                   } else if (msgParts) {
@@ -977,39 +1352,13 @@ Page({
                       if (p.type === "text" && p.text) newText += p.text;
                     });
                     if (newText) {
-                      if (!this.streamingContent.endsWith(newText)) {
-                        this.streamingContent += newText;
-                      }
+                      this.mergeStreamingText(newText, false);
                       shouldUpdateContent = true;
                     }
                   }
 
                   if (shouldUpdateContent) {
-                    const updatedMessages = this.data.messages.map((m) => {
-                      if (m.id === this.currentStreamingId) {
-                        const isLong = this.isLongAssistantText(
-                          this.streamingContent
-                        );
-                        return {
-                          ...m,
-                          contentParts: [
-                            {
-                              type: "text",
-                              content: this.formatTextToRichHtml(
-                                this.streamingContent
-                              ),
-                            },
-                          ],
-                          rawText: this.streamingContent,
-                          isLong,
-                          collapsed: false,
-                        };
-                      }
-                      return m;
-                    });
-                    this.setData({ messages: updatedMessages }, () =>
-                      this.scheduleScrollToBottom(false, 0)
-                    );
+                    this.scheduleStreamingContentUpdate();
                   }
 
                   // 检查是否完成
@@ -1025,8 +1374,12 @@ Page({
                   console.error("Streaming error:", err);
                   const updatedMessages = this.data.messages.map((m) => {
                     if (m.id === this.currentStreamingId) {
-                      const finalText =
-                        this.streamingContent || "抱歉，出错了。";
+                      const finalText = this.normalizeStreamingText(
+                        this.streamingContent || "抱歉，出错了。",
+                      );
+                      const finalThinkingRaw = this.normalizeStreamingText(
+                        this.streamingThinkingRaw || "",
+                      );
                       const isLong = this.isLongAssistantText(finalText);
                       return {
                         ...m,
@@ -1037,6 +1390,11 @@ Page({
                           },
                         ],
                         rawText: finalText,
+                        thinkingRaw: finalThinkingRaw,
+                        thinkingHtml: finalThinkingRaw
+                          ? this.formatTextToRichHtml(finalThinkingRaw)
+                          : "",
+                        showThinking: false,
                         isLong,
                         collapsed: isLong,
                         isStreaming: false,
@@ -1046,13 +1404,13 @@ Page({
                   });
                   this.setData(
                     { messages: updatedMessages, isSending: false },
-                    () => this.scheduleScrollToBottom(false, 0)
+                    () => this.scheduleScrollToBottom(false, 0),
                   );
                 },
                 () => {
                   // onComplete
                   this.handleStreamingComplete(convId);
-                }
+                },
               )
             : sendTaskStreaming(
                 this.data.agentUrl,
@@ -1069,18 +1427,8 @@ Page({
                     });
 
                     if (thinkingText) {
-                      const updatedMessages = this.data.messages.map((m) => {
-                        if (m.id === this.currentStreamingId) {
-                          return {
-                            ...m,
-                            thinking: (m.thinking || "") + thinkingText,
-                          };
-                        }
-                        return m;
-                      });
-                      this.setData({ messages: updatedMessages }, () =>
-                        this.scheduleScrollToBottom(false, 0)
-                      );
+                      this.streamingThinkingRaw =
+                        (this.streamingThinkingRaw || "") + thinkingText;
                     }
                   }
 
@@ -1106,27 +1454,7 @@ Page({
 
                     if (artifactText) {
                       const appendFlag = artifact.append;
-                      const lastChunk = artifact.lastChunk;
-
-                      if (!appendFlag) {
-                        this.streamingContent = artifactText;
-                      } else {
-                        if (
-                          lastChunk &&
-                          this.streamingContent &&
-                          artifactText.startsWith(this.streamingContent)
-                        ) {
-                          this.streamingContent = artifactText;
-                        } else if (
-                          this.streamingContent &&
-                          artifactText &&
-                          this.streamingContent.endsWith(artifactText)
-                        ) {
-                          // ignore duplicate delta
-                        } else {
-                          this.streamingContent += artifactText;
-                        }
-                      }
+                      this.mergeStreamingText(artifactText, !appendFlag);
                       shouldUpdateContent = true;
                     }
                   } else if (msgParts) {
@@ -1135,39 +1463,13 @@ Page({
                       if (p.type === "text" && p.text) newText += p.text;
                     });
                     if (newText) {
-                      if (!this.streamingContent.endsWith(newText)) {
-                        this.streamingContent += newText;
-                      }
+                      this.mergeStreamingText(newText, false);
                       shouldUpdateContent = true;
                     }
                   }
 
                   if (shouldUpdateContent) {
-                    const updatedMessages = this.data.messages.map((m) => {
-                      if (m.id === this.currentStreamingId) {
-                        const isLong = this.isLongAssistantText(
-                          this.streamingContent
-                        );
-                        return {
-                          ...m,
-                          contentParts: [
-                            {
-                              type: "text",
-                              content: this.formatTextToRichHtml(
-                                this.streamingContent
-                              ),
-                            },
-                          ],
-                          rawText: this.streamingContent,
-                          isLong,
-                          collapsed: false,
-                        };
-                      }
-                      return m;
-                    });
-                    this.setData({ messages: updatedMessages }, () =>
-                      this.scheduleScrollToBottom(false, 0)
-                    );
+                    this.scheduleStreamingContentUpdate();
                   }
 
                   // 检查是否完成
@@ -1183,8 +1485,12 @@ Page({
                   console.error("Streaming error:", err);
                   const updatedMessages = this.data.messages.map((m) => {
                     if (m.id === this.currentStreamingId) {
-                      const finalText =
-                        this.streamingContent || "抱歉，出错了。";
+                      const finalText = this.normalizeStreamingText(
+                        this.streamingContent || "抱歉，出错了。",
+                      );
+                      const finalThinkingRaw = this.normalizeStreamingText(
+                        this.streamingThinkingRaw || "",
+                      );
                       const isLong = this.isLongAssistantText(finalText);
                       return {
                         ...m,
@@ -1195,6 +1501,11 @@ Page({
                           },
                         ],
                         rawText: finalText,
+                        thinkingRaw: finalThinkingRaw,
+                        thinkingHtml: finalThinkingRaw
+                          ? this.formatTextToRichHtml(finalThinkingRaw)
+                          : "",
+                        showThinking: false,
                         isLong,
                         collapsed: isLong,
                         isStreaming: false,
@@ -1204,13 +1515,13 @@ Page({
                   });
                   this.setData(
                     { messages: updatedMessages, isSending: false },
-                    () => this.scheduleScrollToBottom(false, 0)
+                    () => this.scheduleScrollToBottom(false, 0),
                   );
                 },
                 () => {
                   // onComplete
                   this.handleStreamingComplete(convId);
-                }
+                },
               );
       } else {
         // 默认通用模式 (Polling)
@@ -1270,8 +1581,17 @@ Page({
   async handleStreamingComplete(convId) {
     if (!this.currentStreamingId) return;
 
+    if (this.streamingUpdateTimer) {
+      clearTimeout(this.streamingUpdateTimer);
+      this.streamingUpdateTimer = null;
+    }
+
     // 标记完成
-    const finalText = this.streamingContent || "";
+    const finalText = this.normalizeStreamingText(this.streamingContent || "");
+    this.streamingContent = finalText;
+    const finalThinkingRaw = this.normalizeStreamingText(
+      this.streamingThinkingRaw || "",
+    );
     const isLong = this.isLongAssistantText(finalText);
     const updatedMessages = this.data.messages.map((m) => {
       if (m.id === this.currentStreamingId) {
@@ -1279,6 +1599,11 @@ Page({
           ...m,
           isStreaming: false,
           rawText: finalText,
+          thinkingRaw: finalThinkingRaw,
+          thinkingHtml: finalThinkingRaw
+            ? this.formatTextToRichHtml(finalThinkingRaw)
+            : "",
+          showThinking: false,
           isLong,
           collapsed: isLong,
           contentParts: finalText
@@ -1289,7 +1614,7 @@ Page({
       return m;
     });
     this.setData({ messages: updatedMessages, isSending: false }, () =>
-      this.scheduleScrollToBottom()
+      this.scheduleScrollToBottom(),
     );
 
     // 保存 AI 消息到数据库
@@ -1312,6 +1637,7 @@ Page({
 
     this.currentStreamingId = null;
     this.requestTask = null;
+    this.streamingThinkingRaw = "";
   },
 
   startPolling() {
@@ -1342,7 +1668,9 @@ Page({
             m.id ||
             (m.metadata && m.metadata.message_id) ||
             `msg-${Date.now()}-${Math.random()}`;
-          const role = m.role;
+          const role = this.isAssistantRole(m.role)
+            ? "assistant"
+            : String(m.role || "assistant");
           const rawText = this.extractTextFromMessage(m);
           const isLong =
             role === "assistant" && this.isLongAssistantText(rawText);
@@ -1355,7 +1683,7 @@ Page({
             collapsed: isLong,
             timestamp: this.parseTimestampSeconds(m.created_at || m.createdAt),
             timeString: this.formatTime(
-              this.parseTimestampSeconds(m.created_at || m.createdAt)
+              this.parseTimestampSeconds(m.created_at || m.createdAt),
             ),
           };
         });
@@ -1363,16 +1691,20 @@ Page({
         // 合并消息，去重
         const currentIds = new Set(this.data.messages.map((m) => m.id));
         const newMessages = formattedMessages.filter(
-          (m) => !currentIds.has(m.id)
+          (m) => !currentIds.has(m.id),
         );
 
         if (newMessages.length > 0) {
+          const combined = this.mergeThinkingMessages([
+            ...this.data.messages,
+            ...newMessages,
+          ]);
           this.setData(
             {
-              messages: [...this.data.messages, ...newMessages],
+              messages: combined,
               isSending: false, // 收到新消息认为发送/回复完成
             },
-            () => this.scheduleScrollToBottom(false, newMessages.length)
+            () => this.scheduleScrollToBottom(false, newMessages.length),
           );
         }
       }
