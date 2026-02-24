@@ -2129,6 +2129,136 @@ def _is_ocr_placeholder_text(text: str | None) -> bool:
     return s.startswith(ocr_err_prefixes)
 
 
+def _parse_date_str(s: str | None) -> date | None:
+    if not isinstance(s, str):
+        return None
+    raw = s.strip()
+    if not raw:
+        return None
+    try:
+        try:
+            from dateutil import parser as _dt_parser  # type: ignore
+
+            dt = _dt_parser.parse(raw, fuzzy=True)
+            return dt.date()
+        except Exception:
+            pass
+
+        m = re.search(r"(\d{4})[./\-年](\d{1,2})[./\-月](\d{1,2})", raw)
+        if m:
+            y = int(m.group(1))
+            mo = int(m.group(2))
+            d = int(m.group(3))
+            return date(y, mo, d)
+
+        m = re.search(r"(\d{4})[./\-](\d{1,2})", raw)
+        if m:
+            y = int(m.group(1))
+            mo = int(m.group(2))
+            return date(y, mo, 1)
+    except Exception:
+        return None
+    return None
+
+
+def _extract_visit_summary_fields(ocr_text: str) -> dict[str, Any]:
+    text = (ocr_text or "").strip()
+    if not text:
+        return {}
+
+    def _pick(patterns: list[str], max_len: int) -> str | None:
+        for pat in patterns:
+            try:
+                m = re.search(pat, text, flags=re.IGNORECASE)
+            except Exception:
+                continue
+            if not m:
+                continue
+            v = (m.group(1) or "").strip()
+            if not v:
+                continue
+            v = re.sub(r"\s+", " ", v).strip()
+            if not v:
+                continue
+            if len(v) > max_len:
+                v = v[:max_len].rstrip()
+            return v
+        return None
+
+    extracted: dict[str, Any] = {}
+
+    dt = _parse_date_str(text)
+    if dt:
+        extracted["visit_date"] = dt
+
+    extracted["hospital"] = _pick(
+        [
+            r"(?:医院|医疗机构名称|医疗机构|机构名称)\s*[:：]?\s*([^\n；;。]{2,80})",
+        ],
+        80,
+    )
+    extracted["department"] = _pick(
+        [
+            r"(?:科室|就诊科室|门诊科室|就诊门诊)\s*[:：]?\s*([^\n；;。]{2,40})",
+        ],
+        40,
+    )
+    extracted["doctor"] = _pick(
+        [
+            r"(?:医生|医师|接诊医生|主治医师|责任医师)\s*[:：]?\s*([^\n；;。]{2,30})",
+        ],
+        30,
+    )
+    extracted["chief_complaint"] = _pick(
+        [
+            r"(?:主诉)\s*[:：]?\s*([^\n]{2,120})",
+        ],
+        120,
+    )
+    extracted["symptoms"] = _pick(
+        [
+            r"(?:现病史|症状|病史|不适)\s*[:：]?\s*([^\n]{2,200})",
+        ],
+        200,
+    )
+    extracted["examination"] = _pick(
+        [
+            r"(?:体格检查|辅助检查|检查)\s*[:：]?\s*([^\n]{2,240})",
+        ],
+        240,
+    )
+    extracted["diagnosis"] = _pick(
+        [
+            r"(?:诊断印象|诊断意见|临床诊断|初步诊断|入院诊断|出院诊断|诊断|印象)\s*[:：]?\s*([^\n；;。]{2,120})",
+        ],
+        120,
+    )
+    extracted["treatment"] = _pick(
+        [
+            r"(?:治疗|处置|处理|治疗方案)\s*[:：]?\s*([^\n]{2,240})",
+        ],
+        240,
+    )
+    extracted["prescription"] = _pick(
+        [
+            r"(?:处方|用药|药物)\s*[:：]?\s*([^\n]{2,400})",
+        ],
+        400,
+    )
+    extracted["follow_up"] = _pick(
+        [
+            r"(?:复查|随访|复诊|回访|医嘱)\s*[:：]?\s*([^\n]{2,240})",
+        ],
+        240,
+    )
+    extracted["notes"] = None
+
+    for k in list(extracted.keys()):
+        if extracted.get(k) is None:
+            extracted.pop(k, None)
+    return extracted
+
+
 def _generate_ai_summary(ocr_text: str, extracted: dict | None) -> str:
     try:
         text_clean = (ocr_text or "").strip().replace("\n", " ")

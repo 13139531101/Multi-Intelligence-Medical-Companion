@@ -8,13 +8,32 @@ import base64
 import os
 import json
 import requests
-from mcp.server.fastmcp import FastMCP
-from dotenv import load_dotenv
+try:
+    from dotenv import load_dotenv
+except Exception:
+    def load_dotenv(*args, **kwargs):
+        return False
+
+try:
+    from mcp.server.fastmcp import FastMCP
+except Exception:
+    FastMCP = None
 
 # 加载环境变量
 load_dotenv()
 
-mcp = FastMCP("医疗文档OCR工具")
+class _DummyMCP:
+    def tool(self, *args, **kwargs):
+        def decorator(fn):
+            return fn
+
+        return decorator
+
+    def run(self, *args, **kwargs):
+        raise RuntimeError("FastMCP not installed")
+
+
+mcp = FastMCP("医疗文档OCR工具") if FastMCP else _DummyMCP()
 
 def call_aliyun_ocr(image_base64: str) -> str:
     """
@@ -403,7 +422,7 @@ def extract_text_from_image(image_base64: str) -> str:
             return "不支持的OCR服务提供商，请检查OCR_PROVIDER环境变量"
             
     except Exception as e:
-         return f"OCR识别失败: {str(e)}"
+        return f"OCR识别失败: {str(e)}"
 
 @mcp.tool()
 def validate_medical_document(text: str) -> str:
