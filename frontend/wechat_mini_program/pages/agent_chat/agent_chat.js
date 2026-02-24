@@ -847,18 +847,19 @@ Page({
         ? ""
         : String(msg.rawText);
     if (!text) return false;
+    if (text.length >= 1200) return false;
+    if (/^#{2,6}\s/m.test(text)) return false;
     const nlCount = (text.match(/\n/g) || []).length;
     const density = nlCount / Math.max(text.length, 1);
-    if (nlCount >= 15 && density > 0.06) return true;
-    if (text.length <= 800 && /(检索|搜索|查询|思考|推理|分析|整理)/.test(text))
-      return true;
-    if (
-      text.length <= 800 &&
-      /(我来帮您|我将|接下来我会|我可以为您|为了更|请您提供|请你提供|请提供)/.test(
+    if (text.length <= 800 && nlCount >= 15 && density > 0.06) return true;
+    const keywordHit =
+      /(检索|搜索|查询|思考|推理|分析|整理|规划|推断|综合)/.test(text);
+    if (keywordHit && text.length <= 6000) return true;
+    const leadHit =
+      /(我来帮您|我将|接下来我会|我可以为您|为了更|请您提供|请你提供|请提供|我先|我会先|我们先)/.test(
         text,
-      )
-    )
-      return true;
+      );
+    if (leadHit && text.length <= 3000) return true;
     return false;
   },
 
@@ -877,30 +878,63 @@ Page({
           return;
         }
 
-        const last = assistantRun[assistantRun.length - 1];
-        const combined = assistantRun
-          .slice(0, -1)
+        const scoreFinal = (m) => {
+          if (!m || !m.rawText) return 0;
+          const t = String(m.rawText).trim();
+          if (!t) return 0;
+          let score = Math.min(t.length, 2000);
+          if (t.length >= 200) score += 2000;
+          if (/^#{2,6}\s/m.test(t)) score += 800;
+          if (/\n\s*-\s+/.test(t)) score += 400;
+          if (/\n\s*\d+\.\s+/.test(t)) score += 400;
+          if (/[。！？!?]$/.test(t)) score += 80;
+          return score;
+        };
+
+        let bestIdx = assistantRun.length - 1;
+        let bestScore = -1;
+        for (let i = 0; i < assistantRun.length; i++) {
+          const s = scoreFinal(assistantRun[i]);
+          if (s > bestScore) {
+            bestScore = s;
+            bestIdx = i;
+          }
+        }
+
+        const finalMsg = assistantRun[bestIdx];
+        const before = assistantRun.slice(0, bestIdx);
+        const after = assistantRun.slice(bestIdx + 1);
+
+        const combinedThinking = before
           .map((m) => (m && m.rawText ? String(m.rawText) : ""))
           .filter(Boolean)
           .join("\n\n")
           .trim();
+
+        const trailingKept = after.filter((m) => {
+          if (!m || !m.rawText) return false;
+          return String(m.rawText).trim().length >= 80;
+        });
+
         assistantRun = [];
 
-        if (!combined) {
-          result.push(last);
-          return;
-        }
+        const existing = (finalMsg.thinkingRaw || "").trim();
+        const finalThinkingRaw = combinedThinking
+          ? existing
+            ? `${combinedThinking}\n\n${existing}`
+            : combinedThinking
+          : existing;
 
-        const existing = (last.thinkingRaw || "").trim();
-        const finalThinkingRaw = existing
-          ? `${combined}\n\n${existing}`
-          : combined;
         result.push({
-          ...last,
+          ...finalMsg,
           thinkingRaw: finalThinkingRaw,
-          thinkingHtml: this.formatTextToRichHtml(finalThinkingRaw),
+          thinkingHtml: finalThinkingRaw
+            ? this.formatTextToRichHtml(finalThinkingRaw)
+            : "",
           showThinking: false,
         });
+
+        trailingKept.forEach((m) => result.push(m));
       };
 
       for (let i = 0; i < messages.length; i++) {
@@ -1857,34 +1891,76 @@ Page({
         });
 
         // 合并消息，去重
-        const currentIds = new Set(this.data.messages.map((m) => m.id));
+        const baseMessagesSnapshot = this.data.messages || [];
+        const currentIds = new Set(baseMessagesSnapshot.map((m) => m.id));
         const newMessages = formattedMessages.filter(
           (m) => !currentIds.has(m.id),
         );
 
         if (newMessages.length > 0) {
-          const hasAssistantReply = newMessages.some(
-            (m) => m && m.role === "assistant",
+          let baseMessages = baseMessagesSnapshot;
+
+          const pendingId = this.currentPendingAssistantId;
+          const pendingMsg = pendingId
+            ? baseMessages.find((m) => m && m.id === pendingId)
+            : null;
+
+          const isFinalAssistantReply = (m) => {
+            if (!m || m.role !== "assistant" || !m.rawText) return false;
+            const t = String(m.rawText).trim();
+            if (!t) return false;
+            if (t.length >= 200) return true;
+            if (/^#{2,6}\s/m.test(t)) return true;
+            if (/\n\s*-\s+/.test(t)) return true;
+            if (/\n\s*\d+\.\s+/.test(t)) return true;
+            if (t.length >= 60 && /[。！？!?]$/.test(t)) return true;
+            return false;
+          };
+
+          let effectiveNewMessages = newMessages;
+          let hasAssistantReply = effectiveNewMessages.some(
+            isFinalAssistantReply,
           );
-          let baseMessages = this.data.messages || [];
-          if (hasAssistantReply && this.currentPendingAssistantId) {
-            const pendingId = this.currentPendingAssistantId;
-            baseMessages = baseMessages.filter((m) => m.id !== pendingId);
+
+          if (pendingMsg) {
+            const assistantNew = newMessages.filter(
+              (m) => m && m.role === "assistant" && m.rawText,
+            );
+            const finalCandidates = assistantNew.filter(isFinalAssistantReply);
+            if (finalCandidates.length) {
+              baseMessages = baseMessages.filter(
+                (m) => m && m.id !== pendingId,
+              );
+              effectiveNewMessages = newMessages.filter(
+                (m) => m.role !== "assistant" || finalCandidates.includes(m),
+              );
+              hasAssistantReply = true;
+            } else {
+              effectiveNewMessages = newMessages.filter(
+                (m) => m.role !== "assistant",
+              );
+              hasAssistantReply = false;
+            }
           }
+
           const combined = this.mergeThinkingMessages([
             ...baseMessages,
-            ...newMessages,
+            ...effectiveNewMessages,
           ]);
           const patch = { messages: combined };
           if (hasAssistantReply) patch.isSending = false;
           this.setData(patch, () =>
-            this.scheduleScrollToBottom(false, newMessages.length),
+            this.scheduleScrollToBottom(false, effectiveNewMessages.length),
           );
           if (hasAssistantReply) this.currentPendingAssistantId = null;
 
           if (this.shouldPersistConversationToDb(this.data.agentType)) {
-            const assistantMsgs = newMessages.filter(
-              (m) => m && m.role === "assistant" && m.rawText,
+            const assistantMsgs = effectiveNewMessages.filter(
+              (m) =>
+                m &&
+                m.role === "assistant" &&
+                m.rawText &&
+                !this.isThinkingLikeMessage(m),
             );
             if (assistantMsgs.length) {
               await Promise.all(
