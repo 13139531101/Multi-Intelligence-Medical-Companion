@@ -140,6 +140,23 @@
   font-weight: 500;
 }
 
+.streaming-footer {
+  display: flex;
+  align-items: center;
+  gap: 12rpx;
+  margin-top: 14rpx;
+}
+
+.streaming-footer .typing-indicator {
+  margin-bottom: 0;
+}
+
+.streaming-footer .dot {
+  width: 10rpx;
+  height: 10rpx;
+  margin-right: 8rpx;
+}
+
 /* 图片消息 */
 .message-image {
   max-width: 100%;

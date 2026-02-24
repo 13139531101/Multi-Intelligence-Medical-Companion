@@ -10,6 +10,7 @@
     lower-threshold="80"
     bindscroll="handleScroll"
     bindscrolltolower="handleScrollToLower"
+    bindtouchstart="handleUserTouchStart"
   >
     <view wx:for="{{messages}}" wx:for-item="item" wx:for-index="idx" wx:key="id" id="{{'msg-' + item.id}}" class="message-bubble-container {{item.role}}">
       <!-- 用户头像 -->
@@ -55,6 +56,15 @@
           </block>
         </view>
 
+        <view wx:if="{{item.role === 'assistant' && item.isStreaming && item.rawText}}" class="streaming-footer">
+          <view class="typing-indicator">
+            <view class="dot"></view>
+            <view class="dot"></view>
+            <view class="dot"></view>
+          </view>
+          <text class="streaming-text">生成中...</text>
+        </view>
+
         <button
           wx:if="{{item.role === 'assistant' && item.isLong && !item.isStreaming}}"
           class="expand-toggle"
@@ -74,20 +84,6 @@
       </view>
     </view>
     
-    <!-- 加载状态 -->
-    <view wx:if="{{isSending && !agentUrl}}" class="loading-container">
-      <view class="loading-avatar">
-        <text class="avatar-text">AI</text>
-      </view>
-      <view class="loading-bubble">
-        <view class="typing-indicator">
-          <view class="dot"></view>
-          <view class="dot"></view>
-          <view class="dot"></view>
-        </view>
-        <text class="loading-text">AI正在思考中...</text>
-      </view>
-    </view>
   </scroll-view>
 
   <view wx:if="{{showJumpToBottom}}" class="jump-to-bottom" bindtap="jumpToBottom">

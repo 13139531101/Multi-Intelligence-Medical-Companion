@@ -45,15 +45,18 @@ Page({
 
   // 在页面实例上维护已处理的事件ID集合
   processedEventIds: null,
+  dbSavedMessageIds: null,
   // 维护流式请求任务
   requestTask: null,
   // 流式回复内容缓存
   streamingContent: "",
   streamingThinkingRaw: "",
   currentStreamingId: null,
+  currentPendingAssistantId: null,
   scrollTimer: null,
   lastScrollDetail: null,
   streamingUpdateTimer: null,
+  userScrollLockUntil: 0,
   debugLoggedKeys: null,
 
   /**
@@ -62,16 +65,64 @@ Page({
   async onLoad(options) {
     this.processedEventIds = new Set();
     this.debugLoggedKeys = new Set();
-    const agentType = options.agentType || options.mode || "default";
-    const conversationId = options.id || null;
+    this.dbSavedMessageIds = new Set();
+    const hasQuery =
+      options.query !== undefined &&
+      options.query !== null &&
+      String(options.query).trim();
+    const hasExplicitAgentType = !!(options.agentType || options.mode);
+    let agentType = options.agentType || options.mode || "default";
+    let conversationId = options.id || null;
+
+    if (!hasExplicitAgentType && !conversationId && !hasQuery) {
+      try {
+        const lastContext = wx.getStorageSync("agent_chat:lastContext");
+        if (
+          lastContext &&
+          typeof lastContext === "object" &&
+          lastContext.agentType &&
+          lastContext.conversationId
+        ) {
+          agentType = String(lastContext.agentType || agentType);
+          conversationId = String(lastContext.conversationId || conversationId);
+        }
+      } catch (e) {
+        console.warn("Read agent_chat:lastContext failed:", e);
+      }
+    }
+    if (!conversationId && !hasQuery) {
+      try {
+        const cached = wx.getStorageSync(
+          `agent_chat:lastConversationId:${agentType}`,
+        );
+        if (cached) conversationId = String(cached);
+      } catch (e) {
+        console.warn("Read lastConversationId cache failed:", e);
+      }
+    }
     const sessionId = conversationId || this.generateUUID();
 
     this.setData({
       agentType,
       sessionId,
       conversationId: conversationId,
-      isHistorySynced: !!conversationId,
+      isHistorySynced: false,
     });
+
+    if (conversationId) {
+      try {
+        wx.setStorageSync(
+          `agent_chat:lastConversationId:${agentType}`,
+          conversationId,
+        );
+        wx.setStorageSync("agent_chat:lastContext", {
+          agentType,
+          conversationId,
+        });
+      } catch (e) {
+        console.warn("Persist agent_chat last context failed:", e);
+      }
+    }
 
     await this.initializeAgent(agentType);
 
@@ -84,6 +135,40 @@ Page({
       this.setData({ inputText: query }, () => {
         this.sendMessage();
       });
+    }
+  },
+
+  shouldPersistConversationToDb(agentType) {
+    return [
+      "default",
+      "consultation",
+      "medication",
+      "summary",
+      "health_records",
+    ].includes(String(agentType || ""));
+  },
+
+  getDbSaveKey(messageId, role, content) {
+    const id = messageId ? String(messageId) : "";
+    if (id) return id;
+    return `${String(role || "")}:${this.hashText32(String(content || ""))}`;
+  },
+
+  async saveMessageToDbOnce(consultationId, role, content, messageId) {
+    const cid = consultationId ? String(consultationId) : "";
+    if (!cid) return;
+    const key = this.getDbSaveKey(messageId, role, content);
+    if (!this.dbSavedMessageIds) this.dbSavedMessageIds = new Set();
+    if (this.dbSavedMessageIds.has(key)) return;
+    this.dbSavedMessageIds.add(key);
+    try {
+      await saveConsultationMessage({
+        consultation_id: cid,
+        role: role,
+        content: content,
+      });
+    } catch (e) {
+      console.warn("Save consultation message failed:", e);
     }
   },
 
@@ -262,10 +347,19 @@ Page({
   scheduleStreamingContentUpdate() {
     if (!this.currentStreamingId) return;
     if (this.streamingUpdateTimer) return;
+    const now = Date.now();
+    let delay = this.data.shouldAutoScroll ? 50 : 200;
+    if (
+      !this.data.shouldAutoScroll &&
+      this.userScrollLockUntil &&
+      now < this.userScrollLockUntil
+    ) {
+      delay = Math.max(delay, 350);
+    }
     this.streamingUpdateTimer = setTimeout(() => {
       this.streamingUpdateTimer = null;
       this.applyStreamingContentUpdate();
-    }, 50);
+    }, delay);
   },
 
   applyStreamingContentUpdate() {
@@ -313,6 +407,7 @@ Page({
       const ids = await getWeChatTemplateIds();
       templateId = (ids && (ids.task_complete || ids.taskComplete)) || "";
     } catch (e) {
+      console.warn("Get WeChat template ids failed:", e);
       templateId = "";
     }
     if (!templateId) return false;
@@ -325,7 +420,9 @@ Page({
           if (state === "accept") {
             try {
               wx.setStorageSync("taskSubscribeAccepted", true);
-            } catch (e) {}
+            } catch (e) {
+              console.warn("Persist taskSubscribeAccepted failed:", e);
+            }
             resolve(true);
             return;
           }
@@ -341,7 +438,9 @@ Page({
     this.setData({ hasRequestedSubscribe: true });
     try {
       await this.ensureTaskSubscribeAuth();
-    } catch (e) {}
+    } catch (e) {
+      console.warn("Request task subscribe failed:", e);
+    }
   },
 
   isAssistantRole(role) {
@@ -387,11 +486,13 @@ Page({
     if (!viewId) return;
 
     if (!force && !this.data.shouldAutoScroll) {
-      const patch = { showJumpToBottom: true };
-      if (newItems) {
-        patch.unreadCount = (this.data.unreadCount || 0) + newItems;
-      }
-      this.setData(patch);
+      const nextUnread = newItems
+        ? (this.data.unreadCount || 0) + newItems
+        : this.data.unreadCount || 0;
+      const patch = {};
+      if (!this.data.showJumpToBottom) patch.showJumpToBottom = true;
+      if (newItems) patch.unreadCount = nextUnread;
+      if (Object.keys(patch).length) this.setData(patch);
       return;
     }
 
@@ -440,6 +541,7 @@ Page({
     const atBottom = distanceToBottom <= 80;
 
     if (atBottom) {
+      this.userScrollLockUntil = 0;
       if (!this.data.shouldAutoScroll || this.data.showJumpToBottom) {
         this.setData({
           shouldAutoScroll: true,
@@ -450,8 +552,20 @@ Page({
       return;
     }
 
+    this.userScrollLockUntil = Date.now() + 600;
     if (this.data.shouldAutoScroll) {
       this.setData({ shouldAutoScroll: false });
+    }
+  },
+
+  handleUserTouchStart() {
+    this.userScrollLockUntil = Date.now() + 800;
+    if (this.data.shouldAutoScroll) {
+      this.setData({ shouldAutoScroll: false, showJumpToBottom: true });
+      return;
+    }
+    if (!this.data.showJumpToBottom) {
+      this.setData({ showJumpToBottom: true });
     }
   },
 
@@ -905,10 +1019,15 @@ Page({
     console.log("Loading history for conversation:", conversationId);
     try {
       let messages = [];
+      let dbHasMessages = false;
       if (
-        ["consultation", "medication", "summary", "health_records"].includes(
-          this.data.agentType,
-        )
+        [
+          "default",
+          "consultation",
+          "medication",
+          "summary",
+          "health_records",
+        ].includes(this.data.agentType)
       ) {
         try {
           console.log("Fetching messages from DB...");
@@ -920,9 +1039,11 @@ Page({
             Array.isArray(dbResponse.messages)
           ) {
             messages = dbResponse.messages;
+            dbHasMessages = (messages || []).length > 0;
           } else if (Array.isArray(dbResponse)) {
             // Fallback if API returns array directly
             messages = dbResponse;
+            dbHasMessages = (messages || []).length > 0;
           }
 
           if (!messages || messages.length === 0) {
@@ -1000,6 +1121,14 @@ Page({
           },
           () => this.scheduleScrollToBottom(true),
         );
+
+        if (
+          !this.data.isHistorySynced &&
+          dbHasMessages &&
+          this.shouldPersistConversationToDb(this.data.agentType)
+        ) {
+          this.setData({ isHistorySynced: true });
+        }
       }
     } catch (error) {
       console.error("Load history failed:", error);
@@ -1193,13 +1322,18 @@ Page({
       timeString: this.formatTime(Date.now() / 1000),
     };
 
-    this.setData({
-      messages: [...this.data.messages, userMessage],
-      inputText: "",
-      isSending: true,
-      shouldAutoScroll: true,
-      showJumpToBottom: false,
-      unreadCount: 0,
+    await new Promise((resolve) => {
+      this.setData(
+        {
+          messages: [...this.data.messages, userMessage],
+          inputText: "",
+          isSending: true,
+          shouldAutoScroll: true,
+          showJumpToBottom: false,
+          unreadCount: 0,
+        },
+        resolve,
+      );
     });
     this.scheduleScrollToBottom(true);
 
@@ -1218,44 +1352,53 @@ Page({
           throw new Error("Failed to create conversation");
         }
       }
+      if (convId) {
+        try {
+          wx.setStorageSync(
+            `agent_chat:lastConversationId:${this.data.agentType}`,
+            convId,
+          );
+          wx.setStorageSync("agent_chat:lastContext", {
+            agentType: this.data.agentType,
+            conversationId: convId,
+          });
+        } catch (e) {
+          console.warn("Persist agent_chat lastConversationId failed:", e);
+        }
+      }
+
+      const shouldPersist = this.shouldPersistConversationToDb(
+        this.data.agentType,
+      );
 
       // 同步到咨询历史（如果是新对话且属于咨询类）
-      if (
-        !this.data.isHistorySynced &&
-        ["consultation", "medication", "summary", "health_records"].includes(
-          this.data.agentType,
-        )
-      ) {
+      if (!this.data.isHistorySynced && shouldPersist) {
         try {
+          const tags =
+            String(this.data.agentType || "") === "default"
+              ? ["health"]
+              : [this.data.agentType];
           await createConsultation({
             question: text,
             consultation_id: convId,
             session_id: convId,
-            tags: [this.data.agentType],
+            tags,
           });
           console.log("Consultation history synced");
           this.setData({ isHistorySynced: true });
         } catch (err) {
           console.error("Failed to sync consultation history:", err);
+          this.setData({ isHistorySynced: true });
           // 如果创建咨询记录失败，可能后续保存消息也会有问题，但我们尽量继续
         }
       }
 
+      if (shouldPersist) {
+        await this.saveMessageToDbOnce(convId, "user", text, userMessage.id);
+      }
+
       // 如果有 agentUrl，使用流式模式 (Emulating React)
       if (this.data.agentUrl) {
-        // 保存用户消息到数据库
-        try {
-          console.log("Saving user message to DB...", { convId, text });
-          await saveConsultationMessage({
-            consultation_id: convId,
-            role: "user",
-            content: text,
-          });
-          console.log("User message saved to DB");
-        } catch (e) {
-          console.warn("Failed to save user message to DB:", e);
-        }
-
         // 添加 AI 思考中消息
         const aiMsgId = `ai_${Date.now()}`;
         const aiMessage = {
@@ -1294,8 +1437,11 @@ Page({
             role: "user",
             parts: [{ type: "text", text: text }],
             metadata: selectedAgentName
-              ? { selected_agent: selectedAgentName }
-              : {},
+              ? {
+                  selected_agent: selectedAgentName,
+                  message_id: userMessage.id,
+                }
+              : { message_id: userMessage.id },
           },
         };
 
@@ -1542,28 +1688,45 @@ Page({
             break;
         }
 
+        if (!this.currentPendingAssistantId) {
+          const pendingId = `pending_ai_${Date.now()}`;
+          this.currentPendingAssistantId = pendingId;
+          const pendingMessage = {
+            id: pendingId,
+            role: "assistant",
+            contentParts: [],
+            rawText: "",
+            thinkingRaw: "",
+            thinkingHtml: "",
+            showThinking: false,
+            isLong: false,
+            collapsed: false,
+            timestamp: Date.now() / 1000,
+            timeString: this.formatTime(Date.now() / 1000),
+            isStreaming: true,
+          };
+          await new Promise((resolve) => {
+            this.setData(
+              {
+                messages: [...this.data.messages, pendingMessage],
+                shouldAutoScroll: true,
+                showJumpToBottom: false,
+                unreadCount: 0,
+              },
+              resolve,
+            );
+          });
+          this.scheduleScrollToBottom(true);
+        }
+
         const sendResult = await sendMessage({
           conversation_id: convId,
           role: "user",
           message: text,
-          metadata: selectedAgent ? { selected_agent: selectedAgent } : {},
+          metadata: selectedAgent
+            ? { selected_agent: selectedAgent, message_id: userMessage.id }
+            : { message_id: userMessage.id },
         });
-
-        if (sendResult && sendResult.message_id) {
-          const updatedMessages = this.data.messages.map((m) => {
-            if (m.id === userMessage.id) {
-              return { ...m, id: sendResult.message_id };
-            }
-            return m;
-          });
-          this.setData({
-            messages: updatedMessages,
-            shouldAutoScroll: true,
-            showJumpToBottom: false,
-            unreadCount: 0,
-          });
-          this.scheduleScrollToBottom(true);
-        }
 
         // 3. 开始轮询回复
         this.startPolling();
@@ -1574,6 +1737,17 @@ Page({
         title: "发送失败",
         icon: "none",
       });
+      if (this.currentPendingAssistantId) {
+        const pendingId = this.currentPendingAssistantId;
+        this.currentPendingAssistantId = null;
+        this.setData({
+          messages: (this.data.messages || []).filter(
+            (m) => m.id !== pendingId,
+          ),
+          isSending: false,
+        });
+        return;
+      }
       this.setData({ isSending: false });
     }
   },
@@ -1617,22 +1791,16 @@ Page({
       this.scheduleScrollToBottom(),
     );
 
-    // 保存 AI 消息到数据库
-    if (this.streamingContent) {
-      try {
-        console.log("Saving AI message to DB...", {
-          convId,
-          content: this.streamingContent,
-        });
-        await saveConsultationMessage({
-          consultation_id: convId,
-          role: "assistant", // or "ai"
-          content: this.streamingContent,
-        });
-        console.log("AI message saved to DB");
-      } catch (e) {
-        console.warn("Failed to save AI message to DB:", e);
-      }
+    if (
+      this.streamingContent &&
+      this.shouldPersistConversationToDb(this.data.agentType)
+    ) {
+      await this.saveMessageToDbOnce(
+        convId,
+        "assistant",
+        this.streamingContent,
+        this.currentStreamingId,
+      );
     }
 
     this.currentStreamingId = null;
@@ -1695,17 +1863,42 @@ Page({
         );
 
         if (newMessages.length > 0) {
+          const hasAssistantReply = newMessages.some(
+            (m) => m && m.role === "assistant",
+          );
+          let baseMessages = this.data.messages || [];
+          if (hasAssistantReply && this.currentPendingAssistantId) {
+            const pendingId = this.currentPendingAssistantId;
+            baseMessages = baseMessages.filter((m) => m.id !== pendingId);
+          }
           const combined = this.mergeThinkingMessages([
-            ...this.data.messages,
+            ...baseMessages,
             ...newMessages,
           ]);
-          this.setData(
-            {
-              messages: combined,
-              isSending: false, // 收到新消息认为发送/回复完成
-            },
-            () => this.scheduleScrollToBottom(false, newMessages.length),
+          const patch = { messages: combined };
+          if (hasAssistantReply) patch.isSending = false;
+          this.setData(patch, () =>
+            this.scheduleScrollToBottom(false, newMessages.length),
           );
+          if (hasAssistantReply) this.currentPendingAssistantId = null;
+
+          if (this.shouldPersistConversationToDb(this.data.agentType)) {
+            const assistantMsgs = newMessages.filter(
+              (m) => m && m.role === "assistant" && m.rawText,
+            );
+            if (assistantMsgs.length) {
+              await Promise.all(
+                assistantMsgs.map((m) =>
+                  this.saveMessageToDbOnce(
+                    this.data.conversationId,
+                    "assistant",
+                    m.rawText,
+                    m.id,
+                  ),
+                ),
+              );
+            }
+          }
         }
       }
     } catch (error) {

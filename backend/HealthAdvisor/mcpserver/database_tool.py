@@ -119,9 +119,10 @@ def save_consultation(
     :return: 保存结果
     """
     try:
-        env_cid = os.getenv("A2A_CURRENT_CONVERSATION_ID") or os.getenv("A2A_CURRENT_SESSION_ID") or ""
-        cid = (consultation_id or env_cid or str(uuid.uuid4())).strip()
-        sid = (session_id or os.getenv("A2A_CURRENT_SESSION_ID") or cid).strip()
+        env_session_id = os.getenv("A2A_CURRENT_SESSION_ID") or ""
+        env_conversation_id = os.getenv("A2A_CURRENT_CONVERSATION_ID") or ""
+        sid = (session_id or env_session_id or env_conversation_id or str(uuid.uuid4())).strip()
+        cid = (consultation_id or env_conversation_id or sid).strip()
 
         uid = (user_id or "").strip()
         q = (question or "").strip()
