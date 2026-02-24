@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 # 加载环境变量
 load_dotenv()
 
+
 def create_user_sessions_table():
     """
     手动创建user_sessions表
@@ -27,9 +28,9 @@ def create_user_sessions_table():
         print("正在连接到数据库...")
         connection = psycopg.connect(**config)
         cursor = connection.cursor()
-        
+
         cursor.execute("DROP TABLE IF EXISTS user_sessions")
-        
+
         create_table_sql = """
         CREATE TABLE IF NOT EXISTS user_sessions (
             id SERIAL PRIMARY KEY,
@@ -43,13 +44,13 @@ def create_user_sessions_table():
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
         """
-        
+
         print("正在创建user_sessions表...")
         cursor.execute(create_table_sql)
-        
+
         connection.commit()
         print("user_sessions表创建成功！")
-        
+
         cursor.execute("SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='user_sessions')")
         exists = cursor.fetchone()[0]
         if exists:
@@ -62,9 +63,9 @@ def create_user_sessions_table():
         else:
             print("✗ 验证失败：user_sessions表不存在")
             return False
-        
+
         return True
-        
+
     except Exception as e:
         print(f"数据库错误: {e}")
         return False
@@ -78,13 +79,14 @@ def create_user_sessions_table():
             connection.close()
             print("数据库连接已关闭")
 
+
 if __name__ == "__main__":
     print("=" * 50)
     print("创建user_sessions表")
     print("=" * 50)
-    
+
     success = create_user_sessions_table()
-    
+
     if success:
         print("\n✓ user_sessions表创建成功！")
     else:

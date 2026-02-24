@@ -9,7 +9,8 @@ from starlette.responses import Response
 
 import traceback
 
-class PushNotificationListener():
+
+class PushNotificationListener:
     def __init__(self, host, port, notification_receiver_auth: PushNotificationReceiverAuth):
         self.host = host
         self.port = port
@@ -43,20 +44,20 @@ class PushNotificationListener():
         self.app.add_route(
             "/notify", self.handle_validation_check, methods=["GET"]
         )
-        
-        config = uvicorn.Config(self.app, host=self.host, port = self.port, log_level="critical")
+
+        config = uvicorn.Config(self.app, host=self.host, port=self.port, log_level="critical")
         self.server = uvicorn.Server(config)
         await self.server.serve()
-    
+
     async def handle_validation_check(self, request: Request):
         validation_token = request.query_params.get("validationToken")
         print(f"\npush notification verification received => \n{validation_token}\n")
 
         if not validation_token:
             return Response(status_code=400)
-            
+
         return Response(content=validation_token, status_code=200)
-    
+
     async def handle_notification(self, request: Request):
         data = await request.json()
         try:
@@ -67,6 +68,6 @@ class PushNotificationListener():
             print(f"error verifying push notification: {e}")
             print(traceback.format_exc())
             return
-            
+
         print(f"\npush notification received => \n{data}\n")
         return Response(status_code=200)

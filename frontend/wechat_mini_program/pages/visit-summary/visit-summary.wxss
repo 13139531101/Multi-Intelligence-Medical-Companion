@@ -239,6 +239,12 @@
   color: #ff3b30;
 }
 
+.retry-btn {
+  font-size: 26rpx;
+  color: #007aff;
+  margin-right: 24rpx;
+}
+
 .images-row {
   display: flex;
   flex-wrap: wrap;

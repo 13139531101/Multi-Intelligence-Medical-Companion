@@ -30,6 +30,42 @@ def prune_visit_summary_batches(api: Any) -> None:
             _VISIT_SUMMARY_BATCHES.pop(bid, None)
 
 
+def _format_visit_summary_error_message(
+    err: Exception, items: list[dict[str, Any]] | None = None
+) -> str:
+    raw = str(err or "").strip()
+    if not raw:
+        raw = "unknown error"
+    low = raw.lower()
+
+    if "batch processing timeout" in low:
+        return "后台整理超时，请稍后重试"
+
+    if "no ocr text" in low:
+        ocr_errors: list[str] = []
+        if isinstance(items, list):
+            for it in items:
+                if not isinstance(it, dict):
+                    continue
+                msg = str(it.get("ocr_error") or "").strip()
+                if msg:
+                    ocr_errors.append(msg)
+        first = ocr_errors[0] if ocr_errors else ""
+        first_low = first.lower()
+        if "ocr tool missing" in first_low:
+            return "OCR模块未加载（服务端未配置OCR），请联系管理员"
+        if "配置缺失" in first or "sdk未安装" in first_low:
+            return f"OCR配置异常：{first}"[:800]
+        if first:
+            return f"OCR识别失败：{first}"[:800]
+        return "OCR识别失败，请检查图片清晰度或稍后重试"
+
+    if "ocr tool missing" in low:
+        return "OCR模块未加载（服务端未配置OCR），请联系管理员"
+
+    return raw[:800]
+
+
 def merge_visit_summary_fields(items: list[dict[str, Any]]) -> dict[str, Any]:
     merged: dict[str, Any] = {
         "visit_date": None,
@@ -230,7 +266,12 @@ async def finalize_visit_summary_batch(
                 extracted_list.append(ext)
 
         if not ocr_texts:
-            raise ValueError("no ocr text")
+            raise ValueError(
+                _format_visit_summary_error_message(
+                    ValueError("no ocr text"),
+                    items=[it for it in items if isinstance(it, dict)],
+                )
+            )
 
         extracted_merged = merge_visit_summary_fields(extracted_list)
         if visit_date_override:
@@ -461,6 +502,17 @@ async def finalize_visit_summary_batch(
             pass
     except Exception as e:
         try:
+            batch_items = None
+            try:
+                batch_items = batch.get("items") if isinstance(batch, dict) else None
+            except Exception:
+                batch_items = None
+            msg = _format_visit_summary_error_message(
+                e,
+                items=[it for it in batch_items if isinstance(it, dict)]
+                if isinstance(batch_items, list)
+                else None,
+            )
             with api.get_db_connection() as conn:
                 with conn.cursor(row_factory=api.dict_row) as cursor:
                     cursor.execute(
@@ -469,7 +521,7 @@ async def finalize_visit_summary_batch(
                         SET status = %s, error_message = %s, updated_at = %s
                         WHERE id = %s AND user_id = %s
                         """,
-                        ("failed", str(e)[:800], datetime.now(), summary_id, user_id),
+                        ("failed", msg[:800], datetime.now(), summary_id, user_id),
                     )
                     conn.commit()
         except Exception:

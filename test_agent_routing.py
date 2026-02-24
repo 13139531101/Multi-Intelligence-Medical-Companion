@@ -1,12 +1,12 @@
 import requests
 import json
 import time
-import os
 
 # Config
 API_URL = "http://127.0.0.1:13002"
 USERNAME = "test_user_routing"
 PASSWORD = "password123"
+
 
 def get_auth_token():
     print(f"\nAuthenticating as {USERNAME}...")
@@ -43,6 +43,7 @@ def get_auth_token():
         print(f"Auth request failed: {e}")
         return None
 
+
 def run_routing(token):
     print("\nTesting Agent Routing...")
     headers = {
@@ -72,7 +73,7 @@ def run_routing(token):
                 "parts": [{"type": "text", "text": "你好，我最近头痛，有什么建议吗？"}],
                 "metadata": {
                     "conversation_id": conversation_id,
-                    "selected_agent": "健康顾问" # Also put in metadata as backup
+                    "selected_agent": "健康顾问"  # Also put in metadata as backup
                 }
             }
         }
@@ -82,8 +83,6 @@ def run_routing(token):
         # In this system, /message/send triggers a background task.
         # We need to poll /message/list or /events/get to see the response.
 
-        # Ensure proper encoding for the request body
-        import json
         resp = requests.post(
             f"{API_URL}/message/send",
             data=json.dumps(message).encode('utf-8'),
@@ -113,7 +112,7 @@ def run_routing(token):
                 if 'result' in data:
                     msgs = data['result']
                 else:
-                    msgs = data # In case it returns list directly (unlikely but safe)
+                    msgs = data  # In case it returns list directly (unlikely but safe)
 
                 # msgs is a list of messages
                 # We expect at least 2 messages: user's input and agent's response
@@ -129,6 +128,7 @@ def run_routing(token):
 
     except Exception as e:
         print(f"Test failed: {e}")
+
 
 if __name__ == "__main__":
     token = get_auth_token()

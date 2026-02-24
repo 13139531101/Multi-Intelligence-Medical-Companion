@@ -339,7 +339,7 @@ class MemoryManager:
             
             cursor.execute(time_stats_sql, (agent_id, user_id, start_date))
             time_stats = cursor.fetchall()
-            
+
             return {
                 'period_days': days,
                 'type_statistics': type_stats,
@@ -347,16 +347,21 @@ class MemoryManager:
                 'daily_distribution': time_stats,
                 'analysis_time': datetime.now().isoformat()
             }
-            
+
         except Exception as e:
             logger.error(f"分析记忆模式失败: {e}")
             return {}
         finally:
             if connection:
                 connection.close()
-    
-    def _get_compression_candidates(self, cursor, agent_id: str, user_id: str, 
-                                   memory_type: str) -> List[Dict[str, Any]]:
+
+    def _get_compression_candidates(
+        self,
+        cursor,
+        agent_id: str,
+        user_id: str,
+        memory_type: str,
+    ) -> List[Dict[str, Any]]:
         """获取压缩候选记忆"""
         select_sql = """
             SELECT m.*, e.embedding_vector
@@ -368,112 +373,118 @@ class MemoryManager:
             AND m.created_at < DATE_SUB(NOW(), INTERVAL 7 DAY)
             ORDER BY m.created_at
         """
-        
+
         cursor.execute(select_sql, (agent_id, user_id, memory_type))
         return cursor.fetchall()
-    
-    def _group_similar_memories(self, memories: List[Dict[str, Any]], 
-                               similarity_threshold: float = 0.8) -> List[List[Dict[str, Any]]]:
+
+    def _group_similar_memories(
+        self,
+        memories: List[Dict[str, Any]],
+        similarity_threshold: float = 0.8,
+    ) -> List[List[Dict[str, Any]]]:
         """将相似记忆分组"""
         groups = []
         used_indices = set()
-        
+
         for i, memory1 in enumerate(memories):
             if i in used_indices or not memory1.get('embedding_vector'):
                 continue
-            
+
             group = [memory1]
             used_indices.add(i)
-            
+
             embedding1 = json.loads(memory1['embedding_vector'])
-            
+
             for j, memory2 in enumerate(memories[i+1:], i+1):
                 if j in used_indices or not memory2.get('embedding_vector'):
                     continue
-                
+
                 embedding2 = json.loads(memory2['embedding_vector'])
                 similarity = self.embedding_service.calculate_similarity(embedding1, embedding2)
-                
+
                 if similarity >= similarity_threshold:
                     group.append(memory2)
                     used_indices.add(j)
-            
+
             if len(group) >= 2:
                 groups.append(group)
-        
+
         return groups
-    
+
     def _merge_memory_group(self, cursor, group: List[Dict[str, Any]]) -> Optional[str]:
         """合并记忆组"""
         try:
             # 选择最重要的记忆作为主记忆
             main_memory = max(group, key=lambda x: x['importance_score'])
             others = [m for m in group if m['memory_id'] != main_memory['memory_id']]
-            
+
             # 合并内容
             merged_content = self._merge_memory_content(main_memory, others)
-            
+
             # 更新主记忆
             update_sql = """
-                UPDATE memories 
-                SET content_text = %s, content_structured = %s, 
+                UPDATE memories
+                SET content_text = %s, content_structured = %s,
                     importance_score = %s, updated_at = CURRENT_TIMESTAMP
                 WHERE memory_id = %s
             """
-            
+
             cursor.execute(update_sql, (
                 merged_content['text'],
                 json.dumps(merged_content['structured_data'], ensure_ascii=False),
                 merged_content['importance'],
                 main_memory['memory_id']
             ))
-            
+
             # 删除其他记忆
             for other in others:
                 delete_sql = "DELETE FROM memories WHERE memory_id = %s"
                 cursor.execute(delete_sql, (other['memory_id'],))
-            
+
             return main_memory['memory_id']
-            
+
         except Exception as e:
             logger.error(f"合并记忆组失败: {e}")
             return None
-    
-    def _merge_memory_content(self, main_memory: Dict[str, Any], 
-                             others: List[Dict[str, Any]]) -> Dict[str, Any]:
+
+    def _merge_memory_content(
+        self,
+        main_memory: Dict[str, Any],
+        others: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
         """合并记忆内容"""
         # 合并文本内容
         texts = [main_memory.get('content_text', '')]
         texts.extend([m.get('content_text', '') for m in others])
         merged_text = ' | '.join(filter(None, texts))
-        
+
         # 合并结构化数据
         merged_structured = {}
         if main_memory.get('content_structured'):
             try:
                 merged_structured.update(json.loads(main_memory['content_structured']))
-            except:
+            except Exception:
                 pass
-        
+
         for other in others:
             if other.get('content_structured'):
                 try:
                     other_structured = json.loads(other['content_structured'])
                     merged_structured.update(other_structured)
-                except:
+                except Exception:
                     pass
-        
+
         # 计算新的重要性
         importances = [main_memory.get('importance_score', 0.5)]
         importances.extend([m.get('importance_score', 0.5) for m in others])
         merged_importance = statistics.mean(importances)
-        
+
         return {
             'text': merged_text,
             'structured_data': merged_structured,
             'importance': merged_importance
         }
-    
+
     def _get_memory_with_embedding(self, cursor, memory_id: str) -> Optional[Dict[str, Any]]:
         """获取带嵌入的记忆"""
         select_sql = """
@@ -482,17 +493,17 @@ class MemoryManager:
             LEFT JOIN memory_embeddings e ON m.memory_id = e.memory_id
             WHERE m.memory_id = %s
         """
-        
+
         cursor.execute(select_sql, (memory_id,))
         return cursor.fetchone()
-    
+
     def _get_association_candidates(self, cursor, target_memory: Dict[str, Any]) -> List[Dict[str, Any]]:
         """获取关联候选记忆"""
         select_sql = """
             SELECT m.*, e.embedding_vector
             FROM memories m
             LEFT JOIN memory_embeddings e ON m.memory_id = e.memory_id
-            WHERE m.agent_id = %s AND m.user_id = %s 
+            WHERE m.agent_id = %s AND m.user_id = %s
             AND m.memory_id != %s
             AND e.embedding_vector IS NOT NULL
             AND NOT EXISTS (
@@ -503,42 +514,57 @@ class MemoryManager:
             ORDER BY m.importance_score DESC
             LIMIT 20
         """
-        
-        cursor.execute(select_sql, (
-            target_memory['agent_id'], target_memory['user_id'], target_memory['memory_id'],
-            target_memory['memory_id'], target_memory['memory_id']
-        ))
+
+        cursor.execute(
+            select_sql,
+            (
+                target_memory['agent_id'],
+                target_memory['user_id'],
+                target_memory['memory_id'],
+                target_memory['memory_id'],
+                target_memory['memory_id'],
+            ),
+        )
         return cursor.fetchall()
-    
-    def _calculate_association_strength(self, memory1: Dict[str, Any], 
-                                       memory2: Dict[str, Any]) -> float:
+
+    def _calculate_association_strength(
+        self,
+        memory1: Dict[str, Any],
+        memory2: Dict[str, Any],
+    ) -> float:
         """计算关联强度"""
         try:
             if not memory1.get('embedding_vector') or not memory2.get('embedding_vector'):
                 return 0.0
-            
+
             embedding1 = json.loads(memory1['embedding_vector'])
             embedding2 = json.loads(memory2['embedding_vector'])
-            
+
             return self.embedding_service.calculate_similarity(embedding1, embedding2)
-            
+
         except Exception as e:
             logger.error(f"计算关联强度失败: {e}")
             return 0.0
-    
-    def _create_association(self, cursor, source_id: str, target_id: str, 
-                           relation_type: str, strength: float) -> bool:
+
+    def _create_association(
+        self,
+        cursor,
+        source_id: str,
+        target_id: str,
+        relation_type: str,
+        strength: float,
+    ) -> bool:
         """创建记忆关联"""
         try:
             insert_sql = """
-                INSERT INTO memory_associations 
+                INSERT INTO memory_associations
                 (source_memory_id, target_memory_id, relation_type, strength)
                 VALUES (%s, %s, %s, %s)
             """
-            
+
             cursor.execute(insert_sql, (source_id, target_id, relation_type, strength))
             return True
-            
+
         except Exception as e:
             logger.error(f"创建记忆关联失败: {e}")
             return False

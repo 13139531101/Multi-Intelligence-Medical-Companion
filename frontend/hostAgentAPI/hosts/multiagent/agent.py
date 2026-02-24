@@ -2,6 +2,7 @@ import json
 import os
 from .host_agent import HostAgent
 
+
 # 读取当前目录下的 agents.json（位于 ../../agents.json）并按 url 列表初始化
 def _load_agent_urls_from_json():
     try:
@@ -13,5 +14,6 @@ def _load_agent_urls_from_json():
     except Exception:
         # 兜底返回空列表，避免阻塞
         return []
+
 
 root_agent = HostAgent(_load_agent_urls_from_json()).create_agent()

@@ -6,7 +6,7 @@ import urllib
 from uuid import uuid4
 
 from A2AServer.common.client import A2AClient, A2ACardResolver
-from A2AServer.common.A2Atypes import TaskState, Task, TextPart, FilePart, FileContent
+from A2AServer.common.A2Atypes import TaskState
 from A2AServer.common.utils.push_notification_auth import PushNotificationReceiverAuth
 
 
@@ -33,12 +33,12 @@ async def cli(agent, session, history, use_push_notifications: bool, push_notifi
         await notification_receiver_auth.load_jwks(f"{agent}/.well-known/jwks.json")
 
         push_notification_listener = PushNotificationListener(
-            host = notification_receiver_host,
-            port = notification_receiver_port,
+            host=notification_receiver_host,
+            port=notification_receiver_port,
             notification_receiver_auth=notification_receiver_auth,
         )
         push_notification_listener.start()
-        
+
     client = A2AClient(agent_card=card)
     if session == 0:
         sessionId = uuid4().hex
@@ -58,13 +58,22 @@ async def cli(agent, session, history, use_push_notifications: bool, push_notifi
             task_response = await client.get_task({"id": taskId, "historyLength": 10})
             print(task_response.model_dump_json(include={"result": {"history": True}}))
 
-async def completeTask(client: A2AClient, streaming, use_push_notifications: bool, notification_receiver_host: str, notification_receiver_port: int, taskId, sessionId):
+
+async def completeTask(
+    client: A2AClient,
+    streaming,
+    use_push_notifications: bool,
+    notification_receiver_host: str,
+    notification_receiver_port: int,
+    taskId,
+    sessionId,
+):
     prompt = click.prompt(
         "\nWhat do you want to send to the agent? (:q or quit to exit)"
     )
     if prompt == ":q" or prompt == "quit":
         return False
-    
+
     message = {
         "role": "user",
         "parts": [
@@ -74,7 +83,7 @@ async def completeTask(client: A2AClient, streaming, use_push_notifications: boo
             }
         ]
     }
-    
+
     file_path = click.prompt(
         "Select a file path to attach? (press enter to skip)",
         default="",
@@ -84,7 +93,7 @@ async def completeTask(client: A2AClient, streaming, use_push_notifications: boo
         with open(file_path, "rb") as f:
             file_content = base64.b64encode(f.read()).decode('utf-8')
             file_name = os.path.basename(file_path)
-        
+
         message["parts"].append(
             {
                 "type": "file",
@@ -94,7 +103,7 @@ async def completeTask(client: A2AClient, streaming, use_push_notifications: boo
                 }
             }
         )
- 
+
     payload = {
         "id": taskId,
         "sessionId": sessionId,
@@ -104,7 +113,7 @@ async def completeTask(client: A2AClient, streaming, use_push_notifications: boo
 
     if use_push_notifications:
         payload["pushNotification"] = {
-            "url": f"http://{notification_receiver_host}:{notification_receiver_port}/notify",            
+            "url": f"http://{notification_receiver_host}:{notification_receiver_port}/notify",
             "authentication": {
                 "schemes": ["bearer"],
             },
@@ -120,7 +129,7 @@ async def completeTask(client: A2AClient, streaming, use_push_notifications: boo
         taskResult = await client.send_task(payload)
         print(f"\n{taskResult.model_dump_json(exclude_none=True)}")
 
-    ## if the result is that more input is required, loop again.
+    # if the result is that more input is required, loop again.
     state = TaskState(taskResult.result.status.state)
     if state.name == TaskState.INPUT_REQUIRED.name:
         return await completeTask(
@@ -133,7 +142,7 @@ async def completeTask(client: A2AClient, streaming, use_push_notifications: boo
             sessionId
         )
     else:
-        ## task is complete
+        # task is complete
         return True
 
 

@@ -1,5 +1,4 @@
 import psycopg
-import os
 
 # DB Config for Host Access
 DB_CONFIG = {
@@ -9,6 +8,7 @@ DB_CONFIG = {
     'password': 'pha_pass',
     'dbname': 'personal_health_assistant'
 }
+
 
 def update_schema():
     print("Connecting to database...")
@@ -118,6 +118,7 @@ def update_schema():
 
     except Exception as e:
         print(f"Connection failed: {e}")
+
 
 if __name__ == "__main__":
     update_schema()

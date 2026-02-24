@@ -358,9 +358,9 @@ if __name__ == "__main__":
     print("=" * 50)
     print("个人智能健康助手 - 数据库初始化脚本")
     print("=" * 50)
-    
+
     success = init_database()
-    
+
     if success:
         print("\n✓ 数据库初始化成功！现在可以启动API服务器了。")
     else:

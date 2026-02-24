@@ -72,14 +72,15 @@
             <view class="summary-text collapsed">后台整理中，请稍候...</view>
           </view>
           <view class="summary-row" wx:elif="{{item.statusClass === 'failed'}}">
-            <text class="label">原文：</text>
-            <view class="summary-text collapsed">整理失败，请重试上传</view>
+            <text class="label">原因：</text>
+            <view class="summary-text collapsed">{{item.errorMessageDisplay || '整理失败，请重试上传'}}</view>
           </view>
           <view class="images-row" wx:if="{{item.fileUrls && item.fileUrls.length}}">
             <image class="thumb" wx:for="{{item.fileUrls}}" wx:key="*this" wx:for-item="url" src="{{url}}" mode="aspectFill" catchtap="previewImage" data-urls="{{item.fileUrls}}" data-current="{{url}}"></image>
           </view>
         </view>
         <view class="item-footer">
+          <text class="retry-btn" wx:if="{{item.statusClass === 'failed'}}" catchtap="chooseImage">重试上传</text>
           <text class="delete-btn" catchtap="deleteSummary" data-id="{{item.id}}">删除</text>
           <text class="view-more" wx:if="{{item.canExpand}}" catchtap="toggleExpand" data-id="{{item.id}}">{{item.expanded ? '收起' : '展开'}}</text>
         </view>

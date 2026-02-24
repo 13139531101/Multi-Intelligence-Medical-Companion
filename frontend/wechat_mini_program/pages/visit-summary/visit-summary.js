@@ -151,6 +151,11 @@ Page({
             statusClass = "failed";
           }
 
+          const errorMessageRaw = String(
+            item.error_message || item.errorMessage || "",
+          ).trim();
+          const errorMessageDisplay = compactText(errorMessageRaw, 60);
+
           const visitDateDisplay =
             fmtDate(item.visit_date) ||
             fmtDateTime(item.created_at) ||
@@ -223,6 +228,7 @@ Page({
             canExpand,
             followUpDisplay,
             keyPoints: keyPoints.length ? keyPoints : keyPointsFallback,
+            errorMessageDisplay,
             expanded: false,
           };
         });

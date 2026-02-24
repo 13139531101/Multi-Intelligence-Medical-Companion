@@ -1,13 +1,11 @@
 import requests
 import json
 import uuid
-import jwt
-import datetime
-import os
 import time
 
 # Config
-API_URL = "http://127.0.0.1:13002" # hostapi port (updated)
+API_URL = "http://127.0.0.1:13002"  # hostapi port (updated)
+
 
 def get_auth_token(username="test_user", password="password123"):
     print(f"\nAuthenticating as {username}...")
@@ -43,6 +41,7 @@ def get_auth_token(username="test_user", password="password123"):
     except Exception as e:
         print(f"Auth request failed: {e}")
         return None
+
 
 def test_history_api():
     token = get_auth_token()
@@ -85,7 +84,7 @@ def test_history_api():
         "consultation_id": cid,
         "role": "user",
         "content": msg_content,
-        "files": ["http://example.com/file1.jpg"] # Test files support
+        "files": ["http://example.com/file1.jpg"]  # Test files support
     }
     try:
         resp = requests.post(f"{API_URL}/api/consultations/message", json=save_payload, headers=headers)
@@ -173,6 +172,7 @@ def test_history_api():
             print(f"Failed to fetch messages: {resp.text}")
     except Exception as e:
         print(f"Request failed: {e}")
+
 
 if __name__ == "__main__":
     test_history_api()

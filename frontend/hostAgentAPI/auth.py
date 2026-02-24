@@ -45,16 +45,21 @@ DB_CONFIG = {
 # 安全相关
 security = HTTPBearer()
 
+
 # 请求/响应模型
+
+
 class UserRegister(BaseModel):
     username: str
     password: str
     email: Optional[EmailStr] = None
     phone: Optional[str] = None
 
+
 class UserLogin(BaseModel):
     username: str
     password: str
+
 
 class UserResponse(BaseModel):
     user_id: str
@@ -67,15 +72,17 @@ class UserResponse(BaseModel):
     status: int
     created_at: datetime
 
+
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str
     expires_in: int
     user: UserResponse
 
+
 class AuthService:
     """认证服务类"""
-    
+
     def __init__(self):
         self.db_config = DB_CONFIG
         self._pool: ConnectionPool | None = None
@@ -85,7 +92,7 @@ class AuthService:
             self.init_schema()
         except Exception as e:
             logger.warning(f"初始化认证表失败: {e}")
-    
+
     def _build_dsn(self) -> str:
         dsn = os.getenv("DATABASE_URL")
         if isinstance(dsn, str) and dsn.strip():
@@ -190,23 +197,23 @@ class AuthService:
         except Exception as e:
             logger.warning(f"认证模块跳过数据库架构初始化（连接失败）: {e}")
             return
-    
+
     def generate_salt(self) -> str:
         """生成密码盐值"""
         return secrets.token_hex(16)
-    
+
     def hash_password(self, password: str, salt: str) -> str:
         """密码哈希"""
         return hashlib.sha256((password + salt).encode()).hexdigest()
-    
+
     def verify_password(self, password: str, salt: str, hashed: str) -> bool:
         """验证密码"""
         return self.hash_password(password, salt) == hashed
-    
+
     def generate_user_id(self) -> str:
         """生成用户ID"""
         return f"user_{secrets.token_hex(16)}"
-    
+
     def create_jwt_token(self, user_data: Dict[str, Any]) -> str:
         """创建JWT token"""
         payload = {
@@ -217,7 +224,7 @@ class AuthService:
             'iat': datetime.utcnow()
         }
         return jwt.encode(payload, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
-    
+
     def verify_jwt_token(self, token: str) -> Dict[str, Any]:
         """验证JWT token"""
         try:
@@ -233,13 +240,13 @@ class AuthService:
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="无效的Token"
             )
-    
+
     def register_user(self, user_data: UserRegister) -> Dict[str, Any]:
         """用户注册"""
         cursor = None
         with self.get_db_connection() as connection:
             cursor = connection.cursor(row_factory=dict_row)
-        
+
             try:
                 # 检查用户名是否已存在
                 cursor.execute("SELECT id FROM users WHERE username = %s", (user_data.username,))
@@ -316,13 +323,13 @@ class AuthService:
             finally:
                 if cursor:
                     cursor.close()
-    
+
     def authenticate_user(self, login_data: UserLogin) -> Dict[str, Any]:
         """用户登录认证"""
         cursor = None
         with self.get_db_connection() as connection:
             cursor = connection.cursor(row_factory=dict_row)
-        
+
             try:
                 cursor.execute("""
                     SELECT user_id, username, password_hash, salt, email, phone,
@@ -377,13 +384,13 @@ class AuthService:
             finally:
                 if cursor:
                     cursor.close()
-    
+
     def get_user_by_id(self, user_id: str) -> Dict[str, Any]:
         """根据用户ID获取用户信息"""
         cursor = None
         with self.get_db_connection() as connection:
             cursor = connection.cursor(row_factory=dict_row)
-        
+
             try:
                 cursor.execute("""
                     SELECT user_id, username, email, phone, avatar_url,
@@ -411,13 +418,13 @@ class AuthService:
             finally:
                 if cursor:
                     cursor.close()
-    
+
     def save_user_session(self, user_id: str, token: str, ip_address: str = None, user_agent: str = None):
         """保存用户会话"""
         cursor = None
         with self.get_db_connection() as connection:
             cursor = connection.cursor()
-        
+
             try:
                 token_hash = hashlib.sha256(token.encode()).hexdigest()
                 expires_at = datetime.utcnow() + timedelta(hours=JWT_EXPIRATION_HOURS)
@@ -436,8 +443,10 @@ class AuthService:
                 if cursor:
                     cursor.close()
 
+
 # 创建认证服务实例
 auth_service = AuthService()
+
 
 # 依赖注入：获取当前用户
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> Dict[str, Any]:
@@ -447,8 +456,10 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
     user = auth_service.get_user_by_id(payload['user_id'])
     return user
 
+
 # 创建路由
 router = APIRouter(prefix="/auth", tags=["认证"])
+
 
 @router.post("/register", response_model=TokenResponse, summary="用户注册")
 async def register(user_data: UserRegister):
@@ -469,18 +480,19 @@ async def register(user_data: UserRegister):
         user=UserResponse(**user)
     )
 
+
 @router.post("/login", response_model=TokenResponse, summary="用户登录")
 async def login(login_data: UserLogin):
     """用户登录"""
     # 认证用户
     user = auth_service.authenticate_user(login_data)
-    
+
     # 生成JWT token
     token = auth_service.create_jwt_token(user)
-    
+
     # 保存会话
     auth_service.save_user_session(user['user_id'], token)
-    
+
     return TokenResponse(
         access_token=token,
         token_type="bearer",
@@ -488,16 +500,19 @@ async def login(login_data: UserLogin):
         user=UserResponse(**user)
     )
 
+
 @router.get("/user", response_model=UserResponse, summary="获取当前用户信息")
 async def get_user_info(current_user: Dict[str, Any] = Depends(get_current_user)):
     """获取当前用户信息"""
     return UserResponse(**current_user)
+
 
 @router.post("/logout", summary="用户登出")
 async def logout(current_user: Dict[str, Any] = Depends(get_current_user)):
     """用户登出"""
     # 这里可以实现token黑名单或删除会话记录
     return {"message": "登出成功"}
+
 
 @router.get("/verify", summary="验证Token")
 async def verify_token(current_user: Dict[str, Any] = Depends(get_current_user)):

@@ -5,6 +5,7 @@ import time
 
 AGENT_URL = "http://127.0.0.1:10011"
 
+
 def test_streaming():
     url = AGENT_URL
 
@@ -55,13 +56,13 @@ def test_streaming():
                                     if p["type"] == "text":
                                         content += p["text"]
                             elif "message" in res:
-                                 # Intermediate messages
-                                 for p in res["message"].get("parts", []):
+                                # Intermediate messages
+                                for p in res["message"].get("parts", []):
                                     if p["type"] == "text":
                                         content += p["text"]
                             elif "status" in res and "message" in res["status"]:
-                                 # Status updates
-                                 for p in res["status"]["message"].get("parts", []):
+                                # Status updates
+                                for p in res["status"]["message"].get("parts", []):
                                     if p["type"] == "text":
                                         content += p["text"]
 
@@ -72,6 +73,7 @@ def test_streaming():
 
     except Exception as e:
         print(f"Request failed: {e}")
+
 
 if __name__ == "__main__":
     # Wait a bit for server to fully start if we just launched it

@@ -20,11 +20,6 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from backend.HealthRecordsManager.mcpserver.ocr_tool import (
-    call_local_ocr, call_aliyun_ocr, call_aliyun_ocr_v2021
-)
-from backend.HealthRecordsManager.memory_service import HealthRecordsMemoryService
-
 
 def read_image_base64(path: str) -> str:
     with open(path, 'rb') as f:
@@ -32,6 +27,13 @@ def read_image_base64(path: str) -> str:
 
 
 async def main():
+    from backend.HealthRecordsManager.mcpserver.ocr_tool import (
+        call_aliyun_ocr,
+        call_aliyun_ocr_v2021,
+        call_local_ocr,
+    )
+    from backend.HealthRecordsManager.memory_service import HealthRecordsMemoryService
+
     parser = argparse.ArgumentParser(description='Run OCR once and store memory')
     parser.add_argument('image_path', help='图片文件路径')
     parser.add_argument('--user', dest='user_id', default='111', help='用户ID，默认111')

@@ -1,9 +1,9 @@
 import requests
 import json
 import time
-import os
 
 API_URL = "http://localhost:13002"
+
 
 def test_heuristic_routing():
     print("=== Testing Heuristic Routing ===")
@@ -100,6 +100,7 @@ def test_heuristic_routing():
         time.sleep(2)
 
     print("\nFAILURE: No response received after polling.")
+
 
 if __name__ == "__main__":
     test_heuristic_routing()

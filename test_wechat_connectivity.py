@@ -7,7 +7,7 @@
 
 import requests
 import socket
-import json
+
 
 def get_local_ip():
     """获取本机IP地址"""
@@ -20,6 +20,7 @@ def get_local_ip():
         return ip
     except Exception:
         return None
+
 
 def run_localhost_access():
     """测试localhost访问"""
@@ -36,6 +37,7 @@ def run_localhost_access():
         print(f"✗ localhost访问异常: {e}")
         return False
 
+
 def run_ip_access(ip):
     """测试IP地址访问"""
     print(f"\n=== 测试IP地址访问: {ip} ===")
@@ -51,16 +53,17 @@ def run_ip_access(ip):
         print(f"✗ IP地址 {ip} 访问异常: {e}")
         return False
 
+
 def run_auth_endpoints(base_url):
     """测试认证接口"""
     print(f"\n=== 测试认证接口: {base_url} ===")
-    
+
     # 测试登录
     login_data = {
         "username": "111",
         "password": "111111"
     }
-    
+
     try:
         response = requests.post(f"{base_url}/auth/login", json=login_data, timeout=5)
         if response.status_code == 200:
@@ -78,9 +81,10 @@ def run_auth_endpoints(base_url):
         print(f"✗ 登录接口异常: {e}")
         return False
 
+
 def generate_wechat_config(ip):
     """生成微信小程序配置建议"""
-    print(f"\n=== 微信小程序配置建议 ===")
+    print("\n=== 微信小程序配置建议 ===")
     print("微信小程序不能访问localhost/127.0.0.1地址")
     print("需要修改以下配置：")
     print("\n1. 修改 frontend/wechat_mini_program/utils/api.js:")
@@ -93,39 +97,41 @@ def generate_wechat_config(ip):
     print("   - 配置HTTPS（生产环境必需）")
     print("   - 在微信公众平台配置服务器域名")
 
+
 def main():
     print("微信小程序连接问题诊断工具\n")
-    
+
     # 测试localhost访问
     localhost_ok = run_localhost_access()
-    
+
     # 获取本机IP
     local_ip = get_local_ip()
     if local_ip:
         print(f"\n本机IP地址: {local_ip}")
-        
+
         # 测试IP访问
         ip_ok = run_ip_access(local_ip)
-        
+
         if localhost_ok and ip_ok:
             # 测试认证接口
             run_auth_endpoints(f"http://{local_ip}:13002")
-            
+
         # 生成配置建议
         generate_wechat_config(local_ip)
     else:
         print("\n✗ 无法获取本机IP地址")
-    
+
     print("\n=== 总结 ===")
     if localhost_ok:
         print("✓ API服务器运行正常")
     else:
         print("✗ API服务器可能未启动或端口被占用")
-        
+
     if local_ip and not run_ip_access(local_ip):
         print("✗ 可能需要配置防火墙或网络设置")
         print("  建议：在Windows防火墙中允许端口13002的入站连接")
         return
+
 
 if __name__ == "__main__":
     main()

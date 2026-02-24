@@ -368,7 +368,7 @@ def main() -> None:
                 n3 = migrate_reminder_logs(sqlite_conn, pg_conn)
                 print(f"Medication: reminders={n1}, appointments={n2}, logs={n3}")
         else:
-            print(f"SQLite medication_reminders.db not found at {SQLITE_MED_REC_PATH}")
+            print(f"SQLite medication_reminders.db not found at {SQLITE_MED_REM_PATH}")
 
         # Migrate health records domain
         if os.path.exists(SQLITE_HEALTH_REC_PATH):

@@ -5,17 +5,20 @@
 用于保护需要认证的API路由
 """
 
-from fastapi import Request, HTTPException, status
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from typing import Optional, Dict, Any
 import logging
+from typing import Any, Dict, Optional
+
+from fastapi import HTTPException, Request, status
+from fastapi.security import HTTPBearer
+
 from auth import auth_service
 
 logger = logging.getLogger(__name__)
 
+
 class AuthMiddleware:
     """认证中间件类"""
-    
+
     def __init__(self):
         self.security = HTTPBearer(auto_error=False)
         # 定义不需要认证的路由
@@ -28,27 +31,27 @@ class AuthMiddleware:
             "/openapi.json",
             "/redoc"
         }
-    
+
     def is_public_route(self, path: str) -> bool:
         """检查是否为公开路由"""
         # 检查精确匹配
         if path in self.public_routes:
             return True
-        
+
         # 检查路径前缀匹配
         for public_route in self.public_routes:
             if path.startswith(public_route):
                 return True
-        
+
         return False
-    
+
     async def get_current_user_from_request(self, request: Request) -> Optional[Dict[str, Any]]:
         """从请求中获取当前用户"""
         try:
             # 检查是否为公开路由
             if self.is_public_route(request.url.path):
                 return None
-            
+
             # 获取Authorization header
             authorization = request.headers.get("Authorization")
             if not authorization:
@@ -57,7 +60,7 @@ class AuthMiddleware:
                     detail="缺少认证信息",
                     headers={"WWW-Authenticate": "Bearer"}
                 )
-            
+
             # 解析Bearer token
             if not authorization.startswith("Bearer "):
                 raise HTTPException(
@@ -65,15 +68,15 @@ class AuthMiddleware:
                     detail="无效的认证格式",
                     headers={"WWW-Authenticate": "Bearer"}
                 )
-            
+
             token = authorization.split(" ")[1]
-            
+
             # 验证token并获取用户信息
             payload = auth_service.verify_jwt_token(token)
             user = auth_service.get_user_by_id(payload['user_id'])
-            
+
             return user
-            
+
         except HTTPException:
             raise
         except Exception as e:
@@ -83,13 +86,15 @@ class AuthMiddleware:
                 detail="认证失败",
                 headers={"WWW-Authenticate": "Bearer"}
             )
-    
+
     async def __call__(self, request: Request) -> Optional[Dict[str, Any]]:
         """中间件调用方法"""
         return await self.get_current_user_from_request(request)
 
+
 # 创建认证中间件实例
 auth_middleware = AuthMiddleware()
+
 
 # 依赖注入函数
 async def get_current_user_optional(request: Request) -> Optional[Dict[str, Any]]:
@@ -98,6 +103,7 @@ async def get_current_user_optional(request: Request) -> Optional[Dict[str, Any]
         return await auth_middleware.get_current_user_from_request(request)
     except HTTPException:
         return None
+
 
 async def get_current_user_required(request: Request) -> Dict[str, Any]:
     """必需的用户认证依赖（用于需要认证的路由）"""

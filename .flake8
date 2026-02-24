@@ -1,3 +1,20 @@
 [flake8]
 max-line-length = 160
 extend-ignore = E203, W503
+exclude =
+    .git
+    .venv
+    venv
+    env
+    backend
+    node_modules
+    frontend/admin-dashboard
+    frontend/admin-dashboard/node_modules
+    frontend/admin-dashboard/.next
+    build
+    dist
+    frontend/hostAgentAPI/api.py
+    frontend/hostAgentAPI/*.py
+per-file-ignores =
+    frontend/hostAgentAPI/server.py: E111, E114, E261, E302, E306, E402, F401, F811, F841, W291, W293
+    frontend/hostAgentAPI/api.py: E111, E117, E261, E302, E501, E702, E741

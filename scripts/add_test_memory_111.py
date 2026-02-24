@@ -8,9 +8,10 @@ BACKEND_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'ba
 if BACKEND_ROOT not in sys.path:
     sys.path.insert(0, BACKEND_ROOT)
 
-from AgentMemorySystem.database_config import MemoryDatabaseConfig
 
 def main():
+    from AgentMemorySystem.database_config import MemoryDatabaseConfig
+
     db = MemoryDatabaseConfig()
     assert db.enabled and db.check_connection(), "DB not connected"
     mem_id = str(uuid.uuid4())
@@ -38,6 +39,7 @@ def main():
     cur.close()
     conn.close()
     print(mem_id)
+
 
 if __name__ == '__main__':
     main()

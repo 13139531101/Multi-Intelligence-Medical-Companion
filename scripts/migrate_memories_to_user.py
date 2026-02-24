@@ -11,8 +11,6 @@ AGENT_MEMORY_PATH = os.path.join(PROJECT_ROOT, 'backend', 'AgentMemorySystem')
 if AGENT_MEMORY_PATH not in sys.path:
     sys.path.append(AGENT_MEMORY_PATH)
 
-from database_config import MemoryDatabaseConfig  # type: ignore
-
 BAD_USER_PATTERNS = [
     ("IS_NULL", "user_id IS NULL"),
     ("EMPTY", "user_id = ''"),
@@ -25,6 +23,7 @@ BAD_USER_PATTERNS = [
 ]
 
 DEF_SAMPLE_LIMIT = 20
+
 
 def summarize_bad_users(cursor):
     summary = {}
@@ -112,11 +111,17 @@ def migrate_user_id(connection, target_user_id: str):
 
 def main():
     parser = argparse.ArgumentParser(description='Migrate malformed user_id in memories to target user.')
-    parser.add_argument('--target-user-id', default=os.environ.get('A2A_CURRENT_USER_ID', '111'), help='Target user_id to assign (default from A2A_CURRENT_USER_ID or 111)')
+    parser.add_argument(
+        '--target-user-id',
+        default=os.environ.get('A2A_CURRENT_USER_ID', '111'),
+        help='Target user_id to assign (default from A2A_CURRENT_USER_ID or 111)',
+    )
     parser.add_argument('--dry-run', action='store_true', help='Preview changes without applying updates')
     parser.add_argument('--commit', action='store_true', help='Apply updates')
     parser.add_argument('--sample-limit', type=int, default=DEF_SAMPLE_LIMIT, help='Preview sample size')
     args = parser.parse_args()
+
+    from database_config import MemoryDatabaseConfig  # type: ignore
 
     cfg = MemoryDatabaseConfig()
     if not cfg._enabled:
