@@ -71,6 +71,14 @@ async def admin_upload_medical_kb_file(
     )
 
 
+@router.get("/api/admin/medical-kb/jobs/{job_id}")
+async def admin_get_medical_kb_upload_job(job_id: str, request: Request = None):
+    """管理员查询：上传入库后台任务状态。"""
+    return await medical_kb_service.admin_get_medical_kb_upload_job(
+        legacy, job_id=job_id, request=request
+    )
+
+
 @router.post("/api/admin/medical-kb/import-from-api")
 async def admin_import_medical_kb_from_api(
     payload: legacy.AdminMedicalKBImportFromAPIRequest, request: Request = None

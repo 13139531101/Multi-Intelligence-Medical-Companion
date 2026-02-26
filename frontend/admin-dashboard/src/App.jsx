@@ -68,6 +68,8 @@ function App() {
   const [ingestFiles, setIngestFiles] = useState([]);
   const [ingestFileKey, setIngestFileKey] = useState(0);
   const [ingestResult, setIngestResult] = useState(null);
+  const [ingestRunning, setIngestRunning] = useState(false);
+  const [ingestRunningText, setIngestRunningText] = useState("");
 
   const [apiImportUrl, setApiImportUrl] = useState("");
   const [apiImportMethod, setApiImportMethod] = useState("GET");
@@ -185,10 +187,32 @@ function App() {
 
     try {
       setIngestResult(null);
+      setIngestRunning(false);
+      setIngestRunningText("");
       let res;
       if (hasFiles) {
+        setIngestRunning(true);
+        setIngestRunningText(`后台入库中(0/${files.length})...`);
+        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+        const pollJob = async (jobId) => {
+          const maxWaitMs = 10 * 60 * 1000;
+          const maxAttempts = Math.max(1, Math.ceil(maxWaitMs / 1000));
+          for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+            const jr = await axios.get(
+              `${API_BASE}/admin/medical-kb/jobs/${jobId}`,
+              { headers },
+            );
+            const job = jr?.data?.job;
+            if (!job) throw new Error("后台任务状态返回为空");
+            if (job.status === "succeeded" || job.status === "failed")
+              return job;
+            await sleep(1000);
+          }
+          throw new Error("后台任务超时");
+        };
         const results = [];
         for (let i = 0; i < files.length; i += 1) {
+          setIngestRunningText(`后台入库中(${i + 1}/${files.length})...`);
           const f = files[i];
           const fd = new FormData();
           fd.append("file", f);
@@ -203,7 +227,40 @@ function App() {
               fd,
               { headers },
             );
-            results.push({ success: true, filename: f.name, result: r.data });
+            const jobId = r?.data?.job_id || r?.data?.jobId;
+            if (jobId) {
+              const idx = results.length;
+              results.push({
+                success: true,
+                filename: f.name,
+                job_id: jobId,
+                status: "queued",
+              });
+              const job = await pollJob(jobId);
+              if (job.status === "succeeded") {
+                results[idx] = {
+                  success: true,
+                  filename: f.name,
+                  job_id: jobId,
+                  status: job.status,
+                  result: job.result,
+                };
+              } else {
+                const err =
+                  job?.error?.detail ||
+                  job?.error?.message ||
+                  JSON.stringify(job?.error || {});
+                results[idx] = {
+                  success: false,
+                  filename: f.name,
+                  job_id: jobId,
+                  status: job.status,
+                  error: err,
+                };
+              }
+            } else {
+              results.push({ success: true, filename: f.name, result: r.data });
+            }
           } catch (e) {
             results.push({
               success: false,
@@ -244,6 +301,9 @@ function App() {
       handleSearch();
     } catch (err) {
       alert("入库失败：" + err.message);
+    } finally {
+      setIngestRunning(false);
+      setIngestRunningText("");
     }
   };
 
@@ -617,11 +677,17 @@ function App() {
             <div className="flex justify-end mt-2">
               <button
                 onClick={handleImport}
-                className="bg-cyan-600 hover:bg-cyan-500 text-white px-4 py-2 rounded font-bold tracking-wide transition-colors"
+                disabled={ingestRunning}
+                className="bg-cyan-600 hover:bg-cyan-500 disabled:bg-slate-700 disabled:cursor-not-allowed text-white px-4 py-2 rounded font-bold tracking-wide transition-colors"
               >
-                入库
+                {ingestRunning ? "入库中..." : "入库"}
               </button>
             </div>
+            {ingestRunning && (
+              <div className="text-[10px] text-slate-400 mt-2 font-mono">
+                {ingestRunningText || "后台入库中..."}
+              </div>
+            )}
             {ingestResult && (
               <pre className="text-[10px] text-slate-400 mt-2 whitespace-pre-wrap break-words">
                 {JSON.stringify(ingestResult, null, 2)}

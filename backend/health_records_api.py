@@ -319,6 +319,8 @@ def _rag_chunk_settings() -> dict[str, int]:
 
 def _rag_chunk_mode() -> str:
     v = (os.getenv("RAG_CHUNK_MODE", "") or "").strip().lower()
+    if v in ("semantic", "sentence", "meaning"):
+        return "semantic"
     if v in ("paragraph", "para", "sections", "section"):
         return "paragraph"
     return "sliding"
@@ -327,7 +329,14 @@ def _rag_chunk_mode() -> str:
 def _rag_chunk_mode_for_source(source_type: str) -> str:
     st = (source_type or "").strip().lower()
     if st == "medical_kb":
-        return "paragraph"
+        v = (os.getenv("RAG_CHUNK_MODE_MEDICAL_KB", "") or "").strip().lower()
+        if v:
+            if v in ("semantic", "sentence", "meaning"):
+                return "semantic"
+            if v in ("paragraph", "para", "sections", "section"):
+                return "paragraph"
+            return "sliding"
+        return "semantic"
     return _rag_chunk_mode()
 
 
@@ -451,6 +460,193 @@ def _split_text_for_rag_paragraph(
     return chunks
 
 
+def _split_text_for_rag_semantic(
+    s: str, *, chunk_size: int, overlap: int, max_chunks: int
+) -> list[str]:
+    if not s:
+        return []
+    s = s.replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not s:
+        return []
+    chunk_size = max(50, int(chunk_size))
+    overlap = max(0, int(overlap))
+    if overlap >= chunk_size:
+        overlap = max(0, chunk_size // 5)
+
+    def is_heading(block: str) -> bool:
+        b = (block or "").strip()
+        if not b:
+            return False
+        lines = [ln.strip() for ln in b.split("\n") if ln.strip()]
+        if len(lines) != 1:
+            return False
+        ln = lines[0]
+        if ln.startswith("#"):
+            return True
+        if re.match(r"^第[0-9一二三四五六七八九十百千]+[章节部分篇].*$", ln):
+            return True
+        if re.match(r"^[0-9]{1,2}(\.[0-9]{1,3})+\s+.+$", ln):
+            return True
+        if re.match(r"^[0-9]{1,2}、.+$", ln):
+            return True
+        return False
+
+    def split_sentences(text: str) -> list[str]:
+        t = re.sub(r"[ \t]+", " ", (text or "").strip())
+        if not t:
+            return []
+        parts = re.split(r"(……|…|[。！？!?]+)", t)
+        out: list[str] = []
+        i = 0
+        while i < len(parts):
+            seg = parts[i] or ""
+            end = ""
+            if i + 1 < len(parts) and parts[i + 1]:
+                end = parts[i + 1]
+            s2 = (seg + end).strip()
+            if s2:
+                out.append(s2)
+            i += 2
+        if not out:
+            out = [t]
+        return out
+
+    def split_block_to_pieces(block: str) -> list[str]:
+        b = (block or "").strip()
+        if not b:
+            return []
+        lines = [ln.rstrip() for ln in b.split("\n")]
+        is_list = True
+        for ln in lines:
+            x = ln.strip()
+            if not x:
+                continue
+            if not re.match(r"^(\-|\*|\+|\d+[\.\)、])\s+.+$", x):
+                is_list = False
+                break
+        if is_list:
+            pieces = []
+            for ln in lines:
+                x = ln.strip()
+                if x:
+                    pieces.append(x)
+            return pieces or [b]
+        if len(b) <= chunk_size:
+            return [b]
+        sentences = split_sentences(b.replace("\n", " ").strip())
+        return sentences if sentences else [b]
+
+    blocks: list[str] = []
+    buf: list[str] = []
+    for line in s.split("\n"):
+        if line.strip():
+            buf.append(line.rstrip())
+            continue
+        if buf:
+            blocks.append("\n".join(buf).strip())
+            buf = []
+    if buf:
+        blocks.append("\n".join(buf).strip())
+
+    chunks: list[str] = []
+    cur_pieces: list[str] = []
+    pending_heading = ""
+
+    def cur_len(pieces: list[str]) -> int:
+        if not pieces:
+            return 0
+        n = 0
+        for p in pieces:
+            if not p:
+                continue
+            if n:
+                n += 2
+            n += len(p)
+        return n
+
+    def join_pieces(pieces: list[str]) -> str:
+        out = []
+        for p in pieces:
+            if not p:
+                continue
+            if out:
+                out.append("\n\n")
+            out.append(p)
+        return "".join(out).strip()
+
+    def overlap_tail(pieces: list[str]) -> list[str]:
+        if not overlap or not pieces:
+            return []
+        tail: list[str] = []
+        total = 0
+        for p in reversed(pieces):
+            if not p:
+                continue
+            add = len(p) + (2 if tail else 0)
+            if tail and total + add > overlap:
+                break
+            tail.append(p)
+            total += add
+            if total >= overlap:
+                break
+        tail.reverse()
+        return tail
+
+    def flush() -> None:
+        nonlocal cur_pieces
+        txt = join_pieces(cur_pieces)
+        if txt:
+            chunks.append(txt)
+        cur_pieces = overlap_tail(cur_pieces)
+
+    for block in blocks:
+        if max_chunks and len(chunks) >= max_chunks:
+            break
+        if is_heading(block):
+            pending_heading = (block or "").strip()
+            continue
+        pieces = split_block_to_pieces(block)
+        for piece in pieces:
+            if max_chunks and len(chunks) >= max_chunks:
+                break
+            p = (piece or "").strip()
+            if not p:
+                continue
+            if pending_heading:
+                combined = pending_heading + "\n" + p
+                pending_heading = ""
+                p = combined
+            if not cur_pieces:
+                cur_pieces = [p]
+                continue
+            if cur_len(cur_pieces + [p]) <= chunk_size:
+                cur_pieces.append(p)
+                continue
+            flush()
+            if cur_pieces and cur_len(cur_pieces + [p]) <= chunk_size:
+                cur_pieces.append(p)
+            else:
+                cur_pieces = [p]
+
+    if pending_heading:
+        if not cur_pieces:
+            cur_pieces = [pending_heading]
+        elif cur_len(cur_pieces + [pending_heading]) <= chunk_size:
+            cur_pieces.append(pending_heading)
+        else:
+            flush()
+            cur_pieces = [pending_heading]
+
+    if cur_pieces and (not max_chunks or len(chunks) < max_chunks):
+        txt = join_pieces(cur_pieces)
+        if txt:
+            chunks.append(txt)
+
+    if max_chunks:
+        return chunks[:max_chunks]
+    return chunks
+
+
 def _split_text_for_rag(
     text: str,
     chunk_size: int | None = None,
@@ -476,6 +672,10 @@ def _split_text_for_rag(
         max_chunks = 0
 
     mode = (chunk_mode or "").strip().lower() or _rag_chunk_mode()
+    if mode == "semantic":
+        return _split_text_for_rag_semantic(
+            s, chunk_size=chunk_size, overlap=overlap, max_chunks=max_chunks
+        )
     if mode == "paragraph":
         return _split_text_for_rag_paragraph(
             s, chunk_size=chunk_size, overlap=overlap, max_chunks=max_chunks
