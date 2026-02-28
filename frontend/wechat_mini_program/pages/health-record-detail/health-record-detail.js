@@ -1,4 +1,4 @@
-const { request, SERVER_URL } = require("../../utils/api");
+const { request, resolveFileUrl } = require("../../utils/api");
 
 Page({
   data: {
@@ -33,7 +33,7 @@ Page({
 
   onLoad(options) {
     try {
-      const info = wx.getSystemInfoSync();
+      const info = wx.getWindowInfo ? wx.getWindowInfo() : null;
       const base =
         info && info.windowHeight ? Math.round(info.windowHeight * 0.45) : 320;
       const h = Math.max(220, Math.min(base, 520));
@@ -113,10 +113,7 @@ Page({
   },
 
   resolveFileUrl(fileId) {
-    if (!fileId) return "";
-    const s = String(fileId);
-    if (s.startsWith("http://") || s.startsWith("https://")) return s;
-    return `${SERVER_URL}/api/health-records/files/${s}`;
+    return resolveFileUrl(fileId);
   },
 
   buildOcrPreview(text, maxLen = 650) {

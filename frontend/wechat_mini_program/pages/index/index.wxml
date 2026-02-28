@@ -126,5 +126,5 @@
   </view>
 
   <!-- 悬浮AI助手按钮 (默认/分诊) -->
-  <floating-ai-btn agent-type="default" />
+  <floating-ai-btn agent-type="host" />
 </view>

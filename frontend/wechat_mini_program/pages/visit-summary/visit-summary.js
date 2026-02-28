@@ -1,5 +1,5 @@
 // pages/visit-summary/visit-summary.js
-const { request, SERVER_URL, uploadFile } = require("../../utils/api.js");
+const { request, resolveFileUrl, uploadFile } = require("../../utils/api.js");
 
 Page({
   data: {
@@ -80,9 +80,7 @@ Page({
               return f.file_id || f.id || "";
             })
             .filter(Boolean);
-          const fileUrls = fileIds.map(
-            (id) => `${SERVER_URL}/api/health-records/files/${id}`,
-          );
+          const fileUrls = fileIds.map((id) => resolveFileUrl(id));
 
           let agentMedNames = [];
           const tests = Array.isArray(item.tests) ? item.tests : [];

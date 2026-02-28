@@ -1,4 +1,58 @@
-const SERVER_URL = "http://127.0.0.1:13002"; // The default address of hostAgentAPI is http://127.0.0.1:13002
+const DEFAULT_SERVER_URL = "http://127.0.0.1:13002";
+
+const normalizeBaseUrl = (raw) => {
+  const s = String(raw || "").trim();
+  if (!s) return "";
+  return s.replace(/\/+$/, "");
+};
+
+const getServerUrlFromRuntime = () => {
+  try {
+    const stored =
+      wx.getStorageSync("SERVER_URL") ||
+      wx.getStorageSync("serverUrl") ||
+      wx.getStorageSync("server_url") ||
+      "";
+    if (stored) return normalizeBaseUrl(stored);
+
+    const ext = wx.getExtConfigSync ? wx.getExtConfigSync() : null;
+    const extUrl = ext && (ext.SERVER_URL || ext.serverUrl || ext.server_url);
+    if (extUrl) return normalizeBaseUrl(extUrl);
+  } catch (e) {}
+
+  return normalizeBaseUrl(DEFAULT_SERVER_URL);
+};
+
+const SERVER_URL = getServerUrlFromRuntime();
+
+const ensureHttpsUrl = (url) => {
+  const s = String(url || "").trim();
+  if (!s) return "";
+  if (s.startsWith("https://")) return s;
+  if (s.startsWith("http://")) return `https://${s.slice("http://".length)}`;
+  return s;
+};
+
+const isReleaseLike = () => {
+  try {
+    const v = wx.getAccountInfoSync
+      ? wx.getAccountInfoSync().miniProgram.envVersion
+      : "";
+    return v === "release" || v === "trial";
+  } catch (e) {
+    return false;
+  }
+};
+
+const resolveFileUrl = (fileIdOrUrl) => {
+  if (!fileIdOrUrl) return "";
+  const s = String(fileIdOrUrl);
+  const url =
+    s.startsWith("http://") || s.startsWith("https://")
+      ? s
+      : `${SERVER_URL}/api/health-records/files/${encodeURIComponent(s)}`;
+  return isReleaseLike() ? ensureHttpsUrl(url) : url;
+};
 
 // A generic request function
 const request = (endpoint, options = {}) => {
@@ -98,7 +152,7 @@ const sendMessage = (message) => {
   // Extract selected_agent from metadata and add to headers
   if (message.metadata && message.metadata.selected_agent) {
     options.headers["X-Target-Agent"] = encodeURIComponent(
-      message.metadata.selected_agent
+      message.metadata.selected_agent,
     );
   }
 
@@ -122,7 +176,7 @@ const listMessages = (conversationId) => {
 const uploadFile = (
   filePath,
   endpoint = "/api/health-records/upload",
-  formData = {}
+  formData = {},
 ) => {
   return new Promise((resolve, reject) => {
     const userInfo = wx.getStorageSync("userInfo");
@@ -399,7 +453,7 @@ const markMedicationSkipped = (reminderId, scheduledTime, user_id = null) => {
 const addMedicationRemindersToMedication = (
   medicationId,
   reminderData,
-  user_id = null
+  user_id = null,
 ) => {
   let url = `/api/medications/${medicationId}/reminders`;
   if (user_id) {
@@ -495,7 +549,7 @@ const sendTaskStreaming = (
   payload,
   onMessage,
   onError,
-  onComplete
+  onComplete,
 ) => {
   // 确保 agentUrl 没有末尾斜杠
   const cleanAgentUrl = agentUrl.endsWith("/")
@@ -546,7 +600,7 @@ const sendTaskStreaming = (
     // 累积缓冲区处理多字节字符截断问题
     if (requestTask._pendingBuffer) {
       const newBuffer = new Uint8Array(
-        requestTask._pendingBuffer.length + uint8Array.length
+        requestTask._pendingBuffer.length + uint8Array.length,
       );
       newBuffer.set(requestTask._pendingBuffer, 0);
       newBuffer.set(uint8Array, requestTask._pendingBuffer.length);
@@ -637,7 +691,7 @@ const sendTaskStreamingViaHost = (
   payload,
   onMessage,
   onError,
-  onComplete
+  onComplete,
 ) => {
   const requestBody = {
     jsonrpc: "2.0",
@@ -678,7 +732,7 @@ const sendTaskStreamingViaHost = (
 
     if (requestTask._pendingBuffer) {
       const newBuffer = new Uint8Array(
-        requestTask._pendingBuffer.length + uint8Array.length
+        requestTask._pendingBuffer.length + uint8Array.length,
       );
       newBuffer.set(requestTask._pendingBuffer, 0);
       newBuffer.set(uint8Array, requestTask._pendingBuffer.length);
@@ -782,7 +836,7 @@ function utf8ArrayToString(array) {
         char2 = array[i++];
         char3 = array[i++];
         out += String.fromCharCode(
-          ((c & 0x0f) << 12) | ((char2 & 0x3f) << 6) | (char3 & 0x3f)
+          ((c & 0x0f) << 12) | ((char2 & 0x3f) << 6) | (char3 & 0x3f),
         );
         break;
     }
@@ -853,5 +907,6 @@ module.exports = {
   sendTaskStreaming,
   sendTaskStreamingViaHost,
   resolveAgentUrl,
+  resolveFileUrl,
   SERVER_URL,
 };

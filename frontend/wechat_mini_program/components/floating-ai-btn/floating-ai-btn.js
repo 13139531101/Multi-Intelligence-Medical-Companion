@@ -14,9 +14,9 @@ Component({
   lifetimes: {
     attached() {
       try {
-        const info = wx.getSystemInfoSync();
-        const screenWidth = info.windowWidth || 375;
-        const screenHeight = info.windowHeight || 667;
+        const info = wx.getWindowInfo ? wx.getWindowInfo() : null;
+        const screenWidth = (info && info.windowWidth) || 375;
+        const screenHeight = (info && info.windowHeight) || 667;
         const sizeRpx = 110;
         const marginRpx = 30;
         const sizePx = Math.round((sizeRpx * screenWidth) / 750);

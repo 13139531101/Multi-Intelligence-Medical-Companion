@@ -141,6 +141,7 @@ Page({
   shouldPersistConversationToDb(agentType) {
     return [
       "default",
+      "host",
       "consultation",
       "medication",
       "summary",
@@ -1179,6 +1180,17 @@ Page({
 
     // 智能体配置
     switch (agentType) {
+      case "host":
+        title = "智能协调助手";
+        welcomeMsg =
+          "您好！我是智能协调助手。我会根据您的问题自动调用健康档案、用药提醒、就诊摘要、健康顾问等能力来完成任务。";
+        suggestions = [
+          "我最近头痛发烧怎么办？",
+          "查看我的健康档案",
+          "帮我设置用药提醒",
+          "生成最近一次就诊摘要",
+        ];
+        break;
       case "health_records":
         title = "健康档案管理员";
         targetAgentName = "健康档案管理员";
