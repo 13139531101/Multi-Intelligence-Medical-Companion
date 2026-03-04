@@ -120,31 +120,33 @@
       <text class="section-more" bindtap="viewAllRecords">查看全部</text>
     </view>
 
-    <view wx:if="{{medicationRecords.length > 0}}" class="records-list">
-      <view wx:for="{{medicationRecords}}" wx:key="id" class="record-item" bindtap="viewRecordDetail" data-id="{{item.id}}">
-        <view class="record-header">
-          <text class="record-name">{{item.name}}</text>
-          <text class="record-date">{{item.date}}</text>
-        </view>
-        <view class="record-info">
-          <text class="record-dose">{{item.dose}} {{item.unit}}</text>
-          <text class="record-frequency">{{item.frequency}}</text>
-          <text class="record-duration">{{item.duration}}</text>
-        </view>
-        <view class="record-progress">
-          <view class="progress-bar">
-            <view class="progress-fill" style="width: {{item.progress}}%"></view>
+    <scroll-view wx:if="{{medicationRecords.length > 0}}" class="records-scroll-vertical" scroll-y enhanced show-scrollbar="{{true}}">
+      <view class="records-list">
+        <view wx:for="{{medicationRecords}}" wx:key="id" class="record-item" bindtap="viewRecordDetail" data-id="{{item.id}}">
+          <view class="record-header">
+            <text class="record-name">{{item.name}}</text>
+            <text class="record-date">{{item.date}}</text>
           </view>
-          <text class="progress-text">{{item.progress}}%</text>
-        </view>
-        <view class="record-status">
-          <view class="record-status-row">
-            <text class="status-tag {{item.status}}">{{getStatusName(item.status)}}</text>
-            <button size="mini" class="record-delete-btn" catchtap="deleteMedication" data-id="{{item.id}}">删除</button>
+          <view class="record-info">
+            <text class="record-dose">{{item.dose}} {{item.unit}}</text>
+            <text class="record-frequency">{{item.frequency}}</text>
+            <text class="record-duration">{{item.duration}}</text>
+          </view>
+          <view class="record-progress">
+            <view class="progress-bar">
+              <view class="progress-fill" style="width: {{item.progress}}%"></view>
+            </view>
+            <text class="progress-text">{{item.progress}}%</text>
+          </view>
+          <view class="record-status">
+            <view class="record-status-row">
+              <text class="status-tag {{item.status}}">{{getStatusName(item.status)}}</text>
+              <button size="mini" class="record-delete-btn" catchtap="deleteMedication" data-id="{{item.id}}">删除</button>
+            </view>
           </view>
         </view>
       </view>
-    </view>
+    </scroll-view>
 
     <view wx:else class="empty-state">
       <text class="empty-icon">📋</text>

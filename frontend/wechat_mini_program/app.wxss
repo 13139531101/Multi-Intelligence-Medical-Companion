@@ -1,19 +1,21 @@
 page {
-  --primary-color: #007aff;
-  --primary-gradient: linear-gradient(135deg, #007aff 0%, #0056cc 100%);
-  --secondary-color: #5856d6;
-  --success-color: #34c759;
-  --warning-color: #ff9500;
-  --danger-color: #ff3b30;
-  --bg-color: #f5f7fa;
-  --card-bg: #ffffff;
-  --text-main: #1c1c1e;
-  --text-sub: #8e8e93;
-  --border-radius-sm: 12rpx;
-  --border-radius-md: 20rpx;
-  --border-radius-lg: 32rpx;
-  --shadow-sm: 0 2rpx 8rpx rgba(0, 0, 0, 0.04);
-  --shadow-md: 0 8rpx 24rpx rgba(0, 0, 0, 0.08);
+  --primary-color: #4F46E5;
+  --primary-gradient: linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%);
+  --secondary-color: #10B981;
+  --success-color: #10B981;
+  --warning-color: #F59E0B;
+  --danger-color: #EF4444;
+  --bg-color: #F3F4F6;
+  --card-bg: #FFFFFF;
+  --text-main: #111827;
+  --text-sub: #6B7280;
+  --border-radius-sm: 16rpx;
+  --border-radius-md: 24rpx;
+  --border-radius-lg: 40rpx;
+  --shadow-sm: 0 2rpx 4rpx rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 10rpx 30rpx -10rpx rgba(0, 0, 0, 0.08);
+  --shadow-lg: 0 20rpx 40rpx -12rpx rgba(0, 0, 0, 0.12);
+  --shadow-primary: 0 10rpx 25rpx -5rpx rgba(79, 70, 229, 0.4);
 }
 
 .container {
@@ -26,14 +28,20 @@ page {
   font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Helvetica,
     Segoe UI, Arial, Roboto, 'PingFang SC', 'miui', 'Hiragino Sans GB', 'Microsoft Yahei',
     sans-serif;
+  -webkit-font-smoothing: antialiased;
 }
 
 .card {
   background: var(--card-bg);
   border-radius: var(--border-radius-md);
-  box-shadow: var(--shadow-sm);
-  padding: 30rpx;
-  margin-bottom: 30rpx;
+  box-shadow: var(--shadow-md);
+  padding: 32rpx;
+  margin-bottom: 32rpx;
+  transition: all 0.3s ease;
+}
+
+.card:active {
+  transform: scale(0.98);
 }
 
 .primary-color {

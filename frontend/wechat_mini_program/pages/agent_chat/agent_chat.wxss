@@ -9,7 +9,7 @@
 
 /* 聊天历史区域 */
 .chat-history {
-  padding: 30rpx 20rpx;
+  padding: 32rpx;
   background-color: var(--bg-color);
   height: 100vh;
   box-sizing: border-box;
@@ -18,26 +18,26 @@
 
 .jump-to-bottom {
   position: absolute;
-  right: 30rpx;
-  bottom: calc(260rpx + env(safe-area-inset-bottom));
-  padding: 16rpx 24rpx;
+  right: 32rpx;
+  bottom: calc(280rpx + env(safe-area-inset-bottom));
+  padding: 16rpx 32rpx;
   border-radius: 999rpx;
-  background: rgba(0, 0, 0, 0.72);
+  background: rgba(17, 24, 39, 0.8);
   color: #fff;
   font-size: 26rpx;
   z-index: 20;
   display: flex;
   align-items: center;
-  box-shadow: 0 4rpx 12rpx rgba(0, 0, 0, 0.15);
-  backdrop-filter: blur(10px);
+  box-shadow: var(--shadow-md);
+  backdrop-filter: blur(8px);
 }
 
 /* 消息容器 */
 .message-bubble-container {
   display: flex;
-  align-items: flex-start;
-  margin-bottom: 40rpx;
-  padding: 0 10rpx;
+  align-items: flex-end; /* Align to bottom for better chat feel */
+  margin-bottom: 48rpx;
+  padding: 0;
 }
 
 .message-bubble-container.user {
@@ -52,11 +52,11 @@
 .avatar {
   width: 80rpx;
   height: 80rpx;
-  border-radius: 50%;
+  border-radius: 24rpx; /* Squircle */
   display: flex;
   align-items: center;
   justify-content: center;
-  margin: 0 20rpx;
+  margin: 0 24rpx;
   flex-shrink: 0;
   box-shadow: var(--shadow-sm);
 }
@@ -66,37 +66,40 @@
 }
 
 .ai-avatar {
-  background: linear-gradient(135deg, #34c759 0%, #30a14e 100%);
+  background: linear-gradient(135deg, var(--secondary-color) 0%, #059669 100%);
 }
 
 .avatar-text {
   color: white;
   font-size: 28rpx;
-  font-weight: bold;
+  font-weight: 700;
 }
 
 /* 消息气泡 */
 .message-bubble {
   max-width: 520rpx;
-  padding: 24rpx 30rpx;
+  padding: 28rpx 32rpx;
   border-radius: 32rpx;
   word-wrap: break-word;
   position: relative;
   box-shadow: var(--shadow-sm);
+  font-size: 30rpx;
+  line-height: 1.6;
 }
 
 .message-bubble-container.user .message-bubble {
   background: var(--primary-gradient);
   color: white;
-  border-bottom-right-radius: 8rpx;
+  border-bottom-right-radius: 4rpx;
   border-top-right-radius: 32rpx;
+  box-shadow: var(--shadow-primary);
 }
 
 .message-bubble-container.assistant .message-bubble {
-  background-color: white;
+  background-color: var(--card-bg);
   color: var(--text-main);
-  border: 1rpx solid rgba(0, 0, 0, 0.05);
-  border-bottom-left-radius: 8rpx;
+  border: none;
+  border-bottom-left-radius: 4rpx;
   border-top-left-radius: 32rpx;
 }
 
