@@ -386,6 +386,26 @@
   margin-right: 20rpx;
 }
 
+.attachment-button,
+.voice-button {
+  margin: 0 12rpx 0 0 !important;
+  padding: 8rpx 20rpx !important;
+  min-height: 56rpx !important;
+  line-height: 1.4 !important;
+  border-radius: 24rpx !important;
+  border: 1rpx solid rgba(0, 0, 0, 0.08) !important;
+  background: #fff !important;
+  color: var(--text-main) !important;
+  font-size: 28rpx !important;
+  width: auto !important;
+}
+
+.voice-button.recording {
+  background: #fee2e2 !important;
+  color: #b91c1c !important;
+  border-color: #fecaca !important;
+}
+
 .send-button {
   margin: 0 !important;
   padding: 10rpx 30rpx !important;
@@ -407,4 +427,48 @@
 .send-button.active {
   background: var(--primary-gradient) !important;
   box-shadow: 0 4rpx 12rpx rgba(0, 122, 255, 0.3);
+}
+
+.pending-attachments {
+  margin-top: 16rpx;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12rpx;
+}
+
+.pending-attachment-item {
+  display: flex;
+  align-items: center;
+  max-width: 100%;
+  padding: 8rpx 12rpx;
+  border-radius: 20rpx;
+  background: #f3f4f6;
+}
+
+.pending-image {
+  width: 48rpx;
+  height: 48rpx;
+  border-radius: 10rpx;
+  margin-right: 10rpx;
+}
+
+.pending-file-icon {
+  font-size: 30rpx;
+  margin-right: 10rpx;
+}
+
+.pending-name {
+  max-width: 260rpx;
+  font-size: 22rpx;
+  color: var(--text-main);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pending-remove {
+  margin-left: 10rpx;
+  font-size: 22rpx;
+  color: var(--text-sub);
+  padding: 4rpx 8rpx;
 }

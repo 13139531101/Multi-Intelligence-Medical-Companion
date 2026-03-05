@@ -15,8 +15,9 @@ from auth import router as auth_router, get_current_user, DB_CONFIG
 from auth_middleware import get_current_user_optional
 from dotenv import load_dotenv
 import json
+import base64
 from datetime import date, datetime, timedelta, timezone
-from urllib.parse import unquote
+from urllib.parse import unquote, urlparse
 import httpx
 
 load_dotenv(override=False)
@@ -290,6 +291,309 @@ def _resolve_agent_url_by_name(agent_name: str) -> str | None:
     return None
 
 
+def _safe_int_env(name: str, default: int) -> int:
+    try:
+        v = int(str(os.getenv(name, "")).strip())
+        return v if v > 0 else default
+    except Exception:
+        return default
+
+
+async def _read_image_bytes_from_uri(uri: str) -> bytes:
+    file_uri = str(uri or "").strip()
+    if not file_uri:
+        return b""
+
+    parsed = urlparse(file_uri)
+    path = parsed.path if parsed.scheme else file_uri
+    upload_dir = getattr(agent_server, "_upload_dir", "")
+    max_bytes = _safe_int_env("HOSTAPI_CHAT_OCR_MAX_IMAGE_BYTES", 10 * 1024 * 1024)
+
+    try:
+        if "/files/" in path and upload_dir:
+            file_id = path.split("/files/", 1)[1].split("?", 1)[0].strip("/")
+            file_id = os.path.basename(unquote(file_id))
+            local_path = os.path.join(upload_dir, file_id)
+            if os.path.isfile(local_path):
+                def _read_local_file() -> bytes:
+                    with open(local_path, "rb") as f:
+                        return f.read()
+                data = await anyio.to_thread.run_sync(_read_local_file)
+                return data[:max_bytes]
+    except Exception:
+        pass
+
+    if file_uri.startswith("http://") or file_uri.startswith("https://"):
+        try:
+            timeout = httpx.Timeout(connect=8.0, read=20.0, write=20.0, pool=8.0)
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                resp = await client.get(file_uri)
+                if 200 <= resp.status_code < 300:
+                    return (resp.content or b"")[:max_bytes]
+        except Exception:
+            return b""
+
+    return b""
+
+
+def _parse_bool_like(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return None
+    text = str(value).strip().lower()
+    if text in {"1", "true", "on", "yes"}:
+        return True
+    if text in {"0", "false", "off", "no"}:
+        return False
+    return None
+
+
+def _resolve_request_ocr_options(params: dict | None, message: dict | None) -> tuple[str | None, bool | None]:
+    candidates: list[dict] = []
+    if isinstance(params, dict):
+        pmeta = params.get("metadata")
+        if isinstance(pmeta, dict):
+            candidates.append(pmeta)
+    if isinstance(message, dict):
+        mmeta = message.get("metadata")
+        if isinstance(mmeta, dict):
+            candidates.append(mmeta)
+    engine: str | None = None
+    strict: bool | None = None
+    for meta in candidates:
+        if not engine:
+            for k in ("ocr_engine", "chat_ocr_engine", "ocrEngine", "chatOcrEngine"):
+                v = meta.get(k)
+                if v is not None and str(v).strip():
+                    engine = str(v).strip().lower()
+                    break
+        if strict is None:
+            for k in ("ocr_strict", "chat_ocr_strict", "ocrStrict", "chatOcrStrict"):
+                b = _parse_bool_like(meta.get(k))
+                if b is not None:
+                    strict = b
+                    break
+    return engine, strict
+
+
+async def _extract_ocr_text_from_image_bytes(
+    image_bytes: bytes,
+    ocr_engine_override: str | None = None,
+    strict_override: bool | None = None,
+) -> str:
+    if not image_bytes:
+        return ""
+    ocr_engine = (
+        str(ocr_engine_override).strip().lower()
+        if ocr_engine_override is not None and str(ocr_engine_override).strip()
+        else str(os.getenv("HOSTAPI_CHAT_OCR_ENGINE", "legacy")).strip().lower()
+    )
+    strict_mode = (
+        bool(strict_override)
+        if strict_override is not None
+        else str(os.getenv("HOSTAPI_CHAT_OCR_STRICT", "0")).strip().lower() in {"1", "true", "on"}
+    )
+    prefer_qwen_vl = ocr_engine in {"qwen", "qwen_vl", "qwen35", "qwen3.5", "qwen3.5-vl", "qwen_vl_ocr"}
+    if prefer_qwen_vl:
+        qwen_text = await _extract_ocr_text_with_qwen_vl(image_bytes)
+        if qwen_text:
+            return qwen_text
+        if strict_mode:
+            return ""
+    extract_text = getattr(health_api, "extract_text_from_image", None) if "health_api" in globals() else None
+    if not extract_text:
+        return ""
+
+    b64_content = base64.b64encode(image_bytes).decode("utf-8")
+    try:
+        if hasattr(extract_text, "fn"):
+            text = await anyio.to_thread.run_sync(lambda: extract_text.fn(b64_content))
+        else:
+            text = await anyio.to_thread.run_sync(lambda: extract_text(b64_content))
+    except Exception:
+        return ""
+
+    raw = str(text or "").strip()
+    if not raw:
+        return ""
+    normalizer = getattr(health_api, "_normalize_ocr_text", None) if "health_api" in globals() else None
+    if callable(normalizer):
+        try:
+            raw = str(normalizer(raw) or "").strip()
+        except Exception:
+            pass
+    placeholder_checker = getattr(health_api, "_is_ocr_placeholder_text", None) if "health_api" in globals() else None
+    if callable(placeholder_checker):
+        try:
+            if placeholder_checker(raw):
+                return ""
+        except Exception:
+            pass
+    return raw
+
+
+def _parse_qwen_vl_content_to_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        texts: list[str] = []
+        for item in content:
+            if isinstance(item, str):
+                t = item.strip()
+                if t:
+                    texts.append(t)
+                continue
+            if not isinstance(item, dict):
+                continue
+            t = str(item.get("text") or "").strip()
+            if t:
+                texts.append(t)
+        return "\n".join(texts).strip()
+    return ""
+
+
+async def _extract_ocr_text_with_qwen_vl(image_bytes: bytes) -> str:
+    api_key = (
+        os.getenv("QWEN_API_KEY")
+        or os.getenv("DASHSCOPE_API_KEY")
+        or os.getenv("ALIYUN_DASHSCOPE_API_KEY")
+        or ""
+    ).strip()
+    if not api_key:
+        return ""
+    api_base = (
+        os.getenv("QWEN_VL_API_BASE")
+        or os.getenv("QWEN_ASR_API_BASE")
+        or "https://dashscope.aliyuncs.com/compatible/v1"
+    ).rstrip("/")
+    model_name = (os.getenv("QWEN_VL_MODEL") or "qwen3.5-vl-plus").strip()
+    prompt_text = (
+        os.getenv("HOSTAPI_CHAT_OCR_QWEN_PROMPT")
+        or "请识别这张图片中的所有文字，按原始结构输出纯文本，不要解释。"
+    ).strip()
+    timeout = httpx.Timeout(connect=10.0, read=60.0, write=60.0, pool=10.0)
+    max_tokens = _safe_int_env("HOSTAPI_CHAT_OCR_QWEN_MAX_TOKENS", 1200)
+    image_b64 = base64.b64encode(image_bytes).decode("utf-8")
+    data_url = f"data:image/jpeg;base64,{image_b64}"
+    payload = {
+        "model": model_name,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt_text},
+                    {"type": "image_url", "image_url": {"url": data_url}},
+                ],
+            }
+        ],
+        "temperature": 0,
+        "max_tokens": max_tokens,
+    }
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.post(
+                f"{api_base}/chat/completions",
+                headers=headers,
+                json=payload,
+            )
+    except Exception:
+        return ""
+    try:
+        data = resp.json()
+    except Exception:
+        return ""
+    if resp.status_code < 200 or resp.status_code >= 300:
+        return ""
+    text = ""
+    if isinstance(data, dict):
+        choices = data.get("choices")
+        if isinstance(choices, list) and choices:
+            first = choices[0] if isinstance(choices[0], dict) else {}
+            msg = first.get("message") if isinstance(first, dict) else {}
+            if isinstance(msg, dict):
+                text = _parse_qwen_vl_content_to_text(msg.get("content"))
+        if not text:
+            output = data.get("output")
+            if isinstance(output, dict):
+                out_choices = output.get("choices")
+                if isinstance(out_choices, list) and out_choices:
+                    first = out_choices[0] if isinstance(out_choices[0], dict) else {}
+                    msg = first.get("message") if isinstance(first, dict) else {}
+                    if isinstance(msg, dict):
+                        text = _parse_qwen_vl_content_to_text(msg.get("content"))
+    raw = str(text or "").strip()
+    if not raw:
+        return ""
+    normalizer = getattr(health_api, "_normalize_ocr_text", None) if "health_api" in globals() else None
+    if callable(normalizer):
+        try:
+            raw = str(normalizer(raw) or "").strip()
+        except Exception:
+            pass
+    placeholder_checker = getattr(health_api, "_is_ocr_placeholder_text", None) if "health_api" in globals() else None
+    if callable(placeholder_checker):
+        try:
+            if placeholder_checker(raw):
+                return ""
+        except Exception:
+            pass
+    return raw
+
+
+async def _inject_auto_ocr_parts(body: dict) -> int:
+    if str(os.getenv("HOSTAPI_CHAT_AUTO_OCR", "1")).strip().lower() in {"0", "false", "off"}:
+        return 0
+    params = body.get("params") if isinstance(body, dict) else None
+    message = params.get("message") if isinstance(params, dict) else None
+    parts = message.get("parts") if isinstance(message, dict) else None
+    if not isinstance(parts, list) or not parts:
+        return 0
+    req_engine, req_strict = _resolve_request_ocr_options(params, message)
+
+    max_images = _safe_int_env("HOSTAPI_CHAT_OCR_MAX_IMAGES", 3)
+    max_text_len = _safe_int_env("HOSTAPI_CHAT_OCR_TEXT_LIMIT", 1200)
+    extracted_blocks: list[str] = []
+    scanned = 0
+
+    for p in parts:
+        if scanned >= max_images:
+            break
+        if not isinstance(p, dict) or p.get("type") != "file":
+            continue
+        f = p.get("file") or {}
+        if not isinstance(f, dict):
+            continue
+        mime = str(f.get("mimeType") or "").lower().strip()
+        uri = str(f.get("uri") or "").strip()
+        name = str(f.get("name") or f"图片{scanned + 1}").strip()
+        is_image = mime.startswith("image/") or any(
+            uri.lower().split("?", 1)[0].endswith(ext)
+            for ext in [".png", ".jpg", ".jpeg", ".bmp", ".webp", ".gif", ".heic"]
+        )
+        if not is_image:
+            continue
+        scanned += 1
+        image_bytes = await _read_image_bytes_from_uri(uri)
+        text = await _extract_ocr_text_from_image_bytes(
+            image_bytes,
+            ocr_engine_override=req_engine,
+            strict_override=req_strict,
+        )
+        if not text:
+            continue
+        clipped = text[:max_text_len]
+        extracted_blocks.append(f"【{name}】\n{clipped}")
+
+    if not extracted_blocks:
+        return 0
+
+    injected_text = "用户本轮上传图片的OCR结果如下，请结合这些文本与上下文回答：\n\n" + "\n\n".join(extracted_blocks)
+    parts.append({"type": "text", "text": injected_text})
+    return len(extracted_blocks)
+
+
 @app.post("/a2a")
 async def a2a_streaming_proxy(request: Request):
     try:
@@ -319,6 +623,11 @@ async def a2a_streaming_proxy(request: Request):
     agent_url = _resolve_agent_url_by_name(agent_name)
     if not agent_url:
         raise HTTPException(status_code=404, detail="未找到目标智能体")
+
+    try:
+        await _inject_auto_ocr_parts(body)
+    except Exception as e:
+        logger.warning(f"自动OCR注入失败: {e}")
 
     auth = request.headers.get("authorization") or request.headers.get("Authorization") or ""
     headers: dict[str, str] = {"Content-Type": "application/json"}
@@ -3964,6 +4273,76 @@ async def generate_ai_summary(request: Request, user: dict = Depends(get_current
 @app.api_route("/ping", methods=["GET", "POST"])
 async def ping():
     return "Pong"
+
+@app.post("/api/audio/transcribe")
+async def transcribe_audio_with_qwen(
+    file: UploadFile = File(...),
+    current_user: Optional[Dict[str, Any]] = Depends(get_current_user_optional),
+):
+    del current_user
+    file_bytes = await file.read()
+    if not file_bytes:
+        raise HTTPException(status_code=400, detail="音频文件为空")
+
+    model_name = (os.getenv("QWEN_ASR_MODEL") or "qwen-audio-asr").strip()
+    api_key = (
+        os.getenv("QWEN_API_KEY")
+        or os.getenv("DASHSCOPE_API_KEY")
+        or os.getenv("ALIYUN_DASHSCOPE_API_KEY")
+    )
+    if not api_key:
+        raise HTTPException(status_code=500, detail="未配置QWEN_API_KEY或DASHSCOPE_API_KEY")
+
+    api_base = (os.getenv("QWEN_ASR_API_BASE") or "https://dashscope.aliyuncs.com/compatible/v1").rstrip("/")
+    endpoint = f"{api_base}/audio/transcriptions"
+    mime_type = (file.content_type or "audio/mpeg").strip() or "audio/mpeg"
+    file_name = (file.filename or "audio.mp3").strip() or "audio.mp3"
+    language = (os.getenv("QWEN_ASR_LANGUAGE") or "").strip()
+
+    data = {"model": model_name}
+    if language:
+        data["language"] = language
+
+    headers = {"Authorization": f"Bearer {api_key}"}
+    timeout = httpx.Timeout(connect=15.0, read=120.0, write=120.0, pool=15.0)
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.post(
+                endpoint,
+                data=data,
+                files={"file": (file_name, file_bytes, mime_type)},
+                headers=headers,
+            )
+    except Exception as e:
+        logger.error(f"语音识别请求失败: {e}")
+        raise HTTPException(status_code=502, detail="语音识别服务不可用")
+
+    payload: Dict[str, Any]
+    try:
+        payload = resp.json()
+    except Exception:
+        payload = {"raw": (resp.text or "")[:3000]}
+
+    if resp.status_code < 200 or resp.status_code >= 300:
+        detail = payload.get("error") if isinstance(payload, dict) else payload
+        raise HTTPException(status_code=502, detail=f"语音识别失败: {detail}")
+
+    text = ""
+    if isinstance(payload, dict):
+        text = (
+            str(payload.get("text") or "").strip()
+            or str((payload.get("result") or {}).get("text") or "").strip()
+            or str((payload.get("output") or {}).get("text") or "").strip()
+            or str(
+                ((payload.get("output") or {}).get("choices") or [{}])[0]
+                .get("message", {})
+                .get("content", "")
+            ).strip()
+        )
+    if not text:
+        raise HTTPException(status_code=502, detail="语音识别返回为空")
+
+    return {"text": text, "model": model_name}
 
 # 智能路由接口 - 统一API入口
 

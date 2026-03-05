@@ -7,6 +7,8 @@ import json
 import base64
 import asyncio
 import sys
+import re
+import hashlib
 from dotenv import load_dotenv
 from typing import AsyncIterable, Any, Literal
 from pydantic import BaseModel
@@ -76,6 +78,8 @@ class BasicAgent:
         self.servers = {}
         self.all_functions = []
         self.session_conversations = collections.defaultdict(list) # Initial conversation might be built later in run() or here
+        self.session_rollups = collections.defaultdict(str)
+        self._memory_hash_by_session = {}
         self.tool_ready = False
         # 只能做同步的事情，不能直接“等”异步的初始化完成，不能在这里初始化
         # loop = asyncio.get_event_loop()
@@ -204,7 +208,149 @@ class BasicAgent:
         self.tool_ready = True # Setup was successful
         return True
 
-    async def run_inference(self, user_query, sessionId, stream=True, user_id=None):
+    def _clip_text(self, value: Any, limit: int = 500) -> str:
+        text = "" if value is None else str(value)
+        text = re.sub(r"\s+", " ", text).strip()
+        if len(text) <= limit:
+            return text
+        return text[: max(0, limit - 3)] + "..."
+
+    def _sanitize_memory_text(self, text: str) -> str:
+        if not text:
+            return ""
+        s = str(text)
+        s = re.sub(r"(?i)\b(bearer|token|api[_-]?key|authorization)\s*[:=]\s*[^\s,;]+", r"\1:[REDACTED]", s)
+        s = re.sub(r"\b1[3-9]\d{9}\b", "[PHONE]", s)
+        s = re.sub(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b", "[EMAIL]", s)
+        s = re.sub(r"\b\d{17}[\dXx]\b", "[IDCARD]", s)
+        return s.strip()
+
+    def _should_store_memory_text(self, session_id: str, text: str) -> bool:
+        normalized = self._sanitize_memory_text(text)
+        if not normalized:
+            return False
+        if len(normalized) < 8:
+            return False
+        if normalized in ("{}", "[]", "null", "None"):
+            return False
+        digest = hashlib.sha1(normalized.encode("utf-8", errors="ignore")).hexdigest()
+        if self._memory_hash_by_session.get(session_id) == digest:
+            return False
+        self._memory_hash_by_session[session_id] = digest
+        return True
+
+    def _store_memory_async(self, session_id: str, user_id: str, text: str, source: str, importance: float = 0.6):
+        if not self.memory_system:
+            return
+        sanitized = self._sanitize_memory_text(text)
+        if not self._should_store_memory_text(session_id, sanitized):
+            return
+        agent_id = os.environ.get("AGENT_ID", "A2AAgent")
+        payload = {
+            "text": self._clip_text(sanitized, int(os.getenv("MEMORY_WRITE_MAX_CHARS", "1800"))),
+            "metadata": {"sessionId": session_id, "source": source},
+        }
+
+        async def _store():
+            try:
+                await asyncio.to_thread(
+                    self.memory_system.store_memory,
+                    agent_id=agent_id,
+                    user_id=user_id,
+                    content=payload,
+                    memory_type="working",
+                    importance=importance,
+                )
+            except Exception as e:
+                logger.warning(f"写入记忆失败：{e}")
+
+        try:
+            asyncio.create_task(asyncio.wait_for(_store(), timeout=2.0))
+        except Exception:
+            pass
+
+    def _memory_item_text(self, item: dict) -> str:
+        if not isinstance(item, dict):
+            return ""
+        content = item.get("content") or {}
+        text = ""
+        if isinstance(content, dict):
+            text = content.get("text") or ""
+        if not text:
+            text = item.get("text") or ""
+        return self._clip_text(self._sanitize_memory_text(text), 220)
+
+    def _format_memory_block(self, memories: list[dict]) -> str:
+        lines = []
+        for idx, m in enumerate(memories or [], start=1):
+            text = self._memory_item_text(m)
+            if not text:
+                continue
+            mid = m.get("id") or m.get("memory_id") or f"mem_{idx}"
+            lines.append(f"[E{idx}|{mid}] {text}")
+        if not lines:
+            return ""
+        return "可参考历史证据：\n" + "\n".join(lines[:8]) + "\n回答时优先引用 E 编号。"
+
+    def _rollup_text_from_messages(self, messages: list[dict]) -> str:
+        if not messages:
+            return ""
+        max_items = int(os.getenv("A2A_ROLLUP_MAX_ITEMS", "20"))
+        lines = []
+        for m in messages[-max_items:]:
+            if not isinstance(m, dict):
+                continue
+            role = str(m.get("role") or "")
+            if role not in ("user", "assistant", "tool"):
+                continue
+            content = m.get("content")
+            text = ""
+            if isinstance(content, str):
+                text = content
+            elif isinstance(content, dict):
+                text = json.dumps(content, ensure_ascii=False)
+            if role == "assistant" and m.get("tool_calls"):
+                names = []
+                for tc in m.get("tool_calls") or []:
+                    fn_name = ((tc or {}).get("function") or {}).get("name")
+                    if fn_name:
+                        names.append(fn_name)
+                if names:
+                    text = (text + " " + f"tools:{','.join(names[:4])}").strip()
+            text = self._clip_text(self._sanitize_memory_text(text), 180)
+            if not text:
+                continue
+            prefix = "用户" if role == "user" else ("助手" if role == "assistant" else "工具")
+            lines.append(f"{prefix}:{text}")
+        merged = "；".join(lines)
+        return self._clip_text(merged, int(os.getenv("A2A_ROLLUP_MAX_CHARS", "1200")))
+
+    def _compact_session_context(self, session_id: str):
+        conv = self.session_conversations[session_id]
+        if len(conv) <= 2:
+            return
+        non_system = conv[1:]
+        dialog_indexes = [
+            i for i, m in enumerate(non_system)
+            if isinstance(m, dict) and m.get("role") in ("user", "assistant")
+        ]
+        keep_rounds = max(1, int(os.getenv("A2A_KEEP_RECENT_ROUNDS", "2")))
+        keep_dialog_count = keep_rounds * 2
+        if len(dialog_indexes) <= keep_dialog_count:
+            return
+        cut_index = dialog_indexes[-keep_dialog_count]
+        old_messages = non_system[:cut_index]
+        recent_messages = non_system[cut_index:]
+        new_rollup = self._rollup_text_from_messages(old_messages)
+        if new_rollup:
+            old_rollup = self.session_rollups.get(session_id, "")
+            merged = (old_rollup + "；" + new_rollup).strip("；")
+            self.session_rollups[session_id] = self._clip_text(
+                merged, int(os.getenv("A2A_ROLLUP_STORE_MAX_CHARS", "1800"))
+            )
+        self.session_conversations[session_id] = [conv[0]] + recent_messages
+
+    async def run_inference(self, user_query, sessionId, stream=True, user_id=None, user_parts=None):
         """
         推理和工具的设置
         """
@@ -229,7 +375,7 @@ class BasicAgent:
 
 
         # Build initial conversation (system message + user query)
-        self._build_initial_conversation(sessionId, user_query, user_id=user_id) # This helper can be synchronous
+        self._build_initial_conversation(sessionId, user_query, user_id=user_id, user_parts=user_parts) # This helper can be synchronous
 
 
         # try:
@@ -241,7 +387,7 @@ class BasicAgent:
         #     # Ensure cleanup is called when run() finishes or an exception occurs
         #     await self.cleanup() # <-- AWAIT is valid here
 
-    def _build_initial_conversation(self, sessionId, user_query, user_id=None):
+    def _build_initial_conversation(self, sessionId, user_query, user_id=None, user_parts=None):
          # Helper method to build the initial conversation list (synchronous)
          self.conversation = []
          # 默认的prompt
@@ -259,27 +405,42 @@ class BasicAgent:
          header_info = f"当前用户ID: {final_user_id}。\n当前时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}。"
          system_content = header_info + "\n" + agent_prompt
 
+         rollup = self.session_rollups.get(sessionId, "")
+         if rollup:
+             system_content = system_content + "\n对话历史滚动总结：" + self._clip_text(rollup, 1800)
+
+         attachment_text = ""
+         attachment_briefs = []
+         for p in user_parts or []:
+             if not isinstance(p, dict):
+                 continue
+             if p.get("type") == "file":
+                 f = p.get("file") or {}
+                 name = self._clip_text(f.get("name") or "附件", 60)
+                 mime = self._clip_text(f.get("mimeType") or "application/octet-stream", 80)
+                 uri = self._clip_text(f.get("uri") or "", 120)
+                 has_bytes = bool(f.get("bytes"))
+                 attachment_briefs.append(f"name={name},mime={mime},uri={uri},has_bytes={has_bytes}")
+         if attachment_briefs:
+             attachment_text = "用户本轮附带文件：" + " | ".join(attachment_briefs[:3])
+
          # 注入记忆上下文（若启用记忆系统）
          try:
              if self.memory_system:
                  agent_id = os.environ.get("AGENT_ID", "A2AAgent")
                  # 使用确定的用户ID进行记忆检索
+                 memory_query = user_query if not attachment_text else f"{user_query}\n{attachment_text}"
                  memories = self.memory_system.search_memories(
-                     query=user_query,
+                     query=memory_query,
                      agent_id=agent_id,
                      user_id=final_user_id,
                      memory_types=["long_term", "working"],
-                     limit=5,
+                     limit=max(5, int(os.getenv("A2A_MEMORY_RETRIEVAL_LIMIT", "8"))),
                      min_similarity=0.5,
                  )
                  if memories:
-                     summary_lines = []
-                     for m in memories:
-                         text = (m.get("content", {}) or {}).get("text") or m.get("text") or ""
-                         if text:
-                             summary_lines.append(f"- {text}")
-                     if summary_lines:
-                         memory_block = "\n".join(["相关历史记忆："] + summary_lines)
+                     memory_block = self._format_memory_block(memories)
+                     if memory_block:
                          system_content = system_content + "\n" + memory_block
          except Exception as e:
              logger.warning(f"注入记忆上下文失败：{e}")
@@ -299,6 +460,7 @@ class BasicAgent:
              else:
                  self.session_conversations[sessionId].insert(0, {"role": "system", "content": system_content})
          self.session_conversations[sessionId].append({"role": "user", "content": user_query})
+         self._compact_session_context(sessionId)
          print(f"发起的conversation: {self.session_conversations[sessionId]}")
 
     async def _stream_response_generator(self, sessionId):
@@ -366,6 +528,15 @@ class BasicAgent:
                             "content": chunk.get("assistant_text") or "",
                         }
                         self.session_conversations[sessionId].append(assistant_message)
+                        if self.memory_system:
+                            user_id = os.environ.get("USER_ID", sessionId)
+                            self._store_memory_async(
+                                str(sessionId),
+                                str(user_id),
+                                chunk.get("assistant_text") or "",
+                                source="assistant_stream_final",
+                                importance=0.6,
+                            )
             if not tool_calls_processed:
                 break
 
@@ -396,54 +567,26 @@ class BasicAgent:
                 if result:
                     self.session_conversations[sessionId].append(result)
                     logger.info(f"Added tool result: {json.dumps(result, indent=2)}")
-                    # 可选：将工具结果写入记忆
-                    try:
-                        if self.memory_system:
-                            agent_id = os.environ.get("AGENT_ID", "A2AAgent")
-                            user_id = os.environ.get("USER_ID", sessionId)
-                            tool_text = json.dumps(result, ensure_ascii=False)
-                            async def _store_tool_result():
-                                try:
-                                    await asyncio.to_thread(
-                                        self.memory_system.store_memory,
-                                        agent_id=agent_id,
-                                        user_id=user_id,
-                                        content={"text": tool_text, "metadata": {"sessionId": sessionId, "source": "tool_result"}},
-                                        memory_type="working",
-                                        importance=0.5,
-                                    )
-                                except Exception as _e:
-                                    logger.warning(f"写入工具结果记忆失败：{_e}")
-                            try:
-                                asyncio.create_task(asyncio.wait_for(_store_tool_result(), timeout=2.0))
-                            except Exception:
-                                pass
-                    except Exception as e:
-                        logger.warning(f"写入工具结果记忆失败：{e}")
+                    if self.memory_system:
+                        user_id = os.environ.get("USER_ID", sessionId)
+                        self._store_memory_async(
+                            str(sessionId),
+                            str(user_id),
+                            json.dumps(result, ensure_ascii=False),
+                            source="tool_result",
+                            importance=0.45,
+                        )
 
         # 将最终回答写入记忆（若启用记忆系统）
-        try:
-            if self.memory_system and final_text:
-                agent_id = os.environ.get("AGENT_ID", "A2AAgent")
-                user_id = os.environ.get("USER_ID", sessionId)
-                async def _store_final():
-                    try:
-                        await asyncio.to_thread(
-                            self.memory_system.store_memory,
-                            agent_id=agent_id,
-                            user_id=user_id,
-                            content={"text": final_text, "metadata": {"sessionId": sessionId}},
-                            memory_type="working",
-                            importance=0.6,
-                        )
-                    except Exception as _e:
-                        logger.warning(f"写入回答记忆失败：{_e}")
-                try:
-                    asyncio.create_task(asyncio.wait_for(_store_final(), timeout=2.0))
-                except Exception:
-                    pass
-        except Exception as e:
-            logger.warning(f"写入回答记忆失败：{e}")
+        if self.memory_system and final_text:
+            user_id = os.environ.get("USER_ID", sessionId)
+            self._store_memory_async(
+                str(sessionId),
+                str(user_id),
+                final_text,
+                source="assistant_final",
+                importance=0.6,
+            )
 
         return final_text
 
@@ -483,7 +626,7 @@ class BasicAgent:
                 "content": response
             }
 
-    async def stream(self, query: str, sessionId: str, user_id: str = None) -> AsyncIterable[dict[str, Any]]:
+    async def stream(self, query: str, sessionId: str, user_id: str = None, user_parts=None) -> AsyncIterable[dict[str, Any]]:
         """Stream updates from the MCP agent.
         """
         print(f"问题: {query}的sessionId为： {sessionId}")
@@ -504,6 +647,7 @@ class BasicAgent:
                     sessionId=sessionId,
                     stream=True,
                     user_id=user_id,
+                    user_parts=user_parts,
                 )
                 # Iterate through the chunks yielded by the response_generator
                 async for chunk in response_generator:

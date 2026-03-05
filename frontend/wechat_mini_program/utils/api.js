@@ -222,6 +222,35 @@ const uploadFile = (
   });
 };
 
+const transcribeAudioFile = (filePath) => {
+  return new Promise((resolve, reject) => {
+    const userInfo = wx.getStorageSync("userInfo");
+    const token = userInfo ? userInfo.token : "";
+    const header = {};
+    if (token) {
+      header["Authorization"] = `Bearer ${token}`;
+    }
+    wx.uploadFile({
+      url: `${SERVER_URL}/api/audio/transcribe`,
+      filePath,
+      name: "file",
+      header,
+      success: (res) => {
+        let data = res.data;
+        try {
+          data = JSON.parse(data);
+        } catch (e) {}
+        if (res.statusCode >= 200 && res.statusCode < 300) {
+          resolve(data);
+          return;
+        }
+        reject(data || res);
+      },
+      fail: (err) => reject(err),
+    });
+  });
+};
+
 // 用户登录
 const login = (username, password) => {
   return request("/auth/login", {
@@ -877,6 +906,7 @@ module.exports = {
   createConversation,
   listMessages,
   uploadFile,
+  transcribeAudioFile,
   login,
   register,
   getUserInfo,

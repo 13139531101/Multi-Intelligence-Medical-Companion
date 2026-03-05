@@ -168,8 +168,8 @@ async def save_consultation_message(
                 msg_id = api.generate_id()
                 cursor.execute(
                     """
-                    INSERT INTO chat_messages (id, consultation_id, role, content, created_at)
-                    VALUES (%s, %s, %s, %s, %s)
+                    INSERT INTO chat_messages (id, consultation_id, role, content, files, created_at)
+                    VALUES (%s, %s, %s, %s, %s::jsonb, %s)
                     RETURNING id
                     """,
                     (
@@ -177,6 +177,7 @@ async def save_consultation_message(
                         message.consultation_id,
                         message.role,
                         message.content,
+                        json.dumps(getattr(message, "files", None) or []),
                         datetime.now(),
                     ),
                 )

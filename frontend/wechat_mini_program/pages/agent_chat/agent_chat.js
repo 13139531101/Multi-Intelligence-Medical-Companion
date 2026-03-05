@@ -1,6 +1,7 @@
 // pages/agent_chat/agent_chat.js
 const {
   sendMessage,
+  uploadFile,
   createConversation,
   listMessages,
   getProcessingMessages,
@@ -14,6 +15,7 @@ const {
   getConsultationMessages,
   getConsultationHistory,
   getWeChatTemplateIds,
+  transcribeAudioFile,
   resolveAgentUrl,
   SERVER_URL,
 } = require("../../utils/api");
@@ -41,6 +43,8 @@ Page({
     suggestions: [],
     isHistorySynced: false,
     hasRequestedSubscribe: false,
+    pendingAttachments: [],
+    isRecording: false,
   },
 
   // 在页面实例上维护已处理的事件ID集合
@@ -58,6 +62,8 @@ Page({
   streamingUpdateTimer: null,
   userScrollLockUntil: 0,
   debugLoggedKeys: null,
+  recorderManager: null,
+  recorderStopPromiseResolve: null,
 
   /**
    * Lifecycle function--Called when page load
@@ -155,7 +161,7 @@ Page({
     return `${String(role || "")}:${this.hashText32(String(content || ""))}`;
   },
 
-  async saveMessageToDbOnce(consultationId, role, content, messageId) {
+  async saveMessageToDbOnce(consultationId, role, content, messageId, files) {
     const cid = consultationId ? String(consultationId) : "";
     if (!cid) return;
     const key = this.getDbSaveKey(messageId, role, content);
@@ -167,6 +173,7 @@ Page({
         consultation_id: cid,
         role: role,
         content: content,
+        files: Array.isArray(files) ? files : [],
       });
     } catch (e) {
       console.warn("Save consultation message failed:", e);
@@ -681,7 +688,10 @@ Page({
         flushText();
 
         if (p.type === "file" && p.file && p.file.uri) {
-          const fileUrl = `${SERVER_URL}${p.file.uri}`;
+          const rawUri = String(p.file.uri || "");
+          const fileUrl = rawUri.startsWith("http")
+            ? rawUri
+            : `${SERVER_URL}${rawUri}`;
           const isImage =
             p.file.mimeType && p.file.mimeType.startsWith("image/");
           parts.push({
@@ -1289,6 +1299,11 @@ Page({
     if (this.requestTask) {
       this.requestTask.abort();
     }
+    if (this.recorderManager && this.data.isRecording) {
+      try {
+        this.recorderManager.stop();
+      } catch (e) {}
+    }
     if (this.scrollTimer) {
       clearTimeout(this.scrollTimer);
       this.scrollTimer = null;
@@ -1325,6 +1340,156 @@ Page({
     });
   },
 
+  async pickImageAttachment() {
+    if (this.data.isSending || this.data.isRecording) return;
+    try {
+      const chooser = await wx.showActionSheet({
+        itemList: ["拍照", "从相册选择"],
+      });
+      const sourceType = chooser.tapIndex === 0 ? ["camera"] : ["album"];
+      const res = await wx.chooseMedia({
+        count: 1,
+        mediaType: ["image"],
+        sourceType,
+        camera: "back",
+      });
+      const tempFilePath =
+        (res.tempFiles && res.tempFiles[0] && res.tempFiles[0].tempFilePath) ||
+        (res.tempFilePaths && res.tempFilePaths[0]) ||
+        "";
+      if (!tempFilePath) return;
+      await this.uploadAttachmentTempFile(tempFilePath, "image");
+    } catch (e) {}
+  },
+
+  ensureRecorderManager() {
+    if (this.recorderManager) return this.recorderManager;
+    this.recorderManager = wx.getRecorderManager();
+    this.recorderManager.onStop((res) => {
+      const finalize = async () => {
+        try {
+          const tempFilePath = (res && res.tempFilePath) || "";
+          if (tempFilePath) {
+            const transcribed = await this.transcribeVoiceToInput(tempFilePath);
+            if (!transcribed) {
+              await this.uploadAttachmentTempFile(tempFilePath, "audio");
+            }
+          }
+        } catch (e) {
+          wx.showToast({ title: "语音上传失败", icon: "none" });
+        } finally {
+          this.setData({ isRecording: false });
+          if (this.recorderStopPromiseResolve) {
+            this.recorderStopPromiseResolve();
+            this.recorderStopPromiseResolve = null;
+          }
+        }
+      };
+      finalize();
+    });
+    this.recorderManager.onError(() => {
+      this.setData({ isRecording: false });
+      if (this.recorderStopPromiseResolve) {
+        this.recorderStopPromiseResolve();
+        this.recorderStopPromiseResolve = null;
+      }
+      wx.showToast({ title: "录音失败", icon: "none" });
+    });
+    return this.recorderManager;
+  },
+
+  async transcribeVoiceToInput(tempFilePath) {
+    wx.showLoading({ title: "语音识别中..." });
+    try {
+      const result = await transcribeAudioFile(tempFilePath);
+      const text = String((result && result.text) || "").trim();
+      if (!text) {
+        throw new Error("empty transcript");
+      }
+      const current = String(this.data.inputText || "").trim();
+      this.setData({ inputText: current ? `${current}\n${text}` : text });
+      wx.showToast({ title: "语音已转文字", icon: "none" });
+      return true;
+    } catch (e) {
+      wx.showToast({ title: "识别失败，已转为附件", icon: "none" });
+      return false;
+    } finally {
+      wx.hideLoading();
+    }
+  },
+
+  async toggleVoiceRecord() {
+    if (this.data.isSending) return;
+    const recorder = this.ensureRecorderManager();
+    if (this.data.isRecording) {
+      await new Promise((resolve) => {
+        this.recorderStopPromiseResolve = resolve;
+        recorder.stop();
+      });
+      return;
+    }
+    this.setData({ isRecording: true });
+    try {
+      recorder.start({
+        duration: 60000,
+        sampleRate: 16000,
+        numberOfChannels: 1,
+        encodeBitRate: 64000,
+        format: "mp3",
+      });
+      wx.showToast({ title: "开始录音", icon: "none" });
+    } catch (e) {
+      this.setData({ isRecording: false });
+      wx.showToast({ title: "无法开始录音", icon: "none" });
+    }
+  },
+
+  async uploadAttachmentTempFile(tempFilePath, kind) {
+    wx.showLoading({ title: "上传中..." });
+    try {
+      const uploadResult = await uploadFile(tempFilePath, "/upload");
+      const urlPath = (uploadResult && uploadResult.url) || "";
+      const name =
+        (uploadResult && uploadResult.filename) ||
+        `${kind === "audio" ? "语音" : "图片"}_${Date.now()}`;
+      const mimeType =
+        (uploadResult && uploadResult.mimeType) ||
+        (kind === "audio" ? "audio/mpeg" : "image/jpeg");
+      if (!urlPath) {
+        throw new Error("upload url missing");
+      }
+      const uri = urlPath.startsWith("http")
+        ? urlPath
+        : `${SERVER_URL}${urlPath}`;
+      const isImage = String(mimeType).startsWith("image/");
+      const attachment = {
+        id: `att_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        name,
+        mimeType,
+        uri,
+        type: isImage ? "image" : "file",
+      };
+      this.setData({
+        pendingAttachments: [
+          ...(this.data.pendingAttachments || []),
+          attachment,
+        ],
+      });
+    } catch (e) {
+      wx.showToast({ title: "上传失败", icon: "none" });
+    } finally {
+      wx.hideLoading();
+    }
+  },
+
+  removePendingAttachment(e) {
+    const id = e.currentTarget.dataset.id;
+    const next = (this.data.pendingAttachments || []).filter(
+      (x) => x.id !== id,
+    );
+    this.setData({ pendingAttachments: next });
+  },
+
   // 处理发送按钮点击
   handleSend() {
     this.sendMessage();
@@ -1353,15 +1518,38 @@ Page({
 
   async sendMessage() {
     const text = this.data.inputText.trim();
-    if (!text || this.data.isSending) return;
+    const attachments = Array.isArray(this.data.pendingAttachments)
+      ? this.data.pendingAttachments
+      : [];
+    if ((!text && attachments.length === 0) || this.data.isSending) return;
+
+    const userContentParts = [];
+    if (text) {
+      userContentParts.push({
+        type: "text",
+        content: this.formatTextToRichHtml(text),
+      });
+    }
+    attachments.forEach((a) => {
+      if (!a || !a.uri) return;
+      userContentParts.push({
+        type: a.type === "image" ? "image" : "file",
+        url: a.uri,
+        name: a.name || "文件",
+        mimeType: a.mimeType || "",
+      });
+    });
+
+    const fallbackText =
+      attachments.length > 0
+        ? `用户发送了${attachments.length}个附件`
+        : "用户发送了消息";
 
     const userMessage = {
       id: `user_${Date.now()}`,
       role: "user",
-      contentParts: [
-        { type: "text", content: this.formatTextToRichHtml(text) },
-      ],
-      rawText: text,
+      contentParts: userContentParts,
+      rawText: text || fallbackText,
       isLong: false,
       collapsed: false,
       timestamp: Date.now() / 1000,
@@ -1373,6 +1561,7 @@ Page({
         {
           messages: [...this.data.messages, userMessage],
           inputText: "",
+          pendingAttachments: [],
           isSending: true,
           shouldAutoScroll: true,
           showJumpToBottom: false,
@@ -1425,7 +1614,7 @@ Page({
               ? ["health"]
               : [this.data.agentType];
           await createConsultation({
-            question: text,
+            question: text || fallbackText,
             consultation_id: convId,
             session_id: convId,
             tags,
@@ -1440,7 +1629,20 @@ Page({
       }
 
       if (shouldPersist) {
-        await this.saveMessageToDbOnce(convId, "user", text, userMessage.id);
+        const dbFiles = attachments
+          .filter((a) => a && a.uri)
+          .map((a) => ({
+            name: a.name || "附件",
+            mimeType: a.mimeType || "",
+            uri: a.uri,
+          }));
+        await this.saveMessageToDbOnce(
+          convId,
+          "user",
+          text || fallbackText,
+          userMessage.id,
+          dbFiles,
+        );
       }
 
       // 如果有 agentUrl，使用流式模式 (Emulating React)
@@ -1476,12 +1678,30 @@ Page({
 
         // 发送流式请求
         const selectedAgentName = this.data.selectedAgentName || "";
+        const payloadParts = [];
+        if (text) {
+          payloadParts.push({ type: "text", text: text });
+        }
+        attachments.forEach((a) => {
+          if (!a || !a.uri) return;
+          payloadParts.push({
+            type: "file",
+            file: {
+              name: a.name || "附件",
+              mimeType: a.mimeType || "",
+              uri: a.uri.replace(SERVER_URL, ""),
+            },
+          });
+        });
+        if (payloadParts.length === 0) {
+          payloadParts.push({ type: "text", text: fallbackText });
+        }
         const payload = {
           id: this.generateUUID(),
           sessionId: convId,
           message: {
             role: "user",
-            parts: [{ type: "text", text: text }],
+            parts: payloadParts,
             metadata: selectedAgentName
               ? {
                   selected_agent: selectedAgentName,
@@ -1716,6 +1936,12 @@ Page({
                 },
               );
       } else {
+        if (attachments.length > 0) {
+          wx.showToast({
+            title: "当前模式暂不支持附件",
+            icon: "none",
+          });
+        }
         // 默认通用模式 (Polling)
         // 2. 发送消息
         let selectedAgent = "";

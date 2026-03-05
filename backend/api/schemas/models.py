@@ -258,3 +258,4 @@ class ChatMessageCreate(BaseModel):
     consultation_id: str
     role: str
     content: str
+    files: Optional[List[Dict[str, Any]]] = Field(default_factory=list)

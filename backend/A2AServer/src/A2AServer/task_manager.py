@@ -10,15 +10,14 @@ from A2AServer.common.A2Atypes import (
     TaskStatusUpdateEvent,
     TaskArtifactUpdateEvent,
     TextPart,
+    FilePart,
     TaskState,
     Task,
     SendTaskResponse,
     InternalError,
     JSONRPCResponse,
     SendTaskStreamingRequest,
-    SendTaskStreamingResponse,
-    TaskArtifactUpdateEvent,
-    TaskStatusUpdateEvent
+    SendTaskStreamingResponse
 )
 from A2AServer.common.server.task_manager import InMemoryTaskManager
 from A2AServer.agent import BasicAgent
@@ -64,6 +63,7 @@ class AgentTaskManager(InMemoryTaskManager):
 
         task_send_params: TaskSendParams = request.params
         query = self._get_user_query(task_send_params)
+        user_parts = self._extract_user_parts(task_send_params)
 
         # 从元数据中提取用户ID
         user_id = None
@@ -77,6 +77,7 @@ class AgentTaskManager(InMemoryTaskManager):
                 sessionId=task_send_params.sessionId,
                 stream=False,
                 user_id=user_id,
+                user_parts=user_parts,
             )
             agent_response = {
                 "content": final_text,
@@ -151,6 +152,7 @@ class AgentTaskManager(InMemoryTaskManager):
         """
         task_send_params: TaskSendParams = request.params
         query = self._get_user_query(task_send_params)
+        user_parts = self._extract_user_parts(task_send_params)
 
         # 从元数据中提取用户ID
         user_id = None
@@ -161,7 +163,9 @@ class AgentTaskManager(InMemoryTaskManager):
         is_first_token = True
         artifacts = []
         try:
-            async for item in self.agent.stream(query, task_send_params.sessionId, user_id=user_id):
+            async for item in self.agent.stream(
+                query, task_send_params.sessionId, user_id=user_id, user_parts=user_parts
+            ):
                 logger.info("返回的item: %s", item)
                 if item.get("type") and item["type"] == "tool_call":
                     tool_data = decode_tool_calls_to_string(item["content"])
@@ -343,7 +347,67 @@ class AgentTaskManager(InMemoryTaskManager):
         Raises:
             ValueError: If the message part is not a TextPart.
         """
-        part = task_send_params.message.parts[0]
-        if not isinstance(part, TextPart):
-            raise ValueError("Only text parts are supported")
-        return part.text
+        parts = task_send_params.message.parts or []
+        text_parts = []
+        for part in parts:
+            if isinstance(part, TextPart):
+                if part.text:
+                    text_parts.append(part.text)
+                continue
+            if isinstance(part, FilePart):
+                continue
+            if isinstance(part, dict) and part.get("type") == "text":
+                text_value = part.get("text")
+                if text_value:
+                    text_parts.append(str(text_value))
+        if text_parts:
+            return "\n".join(text_parts).strip()
+        file_count = 0
+        for part in parts:
+            if isinstance(part, FilePart):
+                file_count += 1
+                continue
+            if isinstance(part, dict) and part.get("type") == "file":
+                file_count += 1
+        if file_count > 0:
+            return f"用户发送了{file_count}个附件，请结合附件与上下文回答。"
+        return ""
+
+    def _extract_user_parts(self, task_send_params: TaskSendParams) -> list[dict]:
+        result = []
+        for part in task_send_params.message.parts or []:
+            if isinstance(part, TextPart):
+                if part.text:
+                    result.append({"type": "text", "text": part.text})
+                continue
+            if isinstance(part, FilePart):
+                file_obj = part.file
+                result.append(
+                    {
+                        "type": "file",
+                        "file": {
+                            "name": file_obj.name,
+                            "mimeType": file_obj.mimeType,
+                            "uri": file_obj.uri,
+                            "bytes": file_obj.bytes,
+                        },
+                    }
+                )
+                continue
+            if isinstance(part, dict):
+                if part.get("type") == "text":
+                    result.append({"type": "text", "text": str(part.get("text") or "")})
+                elif part.get("type") == "file":
+                    file_obj = part.get("file") or {}
+                    result.append(
+                        {
+                            "type": "file",
+                            "file": {
+                                "name": file_obj.get("name"),
+                                "mimeType": file_obj.get("mimeType"),
+                                "uri": file_obj.get("uri"),
+                                "bytes": file_obj.get("bytes"),
+                            },
+                        }
+                    )
+        return result

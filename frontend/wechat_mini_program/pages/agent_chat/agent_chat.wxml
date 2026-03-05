@@ -106,14 +106,34 @@
       ></textarea>
       <view class="input-actions">
         <text class="char-count">{{inputText.length}}/500</text>
-        <button 
-        class="send-button {{(inputText.trim() && !isSending) ? 'active' : 'disabled'}}" 
+        <button
+        class="attachment-button"
+        bindtap="pickImageAttachment"
+        >
+        📷
+        </button>
+        <button
+        class="voice-button {{isRecording ? 'recording' : ''}}"
+        bindtap="toggleVoiceRecord"
+        >
+        {{isRecording ? '■' : '🎤'}}
+        </button>
+        <button
+        class="send-button {{((inputText.trim() || pendingAttachments.length > 0) && !isSending && !isRecording) ? 'active' : 'disabled'}}"
         bindtap="handleSend"
         >
         {{isSending ? '发送中' : '发送'}}
         </button>
         <!-- 无disabled的发送按钮 -->
 
+      </view>
+      <view wx:if="{{pendingAttachments.length > 0}}" class="pending-attachments">
+        <view wx:for="{{pendingAttachments}}" wx:key="id" wx:for-item="att" class="pending-attachment-item">
+          <image wx:if="{{att.type === 'image'}}" src="{{att.uri}}" mode="aspectFill" class="pending-image"></image>
+          <view wx:if="{{att.type !== 'image'}}" class="pending-file-icon">🎵</view>
+          <text class="pending-name">{{att.name}}</text>
+          <view class="pending-remove" bindtap="removePendingAttachment" data-id="{{att.id}}">✕</view>
+        </view>
       </view>
     </view>
   </view>
