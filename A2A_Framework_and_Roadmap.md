@@ -116,3 +116,56 @@ diet_advisor:
 ### 步骤 5: 监控与管理
 
 在 `admin_backend` 的监控列表中添加 `diet_advisor` 的地址，即可在未来的科技风仪表盘中看到它的状态。
+
+---
+
+## 4. 请求执行时序（tasks/sendSubscribe）
+
+以下时序对应当前代码实现，便于排障与二次开发：
+
+```mermaid
+sequenceDiagram
+    participant C as 调用方(前端/HostAPI)
+    participant S as A2AServer._process_request
+    participant TM as AgentTaskManager
+    participant A as BasicAgent
+    participant L as LLM Provider
+    participant M as MCP Tool Server
+
+    C->>S: POST / (tasks/sendSubscribe)
+    S->>S: 校验 ready_event / 解析 JSON-RPC
+    S->>TM: on_send_task_subscribe(request)
+    TM->>TM: _validate_request + upsert_task
+    TM->>A: stream(query, sessionId, user_parts)
+    A->>A: run_inference() + _build_initial_conversation()
+
+    loop 推理-工具循环
+        A->>L: generate_text(stream=True)
+        L-->>A: token/tool_calls
+        alt 有 tool_calls
+            A->>M: process_tool_call(...)
+            M-->>A: tool_result
+            A-->>TM: type=tool_call/tool_result
+            TM-->>C: TaskStatusUpdateEvent(final=false)
+        else 纯文本 token
+            A-->>TM: type=normal/reasoning
+            TM-->>C: TaskArtifactUpdateEvent(lastChunk=false)
+        end
+    end
+
+    A-->>TM: is_task_complete=true + 收尾chunk
+    TM->>TM: update_store(status=COMPLETED, artifacts)
+    TM-->>C: TaskStatusUpdateEvent(final=true)
+```
+
+### 4.1 核心代码定位
+
+- 请求入口与分发：`backend/A2AServer/src/A2AServer/common/server/server.py`
+- 流式任务主链路：`backend/A2AServer/src/A2AServer/task_manager.py`
+- Agent 推理与工具回环：`backend/A2AServer/src/A2AServer/agent.py`
+- MCP 工具调用执行：`backend/A2AServer/src/A2AServer/mcp_client/client.py`
+
+### 4.2 异常兜底说明
+
+- 在 `task_manager.py` 的流式循环末尾，使用 `except Exception as e` 将异常统一转为 `InternalError` 的 JSON-RPC 返回。
+- 该设计能保证 SSE 链路尽量不断开，但具体故障原因需结合日志中的 traceback 定位。
