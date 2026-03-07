@@ -1,7 +1,14 @@
 import unittest
 import os
+import sys
 from datetime import datetime
 from unittest.mock import Mock, patch
+
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, "..", "..", ".."))
+MODULE_ROOT = os.path.join(PROJECT_ROOT, "backend", "AgentMemorySystem")
+if MODULE_ROOT not in sys.path:
+    sys.path.insert(0, MODULE_ROOT)
 
 # 导入记忆系统模块
 from memory_system import AgentMemorySystem

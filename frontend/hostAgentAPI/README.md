@@ -27,19 +27,19 @@ The goal of this project is to provide API interfaces for the coordinator and or
 
 **API Interface Testing:**
 
-The project includes a `test_api.py` script to test the functionality of each API endpoint. This script utilizes the `unittest` framework to send requests to each endpoint and verify the responses.
+The project includes a centralized `tests/frontend/hostAgentAPI/test_api.py` script to test the functionality of each API endpoint. This script utilizes the `unittest` framework to send requests to each endpoint and verify the responses.
 
 1.  **Run the Test Script:**
     * Ensure the API service is running successfully (see the "Start the API Service" step above).
     * In the project's root directory, execute the test script:
         ```bash
-        python test_api.py
+        python tests/frontend/hostAgentAPI/test_api.py
         ```
     * The test script will automatically run all test cases and output the test results for each endpoint, including status codes, response content, and execution time, helping you verify the API's usability.
 
 **API Endpoint Documentation:**
 
-The following are the API endpoints and their functionalities, analyzed from the `test_api.py` file:
+The following are the API endpoints and their functionalities, analyzed from the `tests/frontend/hostAgentAPI/test_api.py` file:
 
 * **`/ping` (GET)**
     * **Functionality:** Tests if the API service is running and healthy.

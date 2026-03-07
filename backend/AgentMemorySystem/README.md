@@ -320,13 +320,13 @@ print(f"必需标签: {health_config['required_tags']}")
 运行单元测试：
 
 ```bash
-python test_memory_system.py
+python ../../tests/backend/AgentMemorySystem/test_memory_system.py
 ```
 
 运行特定测试：
 
 ```bash
-python -m unittest test_memory_system.TestMemorySystem.test_store_memory
+python -m unittest ../../tests/backend/AgentMemorySystem/test_memory_system.py
 ```
 
 ## 故障排除

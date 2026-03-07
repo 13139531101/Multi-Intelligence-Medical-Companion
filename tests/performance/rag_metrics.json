@@ -1,0 +1,140 @@
+{
+  "dataset": "tests/performance/rag_eval_dataset.json",
+  "cases": 5,
+  "top_k": 5,
+  "vector": {
+    "mode": "vector",
+    "cases": 5,
+    "top_k": 5,
+    "avg_latency_ms": 1164.326,
+    "p95_latency_ms": 2960.78,
+    "avg_result_count": 5,
+    "recall_at_k": 1.0,
+    "mrr": 0.6167,
+    "hit_rate_at_k": 1.0,
+    "top_ids": [
+      [
+        "054bcaf0-2298-4afc-9dbf-cc1756bac4cf",
+        "9dbf65e1-4476-4001-9485-3016b7d5c10c",
+        "ec9f50e9-337e-4fa3-af08-49259e3613b2",
+        "a40c776d-2071-4957-9937-d13d25ebdfd1",
+        "e861938d-a527-48a8-bb77-91f7d532e95e"
+      ],
+      [
+        "ec9f50e9-337e-4fa3-af08-49259e3613b2",
+        "054bcaf0-2298-4afc-9dbf-cc1756bac4cf",
+        "9dbf65e1-4476-4001-9485-3016b7d5c10c",
+        "fff4c734-446f-4496-8f1b-e89b4ba37409",
+        "5a6a233e-a7a1-4cab-993a-9b6419c4497d"
+      ],
+      [
+        "054bcaf0-2298-4afc-9dbf-cc1756bac4cf",
+        "ec9f50e9-337e-4fa3-af08-49259e3613b2",
+        "9dbf65e1-4476-4001-9485-3016b7d5c10c",
+        "fff4c734-446f-4496-8f1b-e89b4ba37409",
+        "5a6a233e-a7a1-4cab-993a-9b6419c4497d"
+      ],
+      [
+        "054bcaf0-2298-4afc-9dbf-cc1756bac4cf",
+        "9dbf65e1-4476-4001-9485-3016b7d5c10c",
+        "fff4c734-446f-4496-8f1b-e89b4ba37409",
+        "ec9f50e9-337e-4fa3-af08-49259e3613b2",
+        "a40c776d-2071-4957-9937-d13d25ebdfd1"
+      ],
+      [
+        "054bcaf0-2298-4afc-9dbf-cc1756bac4cf",
+        "9dbf65e1-4476-4001-9485-3016b7d5c10c",
+        "d15a4ab4-b1e0-4f00-a731-e06090236e89",
+        "ec9f50e9-337e-4fa3-af08-49259e3613b2",
+        "5a6a233e-a7a1-4cab-993a-9b6419c4497d"
+      ]
+    ]
+  },
+  "rerank": {
+    "mode": "rerank",
+    "cases": 5,
+    "top_k": 5,
+    "avg_latency_ms": 2095.476,
+    "p95_latency_ms": 2772.726,
+    "avg_result_count": 5,
+    "recall_at_k": 1.0,
+    "mrr": 1.0,
+    "hit_rate_at_k": 1.0,
+    "top_ids": [
+      [
+        "9dbf65e1-4476-4001-9485-3016b7d5c10c",
+        "ec9f50e9-337e-4fa3-af08-49259e3613b2",
+        "054bcaf0-2298-4afc-9dbf-cc1756bac4cf",
+        "a40c776d-2071-4957-9937-d13d25ebdfd1",
+        "e861938d-a527-48a8-bb77-91f7d532e95e"
+      ],
+      [
+        "ec9f50e9-337e-4fa3-af08-49259e3613b2",
+        "054bcaf0-2298-4afc-9dbf-cc1756bac4cf",
+        "fff4c734-446f-4496-8f1b-e89b4ba37409",
+        "5a6a233e-a7a1-4cab-993a-9b6419c4497d",
+        "9dbf65e1-4476-4001-9485-3016b7d5c10c"
+      ],
+      [
+        "9dbf65e1-4476-4001-9485-3016b7d5c10c",
+        "ec9f50e9-337e-4fa3-af08-49259e3613b2",
+        "fff4c734-446f-4496-8f1b-e89b4ba37409",
+        "054bcaf0-2298-4afc-9dbf-cc1756bac4cf",
+        "demo_cold"
+      ],
+      [
+        "054bcaf0-2298-4afc-9dbf-cc1756bac4cf",
+        "9dbf65e1-4476-4001-9485-3016b7d5c10c",
+        "a40c776d-2071-4957-9937-d13d25ebdfd1",
+        "ec9f50e9-337e-4fa3-af08-49259e3613b2",
+        "fff4c734-446f-4496-8f1b-e89b4ba37409"
+      ],
+      [
+        "ec9f50e9-337e-4fa3-af08-49259e3613b2",
+        "054bcaf0-2298-4afc-9dbf-cc1756bac4cf",
+        "d15a4ab4-b1e0-4f00-a731-e06090236e89",
+        "9dbf65e1-4476-4001-9485-3016b7d5c10c",
+        "5a6a233e-a7a1-4cab-993a-9b6419c4497d"
+      ]
+    ]
+  },
+  "fallback": {
+    "mode": "fallback",
+    "cases": 5,
+    "top_k": 5,
+    "avg_latency_ms": 1125.83,
+    "p95_latency_ms": 2156.535,
+    "avg_result_count": 3.2,
+    "recall_at_k": 0.8,
+    "mrr": 0.3467,
+    "hit_rate_at_k": 0.8,
+    "top_ids": [
+      [
+        "ec9f50e9-337e-4fa3-af08-49259e3613b2",
+        "054bcaf0-2298-4afc-9dbf-cc1756bac4cf",
+        "9dbf65e1-4476-4001-9485-3016b7d5c10c",
+        "5a6a233e-a7a1-4cab-993a-9b6419c4497d",
+        "d15a4ab4-b1e0-4f00-a731-e06090236e89"
+      ],
+      [
+        "9dbf65e1-4476-4001-9485-3016b7d5c10c",
+        "054bcaf0-2298-4afc-9dbf-cc1756bac4cf",
+        "5a6a233e-a7a1-4cab-993a-9b6419c4497d",
+        "d15a4ab4-b1e0-4f00-a731-e06090236e89",
+        "ec9f50e9-337e-4fa3-af08-49259e3613b2"
+      ],
+      [
+        "5a6a233e-a7a1-4cab-993a-9b6419c4497d",
+        "fff4c734-446f-4496-8f1b-e89b4ba37409",
+        "ec9f50e9-337e-4fa3-af08-49259e3613b2",
+        "054bcaf0-2298-4afc-9dbf-cc1756bac4cf",
+        "9dbf65e1-4476-4001-9485-3016b7d5c10c"
+      ],
+      [
+        "054bcaf0-2298-4afc-9dbf-cc1756bac4cf"
+      ],
+      []
+    ]
+  },
+  "rerank_hit_rate_gain": 0.0
+}

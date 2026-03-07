@@ -11,8 +11,11 @@ import os
 import sys
 from datetime import datetime
 
-# 添加项目路径
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, "..", ".."))
+BACKEND_ROOT = os.path.join(PROJECT_ROOT, "backend")
+if BACKEND_ROOT not in sys.path:
+    sys.path.insert(0, BACKEND_ROOT)
 
 
 def test_ocr_tool():

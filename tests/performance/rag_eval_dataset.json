@@ -1,0 +1,27 @@
+[
+  {
+    "query": "高血压",
+    "relevant_ids": ["9dbf65e1-4476-4001-9485-3016b7d5c10c"],
+    "user_id": ""
+  },
+  {
+    "query": "糖尿病",
+    "relevant_ids": ["ec9f50e9-337e-4fa3-af08-49259e3613b2"],
+    "user_id": ""
+  },
+  {
+    "query": "阿司匹林",
+    "relevant_ids": ["9dbf65e1-4476-4001-9485-3016b7d5c10c"],
+    "user_id": ""
+  },
+  {
+    "query": "血压管理",
+    "relevant_ids": ["054bcaf0-2298-4afc-9dbf-cc1756bac4cf"],
+    "user_id": ""
+  },
+  {
+    "query": "体检报告",
+    "relevant_ids": ["ec9f50e9-337e-4fa3-af08-49259e3613b2"],
+    "user_id": ""
+  }
+]

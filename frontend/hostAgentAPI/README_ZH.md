@@ -28,32 +28,32 @@
 
 **API 接口测试：**
 
-项目提供了一个 `test_api.py` 脚本用于测试各个 API 接口的功能是否正常。
+项目提供了集中存放的 `tests/frontend/hostAgentAPI/test_api.py` 脚本用于测试各个 API 接口的功能是否正常。
 
 1.  **运行测试脚本：**
     * 确保 API 服务已经成功启动（见上面的“启动”步骤）。
     * 在项目根目录下，运行测试脚本：
         ```bash
-        python test_api.py
+        python tests/frontend/hostAgentAPI/test_api.py
         ```
     * 测试脚本将会输出每个接口的测试结果，帮助你验证 API 的可用性。
 
 
 **API 接口测试：**
 
-项目提供了一个 `test_api.py` 脚本用于测试各个 API 接口的功能是否正常。该脚本使用了 `unittest` 框架，对每个接口发送请求并验证响应。
+项目提供了集中存放的 `tests/frontend/hostAgentAPI/test_api.py` 脚本用于测试各个 API 接口的功能是否正常。该脚本使用了 `unittest` 框架，对每个接口发送请求并验证响应。
 
 1.  **运行测试脚本：**
     * 确保 API 服务已经成功启动（见上面的“启动”步骤）。
     * 在项目根目录下，运行测试脚本：
         ```bash
-        python test_api.py
+        python tests/frontend/hostAgentAPI/test_api.py
         ```
     * 测试脚本将会自动执行所有测试用例，并输出每个接口的测试结果，包括状态码、响应内容和耗时等信息，帮助你验证 API 的可用性。
 
 **API 端点说明：**
 
-以下是根据 `test_api.py` 文件分析出的 API 端点及其功能说明：
+以下是根据 `tests/frontend/hostAgentAPI/test_api.py` 文件分析出的 API 端点及其功能说明：
 
 * **`/ping` (GET)**
     * **功能：** 测试 API 服务是否启动并正常运行。

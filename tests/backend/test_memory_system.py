@@ -10,6 +10,13 @@ import sys
 import os
 from datetime import datetime
 
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, "..", ".."))
+BACKEND_ROOT = os.path.join(PROJECT_ROOT, "backend")
+if BACKEND_ROOT not in sys.path:
+    sys.path.insert(0, BACKEND_ROOT)
+os.chdir(BACKEND_ROOT)
+
 # 配置日志
 logging.basicConfig(
     level=logging.INFO,
