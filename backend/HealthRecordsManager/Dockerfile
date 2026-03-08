@@ -4,11 +4,11 @@ ENV DEBIAN_FRONTEND=noninteractive
 WORKDIR /app
 
 # Install uv CLI via PyPI (avoids GitHub download in build)
-RUN pip install --no-cache-dir uv
+RUN --mount=type=cache,target=/root/.cache/pip pip install uv
 
 # Install service-specific dependencies
 COPY HealthRecordsManager/requirements.txt /tmp/requirements.txt
-RUN pip install --no-cache-dir -r /tmp/requirements.txt
+RUN --mount=type=cache,target=/root/.cache/pip pip install -r /tmp/requirements.txt
 
 COPY . ./
 

@@ -4,11 +4,11 @@ ENV DEBIAN_FRONTEND=noninteractive
 WORKDIR /app
 
 # Install uv CLI via PyPI (avoids GitHub download in build)
-RUN pip install --no-cache-dir uv
+RUN --mount=type=cache,target=/root/.cache/pip pip install uv
 
 # Install Python deps from backend root requirements if present
 COPY requirements.txt /tmp/backend-requirements.txt
-RUN pip install --no-cache-dir -r /tmp/backend-requirements.txt
+RUN --mount=type=cache,target=/root/.cache/pip pip install -r /tmp/backend-requirements.txt
 
 # Copy service code
 COPY . ./

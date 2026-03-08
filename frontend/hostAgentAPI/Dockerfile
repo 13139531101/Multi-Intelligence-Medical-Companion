@@ -18,11 +18,11 @@ COPY frontend/hostAgentAPI/requirements.txt ./requirements.txt
 # 使用国内 PyPI 镜像以加速依赖安装，并允许 pip 缓存以提升重复构建速度
 ARG PIP_INDEX_URL=https://pypi.org/simple
 ENV PIP_INDEX_URL=${PIP_INDEX_URL}
-RUN pip install -i ${PIP_INDEX_URL} -r requirements.txt || pip install -i https://pypi.org/simple -r requirements.txt
+RUN --mount=type=cache,target=/root/.cache/pip pip install -i ${PIP_INDEX_URL} -r requirements.txt || pip install -i https://pypi.org/simple -r requirements.txt
 
 # 同步安装后端健康档案管理模块的 OCR 相关依赖
 COPY backend/HealthRecordsManager/requirements.txt ./hrm_requirements.txt
-RUN pip install -i ${PIP_INDEX_URL} -r hrm_requirements.txt || pip install -i https://pypi.org/simple -r hrm_requirements.txt
+RUN --mount=type=cache,target=/root/.cache/pip pip install -i ${PIP_INDEX_URL} -r hrm_requirements.txt || pip install -i https://pypi.org/simple -r hrm_requirements.txt
 
 # App source (Host API)
 COPY frontend/hostAgentAPI ./

@@ -11,6 +11,11 @@ yarn.lock
 __pycache__
 *.pyc
 .pytest_cache
+**/.pytest_cache
+.mypy_cache
+.ruff_cache
+.venv
+venv
 
 # Env and secrets
 .env
@@ -28,3 +33,11 @@ Thumbs.db
 # Logs
 logs
 *.log
+*.sqlite
+*.db
+*.tmp
+tmp_*.pdf
+
+# Non-runtime project assets
+docs
+tests
