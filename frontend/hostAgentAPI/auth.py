@@ -6,6 +6,7 @@
 """
 
 import hashlib
+import hmac
 import secrets
 import jwt
 from datetime import datetime, timedelta
@@ -208,7 +209,16 @@ class AuthService:
 
     def verify_password(self, password: str, salt: str, hashed: str) -> bool:
         """验证密码"""
-        return self.hash_password(password, salt) == hashed
+        calculated = self.hash_password(password, salt)
+        return hmac.compare_digest(calculated, hashed)
+
+    def normalize_password(self, password: str) -> str:
+        value = (password or "").strip()
+        if value.startswith("sha256:"):
+            digest = value[7:].strip().lower()
+            if len(digest) == 64 and all(ch in "0123456789abcdef" for ch in digest):
+                return digest
+        return value
 
     def generate_user_id(self) -> str:
         """生成用户ID"""
@@ -280,7 +290,8 @@ class AuthService:
                 # 创建新用户
                 user_id = self.generate_user_id()
                 salt = self.generate_salt()
-                password_hash = self.hash_password(user_data.password, salt)
+                normalized_password = self.normalize_password(user_data.password)
+                password_hash = self.hash_password(normalized_password, salt)
 
                 insert_query = """
                     INSERT INTO users (user_id, username, password_hash, salt, email, phone)
@@ -350,7 +361,8 @@ class AuthService:
                         detail="账户已被禁用"
                     )
 
-                if not self.verify_password(login_data.password, user['salt'], user['password_hash']):
+                normalized_password = self.normalize_password(login_data.password)
+                if not self.verify_password(normalized_password, user['salt'], user['password_hash']):
                     raise HTTPException(
                         status_code=status.HTTP_401_UNAUTHORIZED,
                         detail="用户名或密码错误"
