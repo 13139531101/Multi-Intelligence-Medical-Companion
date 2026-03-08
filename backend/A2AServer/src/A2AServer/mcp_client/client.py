@@ -190,9 +190,7 @@ class MCPClient:
         server_params = StdioServerParameters(
             command=command,
             args=self.config["args"],
-            env={**os.environ, **self.config["env"]}
-            if self.config.get("env")
-            else None,
+            env={**os.environ, **(self.config.get("env") or {})},
         )
         prev_cwd = os.getcwd()
         try:

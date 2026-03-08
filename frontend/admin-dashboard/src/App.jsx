@@ -47,9 +47,8 @@ const StatRow = ({ label, value, status = "neutral" }) => {
 function App() {
   const [summary, setSummary] = useState(null);
   const [loading, setLoading] = useState(false);
-  // Default to 'admin123' if not set, to match docker-compose default
   const [adminToken, setAdminToken] = useState(
-    localStorage.getItem("adminToken") || "admin123",
+    localStorage.getItem("adminToken") || "",
   );
 
   // RAG Search State

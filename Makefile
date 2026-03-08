@@ -1,4 +1,4 @@
-SERVICES = health_records health_advisor medication_reminder visit_summary hostapi multiagent_front
+SERVICES = health_records health_advisor medication_reminder visit_summary hostapi
 REGISTRY ?= crpi-zr8m4m7ism94623a.cn-hangzhou.personal.cr.aliyuncs.com
 NAMESPACE ?= duozhiyiban
 IMAGE_PREFIX ?= a2aserver-

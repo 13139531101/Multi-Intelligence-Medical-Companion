@@ -30,9 +30,7 @@
         "DB_HOST": "postgres",
         "DB_PORT": "5432",
         "DB_USER": "pha",
-        "DB_PASSWORD": "pha_pass",
-        "POSTGRES_DB": "personal_health_assistant",
-        "DATABASE_URL": "postgresql://pha:pha_pass@postgres:5432/personal_health_assistant"
+        "POSTGRES_DB": "personal_health_assistant"
       }
     },
     "ReminderTool": {
@@ -45,9 +43,7 @@
         "DB_HOST": "postgres",
         "DB_PORT": "5432",
         "DB_USER": "pha",
-        "DB_PASSWORD": "pha_pass",
-        "POSTGRES_DB": "personal_health_assistant",
-        "DATABASE_URL": "postgresql://pha:pha_pass@postgres:5432/personal_health_assistant"
+        "POSTGRES_DB": "personal_health_assistant"
       }
     },
     "MemoryIntegrationTool": {
@@ -61,7 +57,6 @@
         "MEMORY_DB_PORT": "5432",
         "MEMORY_DB_NAME": "personal_health_assistant",
         "MEMORY_DB_USER": "pha",
-        "MEMORY_DB_PASSWORD": "pha_pass",
         "MEMORY_EMBEDDING_MODEL": "all-MiniLM-L6-v2",
         "MEMORY_LOG_LEVEL": "INFO"
       }
@@ -73,7 +68,6 @@
       ],
       "cwd": "/app/HealthRecordsManager",
       "env": {
-        "DATABASE_URL": "postgresql://pha:pha_pass@postgres:5432/personal_health_assistant",
         "WECHAT_APP_ID": "${WECHAT_APP_ID}",
         "WECHAT_APP_SECRET": "${WECHAT_APP_SECRET}",
         "WECHAT_TEMPLATE_TASK_COMPLETE": "${WECHAT_TEMPLATE_TASK_COMPLETE}"

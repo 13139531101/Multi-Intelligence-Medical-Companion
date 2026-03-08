@@ -43,6 +43,11 @@ services:
       - PORT=10011
       - HOST=0.0.0.0
       - PYTHONPATH=/app
+      - DB_NAME=${POSTGRES_DB:-personal_health_assistant}
+      - DB_HOST=${DB_HOST:-postgres}
+      - DB_PORT=${DB_PORT:-5432}
+      - DB_USER=${DB_USER:-pha}
+      - DB_PASSWORD=${DB_PASSWORD:-pha_pass}
       - DATABASE_URL=${DATABASE_URL:-postgresql://pha:pha_pass@postgres:5432/personal_health_assistant}
       - MEMORY_DATABASE_URL=${MEMORY_DATABASE_URL:-postgresql://pha:pha_pass@postgres:5432/personal_health_assistant}
       - A2A_CURRENT_USER_ID=${A2A_CURRENT_USER_ID:-111}
@@ -76,8 +81,7 @@ services:
       - HOST=0.0.0.0
       - PYTHONPATH=/app
       - DATABASE_URL=${DATABASE_URL:-postgresql://pha:pha_pass@postgres:5432/personal_health_assistant}
-      # 显式为提醒工具设置 PostgreSQL 连接（容器内主机名为 postgres）
-      - PG_DSN=postgresql://pha:pha_pass@postgres:5432/personal_health_assistant
+      - PG_DSN=${DATABASE_URL:-postgresql://pha:pha_pass@postgres:5432/personal_health_assistant}
       - A2A_CURRENT_USER_ID=${A2A_CURRENT_USER_ID:-111}
       - MEMORY_DATABASE_URL=${MEMORY_DATABASE_URL:-postgresql://pha:pha_pass@postgres:5432/personal_health_assistant}
     ports:
@@ -181,9 +185,9 @@ services:
       - DB_PASSWORD=${DB_PASSWORD:-pha_pass}
       - MEMORY_DATABASE_URL=${MEMORY_DATABASE_URL:-postgresql://pha:pha_pass@postgres:5432/personal_health_assistant}
       - A2A_CURRENT_USER_ID=${A2A_CURRENT_USER_ID:-111}
-      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-dev-secret}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:?JWT_SECRET_KEY is required}
       - JWT_ALGORITHM=${JWT_ALGORITHM:-HS256}
-      - ADMIN_TOKEN=${ADMIN_TOKEN:-admin123}
+      - ADMIN_TOKEN=${ADMIN_TOKEN:?ADMIN_TOKEN is required}
       # OCR & LLM 配置
       - OCR_PROVIDER=${OCR_PROVIDER:-local}
       - ALIYUN_OCR_VERSION=${ALIYUN_OCR_VERSION}
@@ -200,7 +204,7 @@ services:
       - EMBEDDING_TIMEOUT_SECONDS=${EMBEDDING_TIMEOUT_SECONDS:-60}
       - A2A_MEDICAL_KB_MAX_UPLOAD_MB=${A2A_MEDICAL_KB_MAX_UPLOAD_MB:-50}
     ports:
-      - "8000:8000"
+      - "${ADMIN_BACKEND_BIND_IP:-127.0.0.1}:${ADMIN_BACKEND_PORT:-8000}:8000"
     volumes:
       - ./backend/uploads:/app/uploads
     depends_on:
@@ -211,7 +215,7 @@ services:
       context: frontend/admin-dashboard
       dockerfile: Dockerfile
     ports:
-      - "3002:80"
+      - "${ADMIN_FRONTEND_BIND_IP:-127.0.0.1}:${ADMIN_FRONTEND_PORT:-3002}:80"
     depends_on:
       - admin_backend
 
@@ -270,15 +274,6 @@ services:
         condition: service_healthy
       health_records:
         condition: service_healthy
-
-  multiagent_front:
-    build:
-      context: frontend/multiagent_front
-      dockerfile: Dockerfile
-    ports:
-      - "5173:5173"
-    depends_on:
-      - hostapi
 
 volumes:
   postgres_data:
