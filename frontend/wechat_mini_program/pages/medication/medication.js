@@ -442,30 +442,28 @@ Page({
 
               // 自动填入识别到的信息
               const currentData = that.data.newMedication;
+              const nextMedication = Object.assign({}, currentData);
+              nextMedication.name = data.drug_name;
+              nextMedication.notes =
+                (currentData.notes ? currentData.notes + "\n" : "") +
+                "OCR识别内容: " +
+                (data.text || "").substring(0, 50) +
+                "...";
               that.setData({
-                newMedication: {
-                  ...currentData,
-                  name: data.drug_name,
-                  notes:
-                    (currentData.notes ? currentData.notes + "\n" : "") +
-                    "OCR识别内容: " +
-                    (data.text || "").substring(0, 50) +
-                    "...",
-                },
+                newMedication: nextMedication,
               });
             } else {
               wx.showToast({ title: "未能识别药品名称", icon: "none" });
               if (data.text) {
                 // 即使没有识别出 drug_name，也把 text 放入备注
                 const currentData = that.data.newMedication;
+                const nextMedication = Object.assign({}, currentData);
+                nextMedication.notes =
+                  (currentData.notes ? currentData.notes + "\n" : "") +
+                  "OCR原始内容: " +
+                  data.text.substring(0, 100);
                 that.setData({
-                  newMedication: {
-                    ...currentData,
-                    notes:
-                      (currentData.notes ? currentData.notes + "\n" : "") +
-                      "OCR原始内容: " +
-                      data.text.substring(0, 100),
-                  },
+                  newMedication: nextMedication,
                 });
               }
             }
@@ -672,7 +670,9 @@ Page({
     const prev = this.data.reminders || [];
     const next = prev.map((item) => {
       if (String(item.id) === id) {
-        return { ...item, enabled };
+        const nextItem = Object.assign({}, item);
+        nextItem.enabled = enabled;
+        return nextItem;
       }
       return item;
     });
@@ -722,10 +722,9 @@ Page({
   onInputChange(e) {
     const field = e.currentTarget.dataset.field;
     const value = e.detail.value;
-
-    this.setData({
-      [`newMedication.${field}`]: value,
-    });
+    const patch = {};
+    patch["newMedication." + field] = value;
+    this.setData(patch);
   },
 
   // 药品类型选择
@@ -776,7 +775,7 @@ Page({
   onTimeChange(e) {
     const index = e.currentTarget.dataset.index;
     const time = e.detail.value;
-    const times = [...this.data.newMedication.times];
+    const times = (this.data.newMedication.times || []).slice();
     times[index] = time;
 
     this.setData({
@@ -813,10 +812,9 @@ Page({
   onReminderInputChange(e) {
     const field = e.currentTarget.dataset.field;
     const value = e.detail.value;
-
-    this.setData({
-      [`newReminder.${field}`]: value,
-    });
+    const patch = {};
+    patch["newReminder." + field] = value;
+    this.setData(patch);
   },
 
   onReminderMedicationChange(e) {
@@ -884,10 +882,10 @@ Page({
         frequency: medication.frequency,
         times: validTimes,
         startDate,
-        ...(endDate ? { endDate } : {}),
         notes: medication.notes,
         reminderEnabled: validTimes.length > 0,
       };
+      if (endDate) payload.endDate = endDate;
 
       if (payload.reminderEnabled) {
         try {

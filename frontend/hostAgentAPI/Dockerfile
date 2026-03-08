@@ -30,6 +30,10 @@ COPY frontend/hostAgentAPI ./
 # Provide backend modules used by Host API integrations (WeChat subscribe messages, etc.)
 COPY backend/notification_service.py ./backend/notification_service.py
 COPY backend/health_records_api.py ./backend/health_records_api.py
+COPY backend/visit_summary_api.py ./backend/visit_summary_api.py
+COPY backend/memory_system.py ./backend/memory_system.py
+COPY backend/services ./backend/services
+COPY backend/api ./backend/api
 COPY backend/HealthRecordsManager ./backend/HealthRecordsManager
 COPY backend/AgentMemorySystem ./backend/AgentMemorySystem
 

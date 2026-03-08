@@ -134,19 +134,17 @@ Page({
               ? "default"
               : "consultation");
 
-          return {
-            ...item,
-            tags,
-            consultation_type: type, // Ensure it's available for navigation
-            agent_mode: agentMode,
-            formatted_date: this.formatDate(item.created_at),
-            type_name: this.getTypeName(type),
-            status_name: this.getStatusName(item.status || "completed"), // 默认为已完成
-            preview:
-              item.question ||
-              (item.answer ? item.answer.substring(0, 50) : "无内容"),
-            message_count: 2, // 问答对默认为2条消息
-          };
+          const merged = Object.assign({}, item);
+          merged.tags = tags;
+          merged.consultation_type = type;
+          merged.agent_mode = agentMode;
+          merged.formatted_date = this.formatDate(item.created_at);
+          merged.type_name = this.getTypeName(type);
+          merged.status_name = this.getStatusName(item.status || "completed");
+          merged.preview =
+            item.question || (item.answer ? item.answer.substring(0, 50) : "无内容");
+          merged.message_count = 2;
+          return merged;
         });
 
         this.setData({

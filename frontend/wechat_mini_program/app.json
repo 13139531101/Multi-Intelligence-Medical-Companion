@@ -54,6 +54,7 @@
     "navigationBarTitleText": "智能健康助手",
     "navigationBarTextStyle": "white"
   },
+  "lazyCodeLoading": "requiredComponents",
   "style": "v2",
   "sitemapLocation": "sitemap.json"
 }

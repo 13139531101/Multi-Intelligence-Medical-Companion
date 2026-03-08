@@ -112,20 +112,19 @@ Page({
                 ? "已上传附件，内容待识别"
                 : "";
           const displayTitle = this.getDisplayTitle(record);
-          return {
-            ...record,
-            record_type_label: typeLabel,
-            formatted_date: this.formatDate(createdAt),
-            tags: this.normalizeTags(record.tags),
-            description: rawDesc,
-            display_description: displayDesc,
-            display_title: displayTitle,
-          };
+          const merged = Object.assign({}, record);
+          merged.record_type_label = typeLabel;
+          merged.formatted_date = this.formatDate(createdAt);
+          merged.tags = this.normalizeTags(record.tags);
+          merged.description = rawDesc;
+          merged.display_description = displayDesc;
+          merged.display_title = displayTitle;
+          return merged;
         });
 
         const records = refresh
           ? formattedRecords
-          : [...this.data.records, ...formattedRecords];
+          : this.data.records.concat(formattedRecords);
 
         const tagSet = new Set();
         records.forEach((r) => {
@@ -438,7 +437,7 @@ Page({
 
   // 筛选档案
   filterRecords() {
-    let filtered = [...this.data.records];
+    let filtered = this.data.records.slice();
 
     // 按类型筛选
     if (this.data.activeFilter !== "all") {

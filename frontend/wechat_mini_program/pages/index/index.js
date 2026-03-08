@@ -360,21 +360,25 @@ Page({
           source: point.source || "",
         };
       });
-      this.setData({
-        trendSelected: {
-          name: indicator.name || name,
-          unit: indicator.unit || "",
-          count: indicator.count || pointItems.length,
-          stats: indicator.stats || null,
-          points: pointItems,
-          chartEnabled: chartPoints.length >= 2,
-          chartPoints,
+      this.setData(
+        {
+          trendSelected: {
+            name: indicator.name || name,
+            unit: indicator.unit || "",
+            count: indicator.count || pointItems.length,
+            stats: indicator.stats || null,
+            points: pointItems,
+            chartEnabled: chartPoints.length >= 2,
+            chartPoints,
+          },
         },
-      }, () => {
-        const drawFn = () => this.drawTrendChart(chartPoints, indicator.unit || "");
-        if (wx.nextTick) wx.nextTick(drawFn);
-        else setTimeout(drawFn, 0);
-      });
+        () => {
+          const drawFn = () =>
+            this.drawTrendChart(chartPoints, indicator.unit || "");
+          if (wx.nextTick) wx.nextTick(drawFn);
+          else setTimeout(drawFn, 0);
+        },
+      );
     } catch (error) {
       console.error("加载趋势详情失败:", error);
       wx.showToast({ title: "加载失败", icon: "none" });
@@ -414,8 +418,13 @@ Page({
     const plotH = Math.max(10, h - top - bottom);
 
     const values = items.map((p) => p.value);
-    let minV = Math.min(...values);
-    let maxV = Math.max(...values);
+    let minV = values[0];
+    let maxV = values[0];
+    for (let i = 1; i < values.length; i += 1) {
+      const v = values[i];
+      if (v < minV) minV = v;
+      if (v > maxV) maxV = v;
+    }
     if (!isFinite(minV) || !isFinite(maxV)) return;
     if (minV === maxV) {
       minV = minV - 1;

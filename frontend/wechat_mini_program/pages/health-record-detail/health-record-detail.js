@@ -80,17 +80,16 @@ Page({
       const testItems = tests.allItems || [];
       const visibleTestItems = testItems;
       const ocrInfo = this.buildOcrPreview(contentTrimmed, 650);
+      const merged = Object.assign({}, record);
+      merged.record_type_label = typeLabel;
+      merged.formatted_date = formattedDate;
+      merged.tags = tags;
+      merged.description = rawDesc;
+      merged.display_description = displayDesc;
+      merged.display_title = displayTitle;
 
       this.setData({
-        record: {
-          ...record,
-          record_type_label: typeLabel,
-          formatted_date: formattedDate,
-          tags,
-          description: rawDesc,
-          display_description: displayDesc,
-          display_title: displayTitle,
-        },
+        record: merged,
         fileUrls,
         structuredSummary,
         displayKvs,

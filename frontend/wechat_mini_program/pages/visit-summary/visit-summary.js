@@ -199,36 +199,32 @@ Page({
           const keyPointsFromDf =
             df && Array.isArray(df.key_points) ? df.key_points : [];
           const adviceFromDf = df && Array.isArray(df.advice) ? df.advice : [];
-          const keyPoints = [
-            ...keyPointsFromDf
-              .map((s) => String(s || "").trim())
-              .filter(Boolean),
-            ...adviceFromDf.map((s) => String(s || "").trim()).filter(Boolean),
-          ]
+          const keyPoints = keyPointsFromDf
+            .map((s) => String(s || "").trim())
+            .filter(Boolean)
+            .concat(adviceFromDf.map((s) => String(s || "").trim()).filter(Boolean))
             .filter(Boolean)
             .slice(0, 3);
           const keyPointsFallback = extractKeyPoints(summaryText, 3);
-
-          return {
-            ...item,
-            hospitalDisplay,
-            departmentDisplay: compactText(departmentFromDf, 18),
-            doctorDisplay: compactText(doctorFromDf, 18),
-            visitDateDisplay,
-            statusDisplay,
-            statusClass,
-            diagnosisDisplay,
-            fileIds,
-            fileUrls,
-            medTags,
-            summaryText,
-            summaryPreview,
-            canExpand,
-            followUpDisplay,
-            keyPoints: keyPoints.length ? keyPoints : keyPointsFallback,
-            errorMessageDisplay,
-            expanded: false,
-          };
+          const merged = Object.assign({}, item);
+          merged.hospitalDisplay = hospitalDisplay;
+          merged.departmentDisplay = compactText(departmentFromDf, 18);
+          merged.doctorDisplay = compactText(doctorFromDf, 18);
+          merged.visitDateDisplay = visitDateDisplay;
+          merged.statusDisplay = statusDisplay;
+          merged.statusClass = statusClass;
+          merged.diagnosisDisplay = diagnosisDisplay;
+          merged.fileIds = fileIds;
+          merged.fileUrls = fileUrls;
+          merged.medTags = medTags;
+          merged.summaryText = summaryText;
+          merged.summaryPreview = summaryPreview;
+          merged.canExpand = canExpand;
+          merged.followUpDisplay = followUpDisplay;
+          merged.keyPoints = keyPoints.length ? keyPoints : keyPointsFallback;
+          merged.errorMessageDisplay = errorMessageDisplay;
+          merged.expanded = false;
+          return merged;
         });
         this.setData({
           summaries: normalized,
@@ -398,7 +394,9 @@ Page({
     const id = e.currentTarget.dataset.id;
     const next = (this.data.summaries || []).map((s) => {
       if (!s || s.id !== id) return s;
-      return { ...s, expanded: !s.expanded };
+      const nextItem = Object.assign({}, s);
+      nextItem.expanded = !s.expanded;
+      return nextItem;
     });
     this.setData({ summaries: next });
   },

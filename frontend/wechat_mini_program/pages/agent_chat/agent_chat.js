@@ -281,13 +281,16 @@ Page({
     if (!this.shouldLogVertical(rawStats) && !this.shouldLogVertical(normStats))
       return;
     this.debugLoggedKeys.add(key);
-    console.warn("[vertical-text-debug]", {
-      key,
-      agentType: this.data.agentType,
-      raw: rawStats,
-      normalized: normStats,
-      ...extra,
-    });
+    const verticalPayload = Object.assign(
+      {
+        key,
+        agentType: this.data.agentType,
+        raw: rawStats,
+        normalized: normStats,
+      },
+      extra || {},
+    );
+    console.warn("[vertical-text-debug]", verticalPayload);
   },
 
   getPartsDebugStats(parts) {
@@ -331,7 +334,8 @@ Page({
     if (this.debugLoggedKeys.has(k)) return;
     if (!this.shouldLogSplitParts(stats)) return;
     this.debugLoggedKeys.add(k);
-    console.warn("[vertical-parts-debug]", { key, stats, ...extra });
+    const partsPayload = Object.assign({ key, stats }, extra || {});
+    console.warn("[vertical-parts-debug]", partsPayload);
   },
 
   mergeStreamingText(incomingText, reset = false) {
@@ -384,8 +388,7 @@ Page({
     const updatedMessages = this.data.messages.map((m) => {
       if (m.id === this.currentStreamingId) {
         const isLong = this.isLongAssistantText(displayText);
-        return {
-          ...m,
+        return Object.assign({}, m, {
           contentParts: displayText
             ? [
                 {
@@ -397,7 +400,7 @@ Page({
           rawText: displayText,
           isLong,
           collapsed: false,
-        };
+        });
       }
       return m;
     });
@@ -711,7 +714,7 @@ Page({
     if ((!parts || parts.length === 0) && message.files) {
       parts = parseFilesToParts(message.files);
     } else if (message.files) {
-      parts = [...parts, ...parseFilesToParts(message.files)];
+      parts = (parts || []).concat(parseFilesToParts(message.files));
     }
     return parts;
   },
@@ -936,14 +939,15 @@ Page({
             : combinedThinking
           : existing;
 
-        result.push({
-          ...finalMsg,
-          thinkingRaw: finalThinkingRaw,
-          thinkingHtml: finalThinkingRaw
-            ? this.formatTextToRichHtml(finalThinkingRaw)
-            : "",
-          showThinking: false,
-        });
+        result.push(
+          Object.assign({}, finalMsg, {
+            thinkingRaw: finalThinkingRaw,
+            thinkingHtml: finalThinkingRaw
+              ? this.formatTextToRichHtml(finalThinkingRaw)
+              : "",
+            showThinking: false,
+          }),
+        );
 
         trailingKept.forEach((m) => result.push(m));
       };
@@ -980,12 +984,11 @@ Page({
       if (!combined) return target;
       const nextRaw = (target.thinkingRaw || "").trim();
       const finalThinkingRaw = nextRaw ? `${nextRaw}\n\n${combined}` : combined;
-      return {
-        ...target,
+      return Object.assign({}, target, {
         thinkingRaw: finalThinkingRaw,
         thinkingHtml: this.formatTextToRichHtml(finalThinkingRaw),
         showThinking: false,
-      };
+      });
     };
 
     for (let i = 0; i < messages.length; i++) {
@@ -999,14 +1002,14 @@ Page({
         continue;
       }
       if (pending.length) {
-        result.push(...pending);
+        Array.prototype.push.apply(result, pending);
         pending = [];
       }
       result.push(msg);
     }
 
     if (pending.length) {
-      result.push(...pending);
+      Array.prototype.push.apply(result, pending);
       pending = [];
     }
 
@@ -1152,7 +1155,7 @@ Page({
 
         const finalMessages =
           this.data.messages.length > 0
-            ? [...this.data.messages, ...mergedMessages]
+            ? this.data.messages.concat(mergedMessages)
             : mergedFormattedMessages;
 
         console.log("Final messages to render:", finalMessages);
@@ -1470,10 +1473,9 @@ Page({
         type: isImage ? "image" : "file",
       };
       this.setData({
-        pendingAttachments: [
-          ...(this.data.pendingAttachments || []),
+        pendingAttachments: (this.data.pendingAttachments || []).concat([
           attachment,
-        ],
+        ]),
       });
     } catch (e) {
       wx.showToast({ title: "上传失败", icon: "none" });
@@ -1511,7 +1513,7 @@ Page({
     if (!msg) return;
     const next = messages.map((m, i) => {
       if (i !== index) return m;
-      return { ...m, showThinking: !m.showThinking };
+      return Object.assign({}, m, { showThinking: !m.showThinking });
     });
     this.setData({ messages: next });
   },
@@ -1559,7 +1561,7 @@ Page({
     await new Promise((resolve) => {
       this.setData(
         {
-          messages: [...this.data.messages, userMessage],
+          messages: (this.data.messages || []).concat([userMessage]),
           inputText: "",
           pendingAttachments: [],
           isSending: true,
@@ -1665,7 +1667,7 @@ Page({
         };
 
         this.setData({
-          messages: [...this.data.messages, aiMessage],
+          messages: (this.data.messages || []).concat([aiMessage]),
           shouldAutoScroll: true,
           showJumpToBottom: false,
           unreadCount: 0,
@@ -1793,8 +1795,7 @@ Page({
                         this.streamingThinkingRaw || "",
                       );
                       const isLong = this.isLongAssistantText(finalText);
-                      return {
-                        ...m,
+                      return Object.assign({}, m, {
                         contentParts: [
                           {
                             type: "text",
@@ -1810,7 +1811,7 @@ Page({
                         isLong,
                         collapsed: isLong,
                         isStreaming: false,
-                      };
+                      });
                     }
                     return m;
                   });
@@ -1904,8 +1905,7 @@ Page({
                         this.streamingThinkingRaw || "",
                       );
                       const isLong = this.isLongAssistantText(finalText);
-                      return {
-                        ...m,
+                      return Object.assign({}, m, {
                         contentParts: [
                           {
                             type: "text",
@@ -1921,7 +1921,7 @@ Page({
                         isLong,
                         collapsed: isLong,
                         isStreaming: false,
-                      };
+                      });
                     }
                     return m;
                   });
@@ -1980,7 +1980,7 @@ Page({
           await new Promise((resolve) => {
             this.setData(
               {
-                messages: [...this.data.messages, pendingMessage],
+                messages: (this.data.messages || []).concat([pendingMessage]),
                 shouldAutoScroll: true,
                 showJumpToBottom: false,
                 unreadCount: 0,
@@ -2041,8 +2041,7 @@ Page({
     const isLong = this.isLongAssistantText(finalText);
     const updatedMessages = this.data.messages.map((m) => {
       if (m.id === this.currentStreamingId) {
-        return {
-          ...m,
+        return Object.assign({}, m, {
           isStreaming: false,
           rawText: finalText,
           thinkingRaw: finalThinkingRaw,
@@ -2055,7 +2054,7 @@ Page({
           contentParts: finalText
             ? [{ type: "text", content: this.formatTextToRichHtml(finalText) }]
             : m.contentParts,
-        };
+        });
       }
       return m;
     });
@@ -2181,10 +2180,9 @@ Page({
             }
           }
 
-          const combined = this.mergeThinkingMessages([
-            ...baseMessages,
-            ...effectiveNewMessages,
-          ]);
+          const combined = this.mergeThinkingMessages(
+            (baseMessages || []).concat(effectiveNewMessages || []),
+          );
           const patch = { messages: combined };
           if (hasAssistantReply) patch.isSending = false;
           this.setData(patch, () =>

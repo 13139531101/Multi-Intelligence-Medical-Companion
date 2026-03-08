@@ -1,8 +1,29 @@
-const DEFAULT_SERVER_URL = "http://127.0.0.1:13002";
+const DEFAULT_SERVER_URL = "http://8.155.166.136:13002";
 
 const normalizeBaseUrl = (raw) => {
-  const s = String(raw || "").trim();
+  let s = String(raw || "").trim();
   if (!s) return "";
+  const pairs = [
+    ['"', '"'],
+    ["'", "'"],
+    ["`", "`"],
+    ["“", "”"],
+    ["‘", "’"],
+  ];
+  let changed = true;
+  while (changed && s.length >= 2) {
+    changed = false;
+    for (let i = 0; i < pairs.length; i += 1) {
+      const left = pairs[i][0];
+      const right = pairs[i][1];
+      if (s.startsWith(left) && s.endsWith(right)) {
+        s = s.slice(1, -1).trim();
+        changed = true;
+        break;
+      }
+    }
+  }
+  if (!/^https?:\/\//i.test(s)) return "";
   return s.replace(/\/+$/, "");
 };
 
@@ -13,14 +34,20 @@ const getServerUrlFromRuntime = () => {
       wx.getStorageSync("serverUrl") ||
       wx.getStorageSync("server_url") ||
       "";
-    if (stored) return normalizeBaseUrl(stored);
+    if (stored) {
+      const normalizedStored = normalizeBaseUrl(stored);
+      if (normalizedStored) return normalizedStored;
+    }
 
     const ext = wx.getExtConfigSync ? wx.getExtConfigSync() : null;
     const extUrl = ext && (ext.SERVER_URL || ext.serverUrl || ext.server_url);
-    if (extUrl) return normalizeBaseUrl(extUrl);
+    if (extUrl) {
+      const normalizedExtUrl = normalizeBaseUrl(extUrl);
+      if (normalizedExtUrl) return normalizedExtUrl;
+    }
   } catch (e) {}
 
-  return normalizeBaseUrl(DEFAULT_SERVER_URL);
+  return normalizeBaseUrl(DEFAULT_SERVER_URL) || "http://127.0.0.1:13002";
 };
 
 const SERVER_URL = getServerUrlFromRuntime();
@@ -59,10 +86,12 @@ const request = (endpoint, options = {}) => {
   return new Promise((resolve, reject) => {
     const userInfo = wx.getStorageSync("userInfo");
     const token = userInfo ? userInfo.token : "";
-    const header = {
-      "Content-Type": "application/json",
-      ...options.headers,
-    };
+    const header = Object.assign(
+      {
+        "Content-Type": "application/json",
+      },
+      options.headers || {},
+    );
     if (token) {
       header["Authorization"] = `Bearer ${token}`;
     }
@@ -171,7 +200,7 @@ const sha256 = (ascii) => {
   for (i = 0; i < 8; i += 1) {
     for (j = 3; j + 1; j -= 1) {
       const b = (hash[i] >> (j * 8)) & 255;
-      result += ((b < 16 ? 0 : "") + b.toString(16));
+      result += (b < 16 ? 0 : "") + b.toString(16);
     }
   }
   return result;
@@ -217,13 +246,15 @@ const sendMessage = (message) => {
       params: {
         role: message.role,
         parts: [{ type: "text", text: message.message }],
-        metadata: {
-          conversation_id: message.conversation_id,
-          message_id: `msg_${Date.now()}_${Math.random()
-            .toString(36)
-            .substr(2, 9)}`,
-          ...(message.metadata || {}),
-        },
+        metadata: Object.assign(
+          {
+            conversation_id: message.conversation_id,
+            message_id: `msg_${Date.now()}_${Math.random()
+              .toString(36)
+              .substr(2, 9)}`,
+          },
+          message.metadata || {},
+        ),
       },
     },
     headers: {},
@@ -696,10 +727,14 @@ const sendTaskStreaming = (
     data: requestBody,
     enableChunked: true,
     timeout: 300000,
-    header: {
-      "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
+    header: token
+      ? {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        }
+      : {
+          "Content-Type": "application/json",
+        },
     success: (res) => {
       if (res.statusCode >= 200 && res.statusCode < 300) {
         // 请求成功
@@ -831,11 +866,16 @@ const sendTaskStreamingViaHost = (
     data: requestBody,
     enableChunked: true,
     timeout: 300000,
-    header: {
-      "Content-Type": "application/json",
-      "X-Target-Agent": encodeURIComponent(targetAgentName || ""),
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
+    header: token
+      ? {
+          "Content-Type": "application/json",
+          "X-Target-Agent": encodeURIComponent(targetAgentName || ""),
+          Authorization: `Bearer ${token}`,
+        }
+      : {
+          "Content-Type": "application/json",
+          "X-Target-Agent": encodeURIComponent(targetAgentName || ""),
+        },
     success: (res) => {
       if (res.statusCode >= 200 && res.statusCode < 300) {
       } else {

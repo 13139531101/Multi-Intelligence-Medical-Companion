@@ -9,7 +9,7 @@
     },
     "setting": {
         "coverView": true,
-        "es6": true,
+        "es6": false,
         "postcss": true,
         "minified": true,
         "enhance": true,
@@ -19,7 +19,9 @@
         "urlCheck": false,
         "babelSetting": {
             "ignore": [],
-            "disablePlugins": [],
+            "disablePlugins": [
+                "transform-runtime"
+            ],
             "outputPath": ""
         }
     },
