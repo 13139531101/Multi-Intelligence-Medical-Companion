@@ -36,6 +36,8 @@ services:
       retries: 20
 
   health_advisor:
+    image: ${REGISTRY:-crpi-zr8m4m7ism94623a.cn-hangzhou.personal.cr.aliyuncs.com}/${NAMESPACE:-duozhiyiban}/${IMAGE_PREFIX:-a2aserver-}health_advisor:${TAG:-latest}
+    pull_policy: missing
     build:
       context: backend
       dockerfile: HealthAdvisor/Dockerfile
@@ -73,6 +75,8 @@ services:
       retries: 12
 
   medication_reminder:
+    image: ${REGISTRY:-crpi-zr8m4m7ism94623a.cn-hangzhou.personal.cr.aliyuncs.com}/${NAMESPACE:-duozhiyiban}/${IMAGE_PREFIX:-a2aserver-}medication_reminder:${TAG:-latest}
+    pull_policy: missing
     build:
       context: backend
       dockerfile: MedicationReminder/Dockerfile
@@ -97,6 +101,8 @@ services:
       retries: 12
 
   visit_summary:
+    image: ${REGISTRY:-crpi-zr8m4m7ism94623a.cn-hangzhou.personal.cr.aliyuncs.com}/${NAMESPACE:-duozhiyiban}/${IMAGE_PREFIX:-a2aserver-}visit_summary:${TAG:-latest}
+    pull_policy: missing
     build:
       context: backend
       dockerfile: VisitSummaryGenerator/Dockerfile
@@ -125,6 +131,8 @@ services:
       retries: 12
 
   health_records:
+    image: ${REGISTRY:-crpi-zr8m4m7ism94623a.cn-hangzhou.personal.cr.aliyuncs.com}/${NAMESPACE:-duozhiyiban}/${IMAGE_PREFIX:-a2aserver-}health_records:${TAG:-latest}
+    pull_policy: missing
     build:
       context: backend
       dockerfile: HealthRecordsManager/Dockerfile
@@ -169,6 +177,8 @@ services:
       retries: 12
 
   admin_backend:
+    image: ${REGISTRY:-crpi-zr8m4m7ism94623a.cn-hangzhou.personal.cr.aliyuncs.com}/${NAMESPACE:-duozhiyiban}/${IMAGE_PREFIX:-a2aserver-}admin_backend:${TAG:-latest}
+    pull_policy: missing
     build:
       context: backend
       dockerfile: Dockerfile.admin
@@ -211,6 +221,8 @@ services:
       - postgres
 
   admin_frontend:
+    image: ${REGISTRY:-crpi-zr8m4m7ism94623a.cn-hangzhou.personal.cr.aliyuncs.com}/${NAMESPACE:-duozhiyiban}/${IMAGE_PREFIX:-a2aserver-}admin_frontend:${TAG:-latest}
+    pull_policy: missing
     build:
       context: frontend/admin-dashboard
       dockerfile: Dockerfile
@@ -220,6 +232,8 @@ services:
       - admin_backend
 
   hostapi:
+    image: ${REGISTRY:-crpi-zr8m4m7ism94623a.cn-hangzhou.personal.cr.aliyuncs.com}/${NAMESPACE:-duozhiyiban}/${IMAGE_PREFIX:-a2aserver-}hostapi:${TAG:-latest}
+    pull_policy: missing
     build:
       context: .
       dockerfile: frontend/hostAgentAPI/Dockerfile
