@@ -1,7 +1,10 @@
-const DEFAULT_SERVER_URL = "http://8.155.166.136:13002";
+const DEFAULT_SERVER_URL = "http://8.155.166.136:13003";
+// const DEFAULT_SERVER_URL = "http://127.0.0.1:13003";
 
 const normalizeBaseUrl = (raw) => {
-  let s = String(raw || "").trim();
+  let s = String(raw || "")
+    .replace(/[\u200B-\u200D\u2060\uFEFF]/g, "")
+    .trim();
   if (!s) return "";
   const pairs = [
     ['"', '"'],
@@ -24,7 +27,15 @@ const normalizeBaseUrl = (raw) => {
     }
   }
   if (!/^https?:\/\//i.test(s)) return "";
-  return s.replace(/\/+$/, "");
+  try {
+    const u = new URL(s);
+    if (u.hostname === "0.0.0.0") {
+      u.hostname = "127.0.0.1";
+    }
+    return u.toString().replace(/\/+$/, "");
+  } catch (e) {
+    return s.replace(/\/+$/, "");
+  }
 };
 
 const getServerUrlFromRuntime = () => {
@@ -47,7 +58,7 @@ const getServerUrlFromRuntime = () => {
     }
   } catch (e) {}
 
-  return normalizeBaseUrl(DEFAULT_SERVER_URL) || "http://127.0.0.1:13002";
+  return normalizeBaseUrl(DEFAULT_SERVER_URL) || "http://127.0.0.1:13003";
 };
 
 const SERVER_URL = getServerUrlFromRuntime();

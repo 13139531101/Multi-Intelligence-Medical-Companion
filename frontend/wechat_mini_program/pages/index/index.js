@@ -36,6 +36,24 @@ Page({
   },
 
   onLoad() {
+    this._dashboardLoading = false;
+    this._dashboardPromise = null;
+    this._lastDashboardLoadAt = 0;
+    this._dashboardMinIntervalMs = 8000;
+    this._trendDetailRequestToken = 0;
+    this._trendDetailLoadingName = "";
+    this._trendDetailCache = {};
+    this._trendDetailCacheTtlMs = 30000;
+    this._trendIndicatorsLoaded = false;
+    this._trendVersionSeen = this.getHealthRecordsVersion();
+    this._dashboardStorageKey = "indexLastDashboardLoadAt";
+    this._dashboardRefreshMinIntervalMs = 30000;
+    try {
+      const saved = Number(wx.getStorageSync(this._dashboardStorageKey) || 0);
+      if (Number.isFinite(saved) && saved > 0) {
+        this._lastDashboardLoadAt = Math.max(this._lastDashboardLoadAt, saved);
+      }
+    } catch (e) {}
     try {
       const sys = wx.getSystemInfoSync();
       const w = Math.max(260, (sys?.windowWidth || 320) - 60);
@@ -46,9 +64,16 @@ Page({
   },
 
   onShow() {
-    // 每次显示页面时刷新数据
     if (this.data.isLoggedIn) {
-      this.loadDashboardData();
+      const now = Date.now();
+      if (
+        !this._dashboardLoading &&
+        (now - (this._lastDashboardLoadAt || 0) >
+          this._dashboardRefreshMinIntervalMs ||
+          this.shouldReloadTrends(false))
+      ) {
+        this.loadDashboardData("onShow");
+      }
       // 更新 TabBar 选中状态
       if (typeof this.getTabBar === "function" && this.getTabBar()) {
         this.getTabBar().setData({
@@ -66,7 +91,7 @@ Page({
         isLoggedIn: true,
         loginUserInfo: loginUserInfo,
       });
-      this.loadDashboardData();
+      this.loadDashboardData("checkLoginStatus");
     } else {
       // 未登录，跳转到登录页面
       wx.redirectTo({
@@ -81,12 +106,41 @@ Page({
   },
 
   // 加载仪表板数据
-  async loadDashboardData() {
+  async loadDashboardData(reason = "unknown", force = false) {
+    const now = Date.now();
+    if (!force && this._dashboardLoading) {
+      return this._dashboardPromise || Promise.resolve();
+    }
+    if (
+      !force &&
+      this._lastDashboardLoadAt > 0 &&
+      now - this._lastDashboardLoadAt < this._dashboardMinIntervalMs
+    ) {
+      return Promise.resolve();
+    }
+    this._dashboardLoading = true;
+    this._lastDashboardLoadAt = now;
     try {
-      await this.loadDashboardStats();
-      await this.loadTrendIndicators(false);
+      wx.setStorageSync(this._dashboardStorageKey, now);
+    } catch (e) {}
+    const work = (async () => {
+      try {
+        await this.loadDashboardStats();
+        if (this.shouldReloadTrends(force)) {
+          await this.loadTrendIndicators(false);
+        }
+      } catch (error) {
+        console.error(`加载仪表板数据失败(${reason}):`, error);
+      } finally {
+        this._dashboardLoading = false;
+        this._dashboardPromise = null;
+      }
+    })();
+    this._dashboardPromise = work;
+    try {
+      await work;
     } catch (error) {
-      console.error("加载仪表板数据失败:", error);
+      console.error(`加载仪表板数据失败(${reason}):`, error);
     }
   },
 
@@ -136,12 +190,14 @@ Page({
       });
     } catch (error) {
       console.error("加载仪表板统计失败:", error);
-      this.setData({
-        healthRecordsCount: 0,
-        medicationCount: 0,
-        summaryCount: 0,
-        recentActivities: [],
-      });
+      if (!this.data.recentActivities.length) {
+        this.setData({
+          healthRecordsCount: 0,
+          medicationCount: 0,
+          summaryCount: 0,
+          recentActivities: [],
+        });
+      }
     }
   },
 
@@ -213,7 +269,7 @@ Page({
 
   // 刷新数据
   refreshData() {
-    this.loadDashboardData();
+    this.loadDashboardData("refreshData", true);
     this.checkApi();
   },
 
@@ -235,6 +291,22 @@ Page({
   // 查看详细趋势
   refreshTrends() {
     this.loadTrendIndicators(true);
+  },
+
+  getHealthRecordsVersion() {
+    try {
+      const raw = wx.getStorageSync("healthRecordsVersion");
+      const val = Number(raw || 0);
+      return Number.isFinite(val) ? val : 0;
+    } catch (e) {
+      return 0;
+    }
+  },
+
+  shouldReloadTrends(force = false) {
+    if (force) return true;
+    if (!this._trendIndicatorsLoaded) return true;
+    return this.getHealthRecordsVersion() !== this._trendVersionSeen;
   },
 
   formatIndicatorLatest(item) {
@@ -263,6 +335,8 @@ Page({
   },
 
   async loadTrendIndicators(showHint = false) {
+    const requestToken = Date.now();
+    this._trendListRequestToken = requestToken;
     this.setData({ trendLoading: true, trendError: "" });
     try {
       const response = await request("/api/health-trends/indicators", {
@@ -271,6 +345,7 @@ Page({
           days: this.data.trendDays,
           include_points: false,
         },
+        timeout: 15000,
       });
       const indicators = Array.isArray(response?.indicators)
         ? response.indicators.map((item) => this.normalizeIndicatorItem(item))
@@ -281,11 +356,14 @@ Page({
       const selectedStillExists =
         selectedName &&
         indicators.some((x) => String(x?.name || "") === String(selectedName));
+      if (this._trendListRequestToken !== requestToken) return;
       this.setData({
         trendIndicators: indicators,
         trendLoading: false,
         trendError: indicators.length ? "" : "暂无趋势数据",
       });
+      this._trendIndicatorsLoaded = true;
+      this._trendVersionSeen = this.getHealthRecordsVersion();
       if (!indicators.length || (selectedName && !selectedStillExists)) {
         this.setData({ trendSelectedName: "", trendSelected: null });
         this.clearTrendChart();
@@ -305,13 +383,27 @@ Page({
       }
     } catch (error) {
       console.error("加载健康趋势失败:", error);
-      this.setData({
-        trendIndicators: [],
-        trendLoading: false,
-        trendError: "趋势加载失败",
-      });
-      this.setData({ trendSelectedName: "", trendSelected: null });
-      this.clearTrendChart();
+      if (this._trendListRequestToken !== requestToken) return;
+      if (
+        Array.isArray(this.data.trendIndicators) &&
+        this.data.trendIndicators.length
+      ) {
+        this.setData({
+          trendLoading: false,
+          trendError: "",
+        });
+        if (showHint) {
+          wx.showToast({ title: "网络波动，已保留上次趋势", icon: "none" });
+        }
+      } else {
+        this.setData({
+          trendIndicators: [],
+          trendLoading: false,
+          trendError: "趋势加载失败",
+        });
+        this.setData({ trendSelectedName: "", trendSelected: null });
+        this.clearTrendChart();
+      }
     }
   },
 
@@ -323,8 +415,66 @@ Page({
       this.clearTrendChart();
       return;
     }
+    if (this._trendDetailLoadingName === name) {
+      return;
+    }
+    const cache = this._trendDetailCache || {};
+    const now = Date.now();
+    const cached = cache[name];
+    if (
+      cached &&
+      now - Number(cached.at || 0) < this._trendDetailCacheTtlMs &&
+      cached.value
+    ) {
+      const indicator = cached.value;
+      const points = Array.isArray(indicator.points) ? indicator.points : [];
+      const chartPoints = points
+        .filter((p) => typeof p?.value === "number")
+        .map((p) => ({
+          date: p.date || "",
+          value: p.value,
+        }))
+        .filter((p) => p.date && typeof p.value === "number");
+      const pointItems = points.map((point, index) => {
+        const value =
+          typeof point.value === "number"
+            ? point.value
+            : point.value_text || "";
+        const unit = point.unit || indicator.unit || "";
+        return {
+          id: `${index}`,
+          date: point.date || "",
+          valueText: value !== "" ? `${value}${unit}` : "暂无数值",
+          source: point.source || "",
+        };
+      });
+      this.setData(
+        {
+          trendSelectedName: name,
+          trendSelected: {
+            name: indicator.name || name,
+            unit: indicator.unit || "",
+            count: indicator.count || pointItems.length,
+            stats: indicator.stats || null,
+            points: pointItems,
+            chartEnabled: chartPoints.length >= 2,
+            chartPoints,
+          },
+        },
+        () => {
+          const drawFn = () =>
+            this.drawTrendChart(chartPoints, indicator.unit || "");
+          if (wx.nextTick) wx.nextTick(drawFn);
+          else setTimeout(drawFn, 0);
+        },
+      );
+      return;
+    }
     this.setData({ trendSelectedName: name, trendSelected: null });
     this.clearTrendChart();
+    const requestToken = Date.now();
+    this._trendDetailRequestToken = requestToken;
+    this._trendDetailLoadingName = name;
     try {
       const response = await request("/api/health-trends/indicator", {
         method: "GET",
@@ -332,13 +482,19 @@ Page({
           name,
           days: this.data.trendDays,
         },
+        timeout: 15000,
       });
+      if (this._trendDetailRequestToken !== requestToken) return;
       const indicator = response?.indicator || null;
       if (!indicator) {
         wx.showToast({ title: "暂无详细趋势", icon: "none" });
         this.setData({ trendSelected: null });
         return;
       }
+      this._trendDetailCache[name] = {
+        at: Date.now(),
+        value: indicator,
+      };
       const points = Array.isArray(indicator.points) ? indicator.points : [];
       const chartPoints = points
         .filter((p) => typeof p?.value === "number")
@@ -380,9 +536,14 @@ Page({
         },
       );
     } catch (error) {
+      if (this._trendDetailRequestToken !== requestToken) return;
       console.error("加载趋势详情失败:", error);
       wx.showToast({ title: "加载失败", icon: "none" });
       this.setData({ trendSelected: null });
+    } finally {
+      if (this._trendDetailRequestToken === requestToken) {
+        this._trendDetailLoadingName = "";
+      }
     }
   },
 

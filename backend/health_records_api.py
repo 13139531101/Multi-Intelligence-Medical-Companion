@@ -25,7 +25,7 @@ from pathlib import Path
 import logging
 from contextlib import contextmanager
 import time
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, urlencode, urlparse, urlsplit, urlunsplit
 import requests
 import psycopg
 from psycopg.rows import dict_row
@@ -192,8 +192,14 @@ app.add_middleware(
 # 数据模型定义
 
 MODULE_DIR = Path(__file__).resolve().parent
-UPLOAD_DIR = MODULE_DIR / "uploads"
-UPLOAD_DIR.mkdir(exist_ok=True)
+_upload_dir_env = os.getenv("HEALTH_RECORDS_UPLOAD_DIR", "").strip()
+if _upload_dir_env:
+    UPLOAD_DIR = Path(_upload_dir_env)
+elif Path("/app").exists():
+    UPLOAD_DIR = Path("/app/uploads")
+else:
+    UPLOAD_DIR = MODULE_DIR / "uploads"
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 DB_CONFIG = {
     "host": os.getenv("DB_HOST", "localhost"),
@@ -203,6 +209,7 @@ DB_CONFIG = {
     "dbname": os.getenv(
         "DB_NAME", os.getenv("POSTGRES_DB", "personal_health_assistant")
     ),
+    "connect_timeout": int(os.getenv("DB_CONNECT_TIMEOUT", 3)),
 }
 
 _RAG_VECTOR_DIM = 384
@@ -222,16 +229,38 @@ _db_pool_init_attempted = False
 
 
 def _build_db_dsn() -> str:
+    def _with_connect_timeout(raw_dsn: str) -> str:
+        dsn_text = str(raw_dsn or "").strip()
+        if not dsn_text:
+            return dsn_text
+        try:
+            timeout_val = int(DB_CONFIG.get("connect_timeout") or 3)
+        except Exception:
+            timeout_val = 3
+        try:
+            parts = urlsplit(dsn_text)
+            query_items = parse_qsl(parts.query, keep_blank_values=True)
+            q = {k: v for k, v in query_items}
+            if not str(q.get("connect_timeout") or "").strip():
+                q["connect_timeout"] = str(max(timeout_val, 1))
+            new_query = urlencode(q)
+            return urlunsplit(
+                (parts.scheme, parts.netloc, parts.path, new_query, parts.fragment)
+            )
+        except Exception:
+            sep = "&" if "?" in dsn_text else "?"
+            return f"{dsn_text}{sep}connect_timeout={max(timeout_val, 1)}"
+
     dsn = os.getenv("DATABASE_URL")
     if isinstance(dsn, str) and dsn.strip():
-        return dsn.strip()
+        return _with_connect_timeout(dsn.strip())
     user = DB_CONFIG.get("user") or "pha"
     password = DB_CONFIG.get("password") or ""
     host = DB_CONFIG.get("host") or "localhost"
     port = DB_CONFIG.get("port") or 5432
     dbname = DB_CONFIG.get("dbname") or "personal_health_assistant"
     auth = f"{user}:{password}" if password else f"{user}"
-    return f"postgresql://{auth}@{host}:{port}/{dbname}"
+    return _with_connect_timeout(f"postgresql://{auth}@{host}:{port}/{dbname}")
 
 
 def _get_db_pool() -> ConnectionPool | None:
@@ -740,6 +769,36 @@ def _ensure_rag_schema(cursor) -> None:
             """
         )
         cursor.execute(
+            """
+            ALTER TABLE rag_chunks
+            DROP CONSTRAINT IF EXISTS
+                rag_chunks_source_type_source_id_chunk_index_embedding_model_key;
+            """
+        )
+        cursor.execute(
+            """
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1
+                    FROM pg_constraint
+                    WHERE conname = 'rag_chunks_user_source_chunk_model_key'
+                ) THEN
+                    ALTER TABLE rag_chunks
+                    ADD CONSTRAINT rag_chunks_user_source_chunk_model_key
+                    UNIQUE (
+                        user_id,
+                        source_type,
+                        source_id,
+                        chunk_index,
+                        embedding_model
+                    );
+                END IF;
+            END
+            $$;
+            """
+        )
+        cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_rag_documents_user ON rag_documents(user_id);"
         )
         cursor.execute(
@@ -1094,8 +1153,44 @@ def init_database():
                     embedding vector(384) NOT NULL,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-                    UNIQUE (source_type, source_id, chunk_index, embedding_model)
+                    UNIQUE (
+                        user_id,
+                        source_type,
+                        source_id,
+                        chunk_index,
+                        embedding_model
+                    )
                 )
+                """
+            )
+            cursor.execute(
+                """
+                ALTER TABLE rag_chunks
+                DROP CONSTRAINT IF EXISTS
+                    rag_chunks_source_type_source_id_chunk_index_embedding_model_key
+                """
+            )
+            cursor.execute(
+                """
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1
+                        FROM pg_constraint
+                        WHERE conname = 'rag_chunks_user_source_chunk_model_key'
+                    ) THEN
+                        ALTER TABLE rag_chunks
+                        ADD CONSTRAINT rag_chunks_user_source_chunk_model_key
+                        UNIQUE (
+                            user_id,
+                            source_type,
+                            source_id,
+                            chunk_index,
+                            embedding_model
+                        );
+                    END IF;
+                END
+                $$;
                 """
             )
             cursor.execute(
@@ -5393,91 +5488,13 @@ async def get_health_trend_indicators(
     user_id: Optional[str] = Query(None),
     request: Request = None,
 ):
-    try:
-        uid = _resolve_user_id(request, user_id)
-        if not uid:
-            raise HTTPException(status_code=401, detail="未认证用户")
-        store: dict = {}
-        with get_db_connection() as conn:
-            with conn.cursor(row_factory=dict_row) as cursor:
-                interval = f"{days} days"
-                cursor.execute(
-                    """
-                    SELECT id, record_date, created_at, metadata, content
-                    FROM health_records
-                    WHERE user_id = %s
-                    AND (record_date >= now() - %s::interval OR created_at >= now() - %s::interval)
-                    """,
-                    (uid, interval, interval),
-                )
-                rows = cursor.fetchall() or []
-                for row in rows:
-                    meta_val = row.get("metadata")
-                    if isinstance(meta_val, str):
-                        meta_val = deserialize_metadata(meta_val)
-                    elif not isinstance(meta_val, dict):
-                        meta_val = {}
-                    meta_val = _prepare_metadata_with_tests(
-                        row.get("content"), meta_val
-                    )
-                    extracted = _ensure_dict_value(
-                        meta_val.get("extracted_info")
-                        or meta_val.get("extracted_data")
-                    )
-                    tests = extracted.get("test_results") or extracted.get(
-                        "tests"
-                    )
-                    if tests:
-                        _collect_test_points(
-                            store,
-                            tests,
-                            row.get("record_date") or row.get("created_at"),
-                            "health_records",
-                            (
-                                str(row.get("id"))
-                                if row.get("id") is not None
-                                else None
-                            ),
-                        )
-                cursor.execute(
-                    """
-                    SELECT id, visit_date, created_at, tests
-                    FROM visit_summaries
-                    WHERE user_id = %s AND COALESCE(is_deleted, 0) = 0
-                    AND (visit_date >= now() - %s::interval OR created_at >= now() - %s::interval)
-                    """,
-                    (uid, interval, interval),
-                )
-                rows = cursor.fetchall() or []
-                for row in rows:
-                    tests = row.get("tests")
-                    if isinstance(tests, str):
-                        tests = _ensure_list_value(
-                            tests
-                        ) or _ensure_dict_value(tests)
-                    if tests:
-                        _collect_test_points(
-                            store,
-                            tests,
-                            row.get("visit_date") or row.get("created_at"),
-                            "visit_summaries",
-                            (
-                                str(row.get("id"))
-                                if row.get("id") is not None
-                                else None
-                            ),
-                        )
-        indicators = _finalize_indicator_items(store, include_points)
-        try:
-            await _maybe_llm_audit_trend_indicators(indicators)
-        except Exception:
-            pass
-        return {"days": days, "indicators": indicators}
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"获取健康趋势指标失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    return await health_records_service.get_health_trend_indicators(
+        sys.modules[__name__],
+        days=days,
+        include_points=include_points,
+        user_id=user_id,
+        request=request,
+    )
 
 
 @app.get("/api/health-trends/indicator")
@@ -5487,103 +5504,13 @@ async def get_health_trend_indicator(
     user_id: Optional[str] = Query(None),
     request: Request = None,
 ):
-    try:
-        uid = _resolve_user_id(request, user_id)
-        if not uid:
-            raise HTTPException(status_code=401, detail="未认证用户")
-        store: dict = {}
-        with get_db_connection() as conn:
-            with conn.cursor(row_factory=dict_row) as cursor:
-                interval = f"{days} days"
-                cursor.execute(
-                    """
-                    SELECT id, record_date, created_at, metadata, content
-                    FROM health_records
-                    WHERE user_id = %s
-                    AND (record_date >= now() - %s::interval OR created_at >= now() - %s::interval)
-                    """,
-                    (uid, interval, interval),
-                )
-                rows = cursor.fetchall() or []
-                for row in rows:
-                    meta_val = row.get("metadata")
-                    if isinstance(meta_val, str):
-                        meta_val = deserialize_metadata(meta_val)
-                    elif not isinstance(meta_val, dict):
-                        meta_val = {}
-                    meta_val = _prepare_metadata_with_tests(
-                        row.get("content"), meta_val
-                    )
-                    extracted = _ensure_dict_value(
-                        meta_val.get("extracted_info")
-                        or meta_val.get("extracted_data")
-                    )
-                    tests = extracted.get("test_results") or extracted.get(
-                        "tests"
-                    )
-                    if tests:
-                        _collect_test_points(
-                            store,
-                            tests,
-                            row.get("record_date") or row.get("created_at"),
-                            "health_records",
-                            (
-                                str(row.get("id"))
-                                if row.get("id") is not None
-                                else None
-                            ),
-                        )
-                cursor.execute(
-                    """
-                    SELECT id, visit_date, created_at, tests
-                    FROM visit_summaries
-                    WHERE user_id = %s AND COALESCE(is_deleted, 0) = 0
-                    AND (visit_date >= now() - %s::interval OR created_at >= now() - %s::interval)
-                    """,
-                    (uid, interval, interval),
-                )
-                rows = cursor.fetchall() or []
-                for row in rows:
-                    tests = row.get("tests")
-                    if isinstance(tests, str):
-                        tests = _ensure_list_value(
-                            tests
-                        ) or _ensure_dict_value(tests)
-                    if tests:
-                        _collect_test_points(
-                            store,
-                            tests,
-                            row.get("visit_date") or row.get("created_at"),
-                            "visit_summaries",
-                            (
-                                str(row.get("id"))
-                                if row.get("id") is not None
-                                else None
-                            ),
-                        )
-        indicators = _finalize_indicator_items(store, True)
-        try:
-            await _maybe_llm_audit_trend_indicators(indicators)
-        except Exception:
-            pass
-        selected = None
-        for item in indicators:
-            if item.get("name") == name:
-                selected = item
-                break
-        if (not selected) and name:
-            name2 = str(name).replace("（待核对）", "").strip()
-            if name2 and name2 != name:
-                for item in indicators:
-                    if str(item.get("name") or "").replace("（待核对）", "").strip() == name2:
-                        selected = item
-                        break
-        return {"days": days, "indicator": selected}
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"获取健康趋势详情失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    return await health_records_service.get_health_trend_indicator(
+        sys.modules[__name__],
+        name=name,
+        days=days,
+        user_id=user_id,
+        request=request,
+    )
 
 
 @app.get("/api/health-records/insights", response_model=HealthInsightsResponse)

@@ -33,7 +33,12 @@
     <view class="record-item" wx:for="{{filteredRecords}}" wx:key="id" bindtap="viewRecord" data-id="{{item.id}}">
       <view class="record-header">
         <view class="record-type">{{item.record_type_label}}</view>
-        <view class="record-date">{{item.formatted_date}}</view>
+        <view class="record-header-right">
+          <view class="record-status {{item.ocr_status_class}}" wx:if="{{item.ocr_status_label}}">
+            {{item.ocr_status_label}}
+          </view>
+          <view class="record-date">{{item.formatted_date}}</view>
+        </view>
       </view>
       <view class="record-desc" wx:if="{{item.display_description}}">{{item.display_description}}</view>
       <view class="record-footer">

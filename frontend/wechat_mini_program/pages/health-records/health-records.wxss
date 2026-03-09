@@ -121,6 +121,12 @@
   margin-bottom: 15rpx;
 }
 
+.record-header-right {
+  display: flex;
+  align-items: center;
+  gap: 12rpx;
+}
+
 .record-type {
   background-color: #e6f7ff;
   color: #1890ff;
@@ -132,6 +138,23 @@
 .record-date {
   font-size: 24rpx;
   color: #999;
+}
+
+.record-status {
+  font-size: 22rpx;
+  line-height: 1;
+  padding: 8rpx 14rpx;
+  border-radius: 999rpx;
+}
+
+.record-status.processing {
+  color: #1d39c4;
+  background: #eef3ff;
+}
+
+.record-status.failed {
+  color: #cf1322;
+  background: #fff1f0;
 }
 
 .record-title {
@@ -245,7 +268,7 @@
 /* 添加按钮 */
 .add-btn {
   position: fixed;
-  right: 30rpx;
+  right: 170rpx;
   bottom: 30rpx;
   width: 100rpx;
   height: 100rpx;

@@ -11,11 +11,12 @@ from fastapi.responses import StreamingResponse
 from typing import List, Optional, Dict, Any
 from fastapi.middleware.cors import CORSMiddleware
 from server import ConversationServer
-from auth import router as auth_router, get_current_user, DB_CONFIG
+from auth import router as auth_router, get_current_user, DB_CONFIG, auth_service
 from auth_middleware import get_current_user_optional
 from dotenv import load_dotenv
 import json
 import base64
+import time
 from datetime import date, datetime, timedelta, timezone
 from urllib.parse import unquote, urlparse
 import httpx
@@ -89,6 +90,24 @@ _A2A_PROXY_MAX_KEEPALIVE = _env_int("A2A_PROXY_MAX_KEEPALIVE", 50)
 _a2a_proxy_timeout = httpx.Timeout(connect=10.0, read=None, write=10.0, pool=10.0)
 _a2a_proxy_client: httpx.AsyncClient | None = None
 _a2a_proxy_semaphore: asyncio.Semaphore | None = None
+
+
+def _mask_db_dsn(dsn: str) -> str:
+    try:
+        p = urlparse(str(dsn or ""))
+        user = p.username or ""
+        host = p.hostname or ""
+        port = p.port or ""
+        db = (p.path or "").lstrip("/")
+        query = p.query or ""
+        auth = user or ""
+        netloc = f"{auth}@{host}" if auth else host
+        if port:
+            netloc = f"{netloc}:{port}"
+        q = f"?{query}" if query else ""
+        return f"{p.scheme}://{netloc}/{db}{q}" if p.scheme else str(dsn or "")
+    except Exception:
+        return str(dsn or "")
 
 def _get_a2a_proxy_client() -> httpx.AsyncClient:
     global _a2a_proxy_client
@@ -218,6 +237,56 @@ async def _init_a2a_proxy_http_client():
     _get_a2a_proxy_client()
     _get_a2a_proxy_semaphore()
 
+
+@app.on_event("startup")
+async def _startup_db_connectivity_self_check():
+    timeout_raw = (
+        os.getenv("HOSTAPI_DB_SELF_CHECK_TIMEOUT")
+        or os.getenv("DB_CONNECT_TIMEOUT")
+        or "3"
+    )
+    try:
+        timeout_sec = max(int(str(timeout_raw).strip()), 1)
+    except Exception:
+        timeout_sec = 3
+
+    checks: list[tuple[str, str]] = []
+    try:
+        auth_dsn = auth_service._build_dsn()
+        if auth_dsn:
+            checks.append(("auth_db", auth_dsn))
+    except Exception as e:
+        logging.warning(f"[HostAPI] auth_db 自检准备失败: {e}")
+    try:
+        if health_api and hasattr(health_api, "_build_db_dsn"):
+            health_dsn = health_api._build_db_dsn()
+            if health_dsn:
+                checks.append(("health_records_db", health_dsn))
+    except Exception as e:
+        logging.warning(f"[HostAPI] health_records_db 自检准备失败: {e}")
+
+    if not checks:
+        logging.warning("[HostAPI] 数据库自检跳过：未发现可用DSN")
+        return
+
+    for label, dsn in checks:
+        begin = time.perf_counter()
+        masked = _mask_db_dsn(dsn)
+        try:
+            with psycopg.connect(dsn, connect_timeout=timeout_sec) as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("SELECT 1")
+                    _ = cursor.fetchone()
+            elapsed_ms = int((time.perf_counter() - begin) * 1000)
+            logging.info(
+                f"[HostAPI] DB自检通过 label={label} elapsed_ms={elapsed_ms} dsn={masked}"
+            )
+        except Exception as e:
+            elapsed_ms = int((time.perf_counter() - begin) * 1000)
+            logging.error(
+                f"[HostAPI] DB自检失败 label={label} elapsed_ms={elapsed_ms} timeout={timeout_sec}s dsn={masked} err={e}"
+            )
+
 @app.on_event("shutdown")
 async def _close_a2a_proxy_http_client():
     global _a2a_proxy_client
@@ -230,6 +299,8 @@ async def _close_a2a_proxy_http_client():
 
 @app.middleware("http")
 async def log_request_body(request: Request, call_next):
+    start = time.perf_counter()
+    status_code = 500
     try:
         content_type = request.headers.get("content-type", "")
         # 为避免影响 multipart/form-data 的流式解析，跳过读取其原始请求体
@@ -244,8 +315,15 @@ async def log_request_body(request: Request, call_next):
             logging.info(f"Request to {request.url.path} (content-type: {content_type})")
     except Exception as e:
         logging.warning(f"Failed to log request body: {e}")
-    response = await call_next(request)
-    return response
+    try:
+        response = await call_next(request)
+        status_code = int(getattr(response, "status_code", 500) or 500)
+        return response
+    finally:
+        elapsed_ms = int((time.perf_counter() - start) * 1000)
+        logging.info(
+            f"Response {request.method} {request.url.path} status={status_code} elapsed_ms={elapsed_ms}"
+        )
 router = APIRouter()
 agent_server = ConversationServer(router)
 

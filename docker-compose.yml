@@ -231,74 +231,7 @@ services:
     depends_on:
       - admin_backend
 
-  hostapi:
-    image: ${REGISTRY:-crpi-zr8m4m7ism94623a.cn-hangzhou.personal.cr.aliyuncs.com}/${NAMESPACE:-duozhiyiban}/${IMAGE_PREFIX:-a2aserver-}hostapi:${TAG:-latest}
-    pull_policy: missing
-    build:
-      context: .
-      dockerfile: frontend/hostAgentAPI/Dockerfile
-    environment:
-      - HOST_API_PORT=13002
-      - HOST_API_BIND=0.0.0.0
-      - PYTHONPATH=/app:/app/backend
-      - BACKEND_DIR=/app/backend
-      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
-      - USE_LLM_SUMMARY=${USE_LLM_SUMMARY:-false}
-      - USE_LLM_INDICATOR_AUDIT=${USE_LLM_INDICATOR_AUDIT:-true}
-      - LLM_BASE_URL=${LLM_BASE_URL:-}
-      - LLM_MODEL=${LLM_MODEL:-}
-      - EMBEDDING_PROVIDER=${EMBEDDING_PROVIDER:-}
-      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-}
-      - EMBEDDING_DIM=${EMBEDDING_DIM:-}
-      - EMBEDDING_API_BASE=${EMBEDDING_API_BASE:-}
-      - EMBEDDING_API_KEY=${EMBEDDING_API_KEY:-}
-      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-}
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-      - DASHSCOPE_API_BASE=${DASHSCOPE_API_BASE:-}
-      - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY:-}
-      - WECHAT_APP_ID=${WECHAT_APP_ID:-}
-      - WECHAT_APP_SECRET=${WECHAT_APP_SECRET:-}
-      - WECHAT_TEMPLATE_TASK_COMPLETE=${WECHAT_TEMPLATE_TASK_COMPLETE:-}
-      - WECHAT_TEMPLATE_HEALTH_ALERT=${WECHAT_TEMPLATE_HEALTH_ALERT:-}
-      - WECHAT_TEMPLATE_MEDICATION_REMINDER=${WECHAT_TEMPLATE_MEDICATION_REMINDER:-}
-      # 为 Host API 注入数据库 DSN，供提醒工具等使用
-      - DATABASE_URL=${DATABASE_URL:-postgresql://pha:pha_pass@postgres:5432/personal_health_assistant}
-      - DB_HOST=${DB_HOST:-postgres}
-      - DB_PORT=${DB_PORT:-5432}
-      - DB_USER=${DB_USER:-pha}
-      - DB_PASSWORD=${DB_PASSWORD:-pha_pass}
-      - MEMORY_DATABASE_URL=${MEMORY_DATABASE_URL:-postgresql://pha:pha_pass@postgres:5432/personal_health_assistant}
-      - A2A_CURRENT_USER_ID=${A2A_CURRENT_USER_ID:-111}
-      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-dev-secret}
-      - JWT_ALGORITHM=${JWT_ALGORITHM:-HS256}
-      # 为 Host API 注入 OCR 相关环境变量，确保内嵌健康档案 OCR 正常工作
-      - OCR_PROVIDER=${OCR_PROVIDER:-local}
-      - ALIYUN_OCR_VERSION=${ALIYUN_OCR_VERSION}
-      - ALIYUN_ACCESS_KEY_ID=${ALIYUN_ACCESS_KEY_ID}
-      - ALIYUN_ACCESS_KEY_SECRET=${ALIYUN_ACCESS_KEY_SECRET}
-      - ALIYUN_REGION_ID=${ALIYUN_REGION_ID}
-      - ALIYUN_OCR_ENDPOINT=${ALIYUN_OCR_ENDPOINT}
-      - ALIYUN_OCR_TYPE=${ALIYUN_OCR_TYPE}
-      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
-    ports:
-      - "13002:13002"
-    mem_limit: 1g
-    volumes:
-      - hostapi_uploads:/app/uploads
-    depends_on:
-      redis:
-        condition: service_healthy
-      health_advisor:
-        condition: service_healthy
-      medication_reminder:
-        condition: service_healthy
-      visit_summary:
-        condition: service_healthy
-      health_records:
-        condition: service_healthy
-
   # hostapi:
-  #   profiles: ["dev"]
   #   image: ${REGISTRY:-crpi-zr8m4m7ism94623a.cn-hangzhou.personal.cr.aliyuncs.com}/${NAMESPACE:-duozhiyiban}/${IMAGE_PREFIX:-a2aserver-}hostapi:${TAG:-latest}
   #   pull_policy: missing
   #   build:
@@ -307,18 +240,28 @@ services:
   #   environment:
   #     - HOST_API_PORT=13002
   #     - HOST_API_BIND=0.0.0.0
-  #     - PYTHONPATH=/app
+  #     - PYTHONPATH=/app:/app/backend
   #     - BACKEND_DIR=/app/backend
   #     - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
   #     - USE_LLM_SUMMARY=${USE_LLM_SUMMARY:-false}
   #     - USE_LLM_INDICATOR_AUDIT=${USE_LLM_INDICATOR_AUDIT:-true}
   #     - LLM_BASE_URL=${LLM_BASE_URL:-}
   #     - LLM_MODEL=${LLM_MODEL:-}
+  #     - EMBEDDING_PROVIDER=${EMBEDDING_PROVIDER:-}
+  #     - EMBEDDING_MODEL=${EMBEDDING_MODEL:-}
+  #     - EMBEDDING_DIM=${EMBEDDING_DIM:-}
+  #     - EMBEDDING_API_BASE=${EMBEDDING_API_BASE:-}
+  #     - EMBEDDING_API_KEY=${EMBEDDING_API_KEY:-}
+  #     - OPENAI_BASE_URL=${OPENAI_BASE_URL:-}
+  #     - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+  #     - DASHSCOPE_API_BASE=${DASHSCOPE_API_BASE:-}
+  #     - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY:-}
   #     - WECHAT_APP_ID=${WECHAT_APP_ID:-}
   #     - WECHAT_APP_SECRET=${WECHAT_APP_SECRET:-}
   #     - WECHAT_TEMPLATE_TASK_COMPLETE=${WECHAT_TEMPLATE_TASK_COMPLETE:-}
   #     - WECHAT_TEMPLATE_HEALTH_ALERT=${WECHAT_TEMPLATE_HEALTH_ALERT:-}
   #     - WECHAT_TEMPLATE_MEDICATION_REMINDER=${WECHAT_TEMPLATE_MEDICATION_REMINDER:-}
+  #     # 为 Host API 注入数据库 DSN，供提醒工具等使用
   #     - DATABASE_URL=${DATABASE_URL:-postgresql://pha:pha_pass@postgres:5432/personal_health_assistant}
   #     - DB_HOST=${DB_HOST:-postgres}
   #     - DB_PORT=${DB_PORT:-5432}
@@ -328,6 +271,7 @@ services:
   #     - A2A_CURRENT_USER_ID=${A2A_CURRENT_USER_ID:-111}
   #     - JWT_SECRET_KEY=${JWT_SECRET_KEY:-dev-secret}
   #     - JWT_ALGORITHM=${JWT_ALGORITHM:-HS256}
+  #     # 为 Host API 注入 OCR 相关环境变量，确保内嵌健康档案 OCR 正常工作
   #     - OCR_PROVIDER=${OCR_PROVIDER:-local}
   #     - ALIYUN_OCR_VERSION=${ALIYUN_OCR_VERSION}
   #     - ALIYUN_ACCESS_KEY_ID=${ALIYUN_ACCESS_KEY_ID}
@@ -337,10 +281,9 @@ services:
   #     - ALIYUN_OCR_TYPE=${ALIYUN_OCR_TYPE}
   #     - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
   #   ports:
-  #     - "13003:13002"
+  #     - "13002:13002"
   #   mem_limit: 1g
   #   volumes:
-  #     - ./backend:/app/backend
   #     - hostapi_uploads:/app/uploads
   #   depends_on:
   #     redis:
@@ -353,6 +296,63 @@ services:
   #       condition: service_healthy
   #     health_records:
   #       condition: service_healthy
+
+  hostapi:
+    profiles: ["dev"]
+    image: ${REGISTRY:-crpi-zr8m4m7ism94623a.cn-hangzhou.personal.cr.aliyuncs.com}/${NAMESPACE:-duozhiyiban}/${IMAGE_PREFIX:-a2aserver-}hostapi:${TAG:-latest}
+    pull_policy: missing
+    build:
+      context: .
+      dockerfile: frontend/hostAgentAPI/Dockerfile
+    environment:
+      - HOST_API_PORT=13002
+      - HOST_API_BIND=0.0.0.0
+      - PYTHONPATH=/app
+      - BACKEND_DIR=/app/backend
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+      - USE_LLM_SUMMARY=${USE_LLM_SUMMARY:-false}
+      - USE_LLM_INDICATOR_AUDIT=${USE_LLM_INDICATOR_AUDIT:-true}
+      - LLM_BASE_URL=${LLM_BASE_URL:-}
+      - LLM_MODEL=${LLM_MODEL:-}
+      - WECHAT_APP_ID=${WECHAT_APP_ID:-}
+      - WECHAT_APP_SECRET=${WECHAT_APP_SECRET:-}
+      - WECHAT_TEMPLATE_TASK_COMPLETE=${WECHAT_TEMPLATE_TASK_COMPLETE:-}
+      - WECHAT_TEMPLATE_HEALTH_ALERT=${WECHAT_TEMPLATE_HEALTH_ALERT:-}
+      - WECHAT_TEMPLATE_MEDICATION_REMINDER=${WECHAT_TEMPLATE_MEDICATION_REMINDER:-}
+      - DATABASE_URL=${DATABASE_URL:-postgresql://pha:pha_pass@postgres:5432/personal_health_assistant}
+      - DB_HOST=${DB_HOST:-postgres}
+      - DB_PORT=${DB_PORT:-5432}
+      - DB_USER=${DB_USER:-pha}
+      - DB_PASSWORD=${DB_PASSWORD:-pha_pass}
+      - MEMORY_DATABASE_URL=${MEMORY_DATABASE_URL:-postgresql://pha:pha_pass@postgres:5432/personal_health_assistant}
+      - A2A_CURRENT_USER_ID=${A2A_CURRENT_USER_ID:-111}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-dev-secret}
+      - JWT_ALGORITHM=${JWT_ALGORITHM:-HS256}
+      - OCR_PROVIDER=${OCR_PROVIDER:-local}
+      - ALIYUN_OCR_VERSION=${ALIYUN_OCR_VERSION}
+      - ALIYUN_ACCESS_KEY_ID=${ALIYUN_ACCESS_KEY_ID}
+      - ALIYUN_ACCESS_KEY_SECRET=${ALIYUN_ACCESS_KEY_SECRET}
+      - ALIYUN_REGION_ID=${ALIYUN_REGION_ID}
+      - ALIYUN_OCR_ENDPOINT=${ALIYUN_OCR_ENDPOINT}
+      - ALIYUN_OCR_TYPE=${ALIYUN_OCR_TYPE}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+    ports:
+      - "13003:13002"
+    mem_limit: 1g
+    volumes:
+      - ./backend:/app/backend
+      - hostapi_uploads:/app/uploads
+    depends_on:
+      redis:
+        condition: service_healthy
+      health_advisor:
+        condition: service_healthy
+      medication_reminder:
+        condition: service_healthy
+      visit_summary:
+        condition: service_healthy
+      health_records:
+        condition: service_healthy
 
 volumes:
   postgres_data:

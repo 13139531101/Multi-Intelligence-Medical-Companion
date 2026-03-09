@@ -21,6 +21,7 @@ from psycopg_pool import ConnectionPool
 import os
 from dotenv import load_dotenv
 import logging
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 load_dotenv()
 
@@ -95,16 +96,38 @@ class AuthService:
             logger.warning(f"初始化认证表失败: {e}")
 
     def _build_dsn(self) -> str:
+        def _with_connect_timeout(raw_dsn: str) -> str:
+            dsn_text = str(raw_dsn or "").strip()
+            if not dsn_text:
+                return dsn_text
+            try:
+                timeout_val = int(self.db_config.get("connect_timeout") or 2)
+            except Exception:
+                timeout_val = 2
+            try:
+                parts = urlsplit(dsn_text)
+                query_items = parse_qsl(parts.query, keep_blank_values=True)
+                q = {k: v for k, v in query_items}
+                if not str(q.get("connect_timeout") or "").strip():
+                    q["connect_timeout"] = str(max(timeout_val, 1))
+                new_query = urlencode(q)
+                return urlunsplit(
+                    (parts.scheme, parts.netloc, parts.path, new_query, parts.fragment)
+                )
+            except Exception:
+                sep = "&" if "?" in dsn_text else "?"
+                return f"{dsn_text}{sep}connect_timeout={max(timeout_val, 1)}"
+
         dsn = os.getenv("DATABASE_URL")
         if isinstance(dsn, str) and dsn.strip():
-            return dsn.strip()
+            return _with_connect_timeout(dsn.strip())
         user = self.db_config.get("user") or "pha"
         password = self.db_config.get("password") or ""
         host = self.db_config.get("host") or "localhost"
         port = self.db_config.get("port") or 5432
         dbname = self.db_config.get("dbname") or "personal_health_assistant"
         auth = f"{user}:{password}" if password else f"{user}"
-        return f"postgresql://{auth}@{host}:{port}/{dbname}"
+        return _with_connect_timeout(f"postgresql://{auth}@{host}:{port}/{dbname}")
 
     def _get_pool(self) -> ConnectionPool | None:
         if self._pool is not None:
@@ -117,7 +140,16 @@ class AuthService:
         except Exception:
             max_size = 20
         try:
-            self._pool = ConnectionPool(self._build_dsn(), max_size=max(max_size, 1))
+            pool_timeout = float(os.getenv("AUTH_DB_POOL_TIMEOUT", os.getenv("DB_POOL_TIMEOUT", "5")))
+        except Exception:
+            pool_timeout = 5.0
+        try:
+            self._pool = ConnectionPool(
+                self._build_dsn(),
+                min_size=0,
+                max_size=max(max_size, 1),
+                timeout=max(pool_timeout, 1.0),
+            )
             return self._pool
         except Exception as e:
             logger.warning(f"认证模块DB连接池初始化失败，将回退为直连: {e}")

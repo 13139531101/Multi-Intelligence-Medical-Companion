@@ -7,12 +7,111 @@ import json
 import mimetypes
 import os
 import re
+import time
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
 import anyio
 from fastapi import HTTPException, Request, UploadFile
+
+_TREND_DETAIL_CACHE_TTL_SECONDS = max(
+    5.0, float(os.getenv("HEALTH_TREND_DETAIL_CACHE_TTL_SECONDS", "30"))
+)
+_TREND_QUERY_TIMEOUT_SECONDS = max(
+    3.0, float(os.getenv("HEALTH_TREND_QUERY_TIMEOUT_SECONDS", "18"))
+)
+_TREND_PREWARM_INCLUDE_POINTS = (
+    str(os.getenv("HEALTH_TREND_PREWARM_INCLUDE_POINTS", "0")).strip().lower()
+    in {"1", "true", "yes", "on"}
+)
+_TREND_MAX_SOURCE_ROWS = max(
+    200, int(os.getenv("HEALTH_TREND_MAX_SOURCE_ROWS", "2000"))
+)
+_TREND_ENABLE_RUNTIME_EXTRACTION = (
+    str(os.getenv("HEALTH_TREND_ENABLE_RUNTIME_EXTRACTION", "0"))
+    .strip()
+    .lower()
+    in {"1", "true", "yes", "on"}
+)
+_TREND_INDICATORS_CACHE: dict[tuple[str, int, int], tuple[float, dict[str, Any]]] = {}
+_TREND_INDICATORS_INFLIGHT: dict[tuple[str, int, int], asyncio.Task] = {}
+_TREND_INDICATORS_LOCK = asyncio.Lock()
+_TREND_PREWARM_INFLIGHT: dict[tuple[str, int], asyncio.Task] = {}
+_TREND_PREWARM_LOCK = asyncio.Lock()
+_TREND_DETAIL_CACHE: dict[tuple[str, int, str], tuple[float, dict[str, Any]]] = {}
+_TREND_DETAIL_INFLIGHT: dict[tuple[str, int, str], asyncio.Task] = {}
+_TREND_DETAIL_LOCK = asyncio.Lock()
+
+
+def _prune_trend_cache(cache: dict, ttl_seconds: float, max_size: int = 256) -> None:
+    if len(cache) <= max_size:
+        return
+    cutoff = time.time() - ttl_seconds
+    stale_keys = [key for key, value in cache.items() if float(value[0]) < cutoff]
+    for stale_key in stale_keys:
+        cache.pop(stale_key, None)
+    if len(cache) > max_size:
+        oldest_key = min(cache, key=lambda key: cache[key][0])
+        cache.pop(oldest_key, None)
+
+
+async def _invalidate_user_trend_cache(user_id: str | None) -> None:
+    uid = str(user_id or "").strip()
+    if not uid:
+        return
+    async with _TREND_INDICATORS_LOCK:
+        indicator_keys = [k for k in _TREND_INDICATORS_CACHE.keys() if k[0] == uid]
+        for k in indicator_keys:
+            _TREND_INDICATORS_CACHE.pop(k, None)
+        inflight_keys = [k for k in _TREND_INDICATORS_INFLIGHT.keys() if k[0] == uid]
+        for k in inflight_keys:
+            _TREND_INDICATORS_INFLIGHT.pop(k, None)
+    async with _TREND_DETAIL_LOCK:
+        detail_keys = [k for k in _TREND_DETAIL_CACHE.keys() if k[0] == uid]
+        for k in detail_keys:
+            _TREND_DETAIL_CACHE.pop(k, None)
+        inflight_keys = [k for k in _TREND_DETAIL_INFLIGHT.keys() if k[0] == uid]
+        for k in inflight_keys:
+            _TREND_DETAIL_INFLIGHT.pop(k, None)
+    async with _TREND_PREWARM_LOCK:
+        warm_keys = [k for k in _TREND_PREWARM_INFLIGHT.keys() if k[0] == uid]
+        for k in warm_keys:
+            _TREND_PREWARM_INFLIGHT.pop(k, None)
+
+
+async def trigger_user_trend_prewarm(
+    api: Any, *, user_id: str | None, days: int = 180
+) -> None:
+    uid = str(user_id or "").strip()
+    if not uid:
+        return
+    key = (uid, int(days))
+    async with _TREND_PREWARM_LOCK:
+        existing = _TREND_PREWARM_INFLIGHT.get(key)
+        if existing and not existing.done():
+            return
+
+        async def _run() -> None:
+            try:
+                await _get_cached_trend_indicators_payload(api, uid, int(days), False)
+                if _TREND_PREWARM_INCLUDE_POINTS:
+                    await _get_cached_trend_indicators_payload(
+                        api, uid, int(days), True
+                    )
+            except Exception as e:
+                try:
+                    api.logger.warning(f"趋势预热失败 user_id={uid}: {e}")
+                except Exception:
+                    pass
+            finally:
+                async with _TREND_PREWARM_LOCK:
+                    current = _TREND_PREWARM_INFLIGHT.get(key)
+                    if current is task:
+                        _TREND_PREWARM_INFLIGHT.pop(key, None)
+
+        task = asyncio.create_task(_run())
+        _TREND_PREWARM_INFLIGHT[key] = task
 
 
 async def get_health_records(
@@ -209,6 +308,7 @@ async def create_health_record(
                                     (target_existing_id,),
                                 )
                                 row = cursor.fetchone()
+                                await _invalidate_user_trend_cache(uid)
                                 return api.row_to_health_record(row)
                     except Exception:
                         pass
@@ -337,6 +437,7 @@ async def create_health_record(
                                 api.logger.info(
                                     f"create dedup merged into recent id={recent.get('id')} user_id={uid}"
                                 )
+                                await _invalidate_user_trend_cache(uid)
                                 return api.row_to_health_record(row)
                             except Exception:
                                 pass
@@ -461,6 +562,7 @@ async def create_health_record(
                 except Exception as e:
                     api.logger.warning(f"创建记录后写入记忆失败：{e}")
 
+                await _invalidate_user_trend_cache(uid)
                 return created
 
     except Exception as e:
@@ -734,6 +836,7 @@ async def update_health_record(
                             )
                 except Exception as e:
                     api.logger.warning(f"更新记录后写入记忆失败：{e}")
+                await _invalidate_user_trend_cache(uid)
                 return updated
 
     except HTTPException:
@@ -835,6 +938,7 @@ async def delete_health_record(
                     )
                 conn.commit()
 
+                await _invalidate_user_trend_cache(uid)
                 return {"message": "健康档案删除成功"}
 
     except HTTPException:
@@ -2427,19 +2531,10 @@ async def backfill_health_trends(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-async def get_health_trend_indicators(
-    api: Any,
-    *,
-    days: int,
-    include_points: bool,
-    user_id: str | None,
-    request: Request | None,
-) -> dict[str, Any]:
-    try:
-        uid = api._resolve_user_id(request, user_id)
-        if not uid:
-            raise HTTPException(status_code=401, detail="未认证用户")
-
+async def _build_trend_store(
+    api: Any, uid: str, days: int
+) -> tuple[dict, int, int]:
+    def _load():
         store: dict = {}
         ocr_pending_count = 0
         ocr_failed_count = 0
@@ -2452,8 +2547,10 @@ async def get_health_trend_indicators(
                     FROM health_records
                     WHERE user_id = %s
                     AND (record_date >= now() - %s::interval OR created_at >= now() - %s::interval)
+                    ORDER BY COALESCE(record_date, created_at) DESC
+                    LIMIT %s
                     """,
-                    (uid, interval, interval),
+                    (uid, interval, interval, _TREND_MAX_SOURCE_ROWS),
                 )
                 rows = cursor.fetchall() or []
                 for row in rows:
@@ -2470,14 +2567,26 @@ async def get_health_trend_indicators(
                             ocr_failed_count += 1
                     except Exception:
                         pass
-
-                    meta_val = api._prepare_metadata_with_tests(
-                        row.get("content"), meta_val
-                    )
                     extracted = api._ensure_dict_value(
                         meta_val.get("extracted_info") or meta_val.get("extracted_data")
                     )
                     tests = extracted.get("test_results") or extracted.get("tests")
+                    if (
+                        (not tests)
+                        and _TREND_ENABLE_RUNTIME_EXTRACTION
+                        and hasattr(api, "_prepare_metadata_with_tests")
+                    ):
+                        try:
+                            runtime_meta = api._prepare_metadata_with_tests(
+                                row.get("content"), dict(meta_val)
+                            )
+                            runtime_extracted = api._ensure_dict_value(
+                                runtime_meta.get("extracted_info")
+                                or runtime_meta.get("extracted_data")
+                            )
+                            tests = runtime_extracted.get("test_results") or runtime_extracted.get("tests")
+                        except Exception:
+                            tests = tests
                     if tests:
                         api._collect_test_points(
                             store,
@@ -2486,15 +2595,16 @@ async def get_health_trend_indicators(
                             "health_records",
                             str(row.get("id")) if row.get("id") is not None else None,
                         )
-
                 cursor.execute(
                     """
                     SELECT id, visit_date, created_at, tests
                     FROM visit_summaries
                     WHERE user_id = %s AND COALESCE(is_deleted, 0) = 0
                     AND (visit_date >= now() - %s::interval OR created_at >= now() - %s::interval)
+                    ORDER BY COALESCE(visit_date, created_at) DESC
+                    LIMIT %s
                     """,
-                    (uid, interval, interval),
+                    (uid, interval, interval, _TREND_MAX_SOURCE_ROWS),
                 )
                 rows = cursor.fetchall() or []
                 for row in rows:
@@ -2511,18 +2621,150 @@ async def get_health_trend_indicators(
                             "visit_summaries",
                             str(row.get("id")) if row.get("id") is not None else None,
                         )
+        return store, ocr_pending_count, ocr_failed_count
 
-        indicators = api._finalize_indicator_items(store, include_points)
+    return await anyio.to_thread.run_sync(_load)
+
+
+async def _compute_trend_indicators_payload(
+    api: Any, uid: str, days: int, include_points: bool
+) -> dict[str, Any]:
+    store, ocr_pending_count, ocr_failed_count = await _build_trend_store(api, uid, days)
+    indicators = api._finalize_indicator_items(store, include_points)
+    if include_points:
         try:
-            await api._maybe_llm_audit_trend_indicators(indicators)
+            audit_timeout = float(os.getenv("HEALTH_TREND_AUDIT_TIMEOUT_SECONDS", "0"))
         except Exception:
-            pass
-        return {
-            "days": days,
-            "indicators": indicators,
-            "ocr_pending_count": ocr_pending_count,
-            "ocr_failed_count": ocr_failed_count,
-        }
+            audit_timeout = 0.0
+        if audit_timeout > 0:
+            try:
+                await asyncio.wait_for(
+                    api._maybe_llm_audit_trend_indicators(indicators),
+                    timeout=audit_timeout,
+                )
+            except Exception:
+                pass
+    return {
+        "days": int(days),
+        "indicators": indicators,
+        "ocr_pending_count": ocr_pending_count,
+        "ocr_failed_count": ocr_failed_count,
+    }
+
+
+async def _get_cached_trend_indicators_payload(
+    api: Any, uid: str, days: int, include_points: bool
+) -> dict[str, Any]:
+    cache_key = (str(uid), int(days), 1 if include_points else 0)
+    now = time.time()
+    cached = _TREND_INDICATORS_CACHE.get(cache_key)
+    if cached and now - float(cached[0]) < _TREND_DETAIL_CACHE_TTL_SECONDS:
+        return cached[1]
+    pending_task: asyncio.Task | None = None
+    try:
+        async with _TREND_INDICATORS_LOCK:
+            cached = _TREND_INDICATORS_CACHE.get(cache_key)
+            if (
+                cached
+                and time.time() - float(cached[0]) < _TREND_DETAIL_CACHE_TTL_SECONDS
+            ):
+                return cached[1]
+            pending_task = _TREND_INDICATORS_INFLIGHT.get(cache_key)
+            if pending_task is None:
+                pending_task = asyncio.create_task(
+                    _compute_trend_indicators_payload(api, uid, days, include_points)
+                )
+                _TREND_INDICATORS_INFLIGHT[cache_key] = pending_task
+        payload = await pending_task
+        _TREND_INDICATORS_CACHE[cache_key] = (time.time(), payload)
+        _prune_trend_cache(_TREND_INDICATORS_CACHE, _TREND_DETAIL_CACHE_TTL_SECONDS)
+        return payload
+    finally:
+        if pending_task is not None and pending_task.done():
+            async with _TREND_INDICATORS_LOCK:
+                if _TREND_INDICATORS_INFLIGHT.get(cache_key) is pending_task:
+                    _TREND_INDICATORS_INFLIGHT.pop(cache_key, None)
+
+
+async def _schedule_trend_refresh_if_needed(
+    api: Any, uid: str, days: int, include_points: bool
+) -> None:
+    cache_key = (str(uid), int(days), 1 if include_points else 0)
+    async with _TREND_INDICATORS_LOCK:
+        existing = _TREND_INDICATORS_INFLIGHT.get(cache_key)
+        if existing and not existing.done():
+            return
+
+        async def _run() -> None:
+            try:
+                payload = await _compute_trend_indicators_payload(
+                    api, str(uid), int(days), bool(include_points)
+                )
+                _TREND_INDICATORS_CACHE[cache_key] = (time.time(), payload)
+                _prune_trend_cache(
+                    _TREND_INDICATORS_CACHE, _TREND_DETAIL_CACHE_TTL_SECONDS
+                )
+            except Exception:
+                pass
+            finally:
+                async with _TREND_INDICATORS_LOCK:
+                    current = _TREND_INDICATORS_INFLIGHT.get(cache_key)
+                    if current is task:
+                        _TREND_INDICATORS_INFLIGHT.pop(cache_key, None)
+
+        task = asyncio.create_task(_run())
+        _TREND_INDICATORS_INFLIGHT[cache_key] = task
+
+
+async def get_health_trend_indicators(
+    api: Any,
+    *,
+    days: int,
+    include_points: bool,
+    user_id: str | None,
+    request: Request | None,
+) -> dict[str, Any]:
+    try:
+        uid = api._resolve_user_id(request, user_id)
+        if not uid:
+            raise HTTPException(status_code=401, detail="未认证用户")
+        key = (str(uid), int(days), 1 if include_points else 0)
+        cached = _TREND_INDICATORS_CACHE.get(key)
+        if cached:
+            age = time.time() - float(cached[0])
+            if age >= _TREND_DETAIL_CACHE_TTL_SECONDS:
+                try:
+                    await _schedule_trend_refresh_if_needed(
+                        api, str(uid), int(days), bool(include_points)
+                    )
+                except Exception:
+                    pass
+                payload = dict(cached[1] or {})
+                payload["from_cache"] = True
+                payload["stale_cache"] = True
+                return payload
+        try:
+            return await asyncio.wait_for(
+                _get_cached_trend_indicators_payload(
+                    api, str(uid), int(days), bool(include_points)
+                ),
+                timeout=_TREND_QUERY_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            cached = _TREND_INDICATORS_CACHE.get(key)
+            if cached:
+                payload = dict(cached[1] or {})
+                payload["timed_out"] = True
+                payload["from_cache"] = True
+                return payload
+            return {
+                "days": int(days),
+                "indicators": [],
+                "ocr_pending_count": 0,
+                "ocr_failed_count": 0,
+                "timed_out": True,
+                "from_cache": False,
+            }
     except HTTPException:
         raise
     except Exception as e:
@@ -2538,112 +2780,93 @@ async def get_health_trend_indicator(
     user_id: str | None,
     request: Request | None,
 ) -> dict[str, Any]:
+    pending_task: asyncio.Task | None = None
+    cache_key: tuple[str, int, str] | None = None
     try:
         uid = api._resolve_user_id(request, user_id)
         if not uid:
             raise HTTPException(status_code=401, detail="未认证用户")
+        key_name = str(name or "").strip()
+        cache_key = (str(uid), int(days), key_name)
+        now = time.time()
+        cached = _TREND_DETAIL_CACHE.get(cache_key)
+        if cached and now - float(cached[0]) < _TREND_DETAIL_CACHE_TTL_SECONDS:
+            return cached[1]
 
-        store: dict = {}
-        ocr_pending_count = 0
-        ocr_failed_count = 0
-        with api.get_db_connection() as conn:
-            with conn.cursor(row_factory=api.dict_row) as cursor:
-                interval = f"{days} days"
-                cursor.execute(
-                    """
-                    SELECT id, record_date, created_at, metadata, content
-                    FROM health_records
-                    WHERE user_id = %s
-                    AND (record_date >= now() - %s::interval OR created_at >= now() - %s::interval)
-                    """,
-                    (uid, interval, interval),
-                )
-                rows = cursor.fetchall() or []
-                for row in rows:
-                    meta_val = row.get("metadata")
-                    if isinstance(meta_val, str):
-                        meta_val = api.deserialize_metadata(meta_val)
-                    elif not isinstance(meta_val, dict):
-                        meta_val = {}
-                    try:
-                        ocr_status = str(meta_val.get("ocr_status") or "").lower()
-                        if ocr_status in {"pending", "processing"}:
-                            ocr_pending_count += 1
-                        elif ocr_status == "failed":
-                            ocr_failed_count += 1
-                    except Exception:
-                        pass
+        async def _compute_payload():
+            trend_payload = await _get_cached_trend_indicators_payload(
+                api, str(uid), int(days), True
+            )
+            indicators = trend_payload.get("indicators") or []
+            selected = None
+            for item in indicators:
+                if item.get("name") == name:
+                    selected = item
+                    break
+            if (not selected) and name:
+                name2 = str(name).replace("（待核对）", "").strip()
+                if name2 and name2 != name:
+                    for item in indicators:
+                        if (
+                            str(item.get("name") or "")
+                            .replace("（待核对）", "")
+                            .strip()
+                            == name2
+                        ):
+                            selected = item
+                            break
+            return {
+                "days": int(days),
+                "indicator": selected,
+                "ocr_pending_count": int(trend_payload.get("ocr_pending_count") or 0),
+                "ocr_failed_count": int(trend_payload.get("ocr_failed_count") or 0),
+            }
 
-                    meta_val = api._prepare_metadata_with_tests(
-                        row.get("content"), meta_val
-                    )
-                    extracted = api._ensure_dict_value(
-                        meta_val.get("extracted_info") or meta_val.get("extracted_data")
-                    )
-                    tests = extracted.get("test_results") or extracted.get("tests")
-                    if tests:
-                        api._collect_test_points(
-                            store,
-                            tests,
-                            row.get("record_date") or row.get("created_at"),
-                            "health_records",
-                            str(row.get("id")) if row.get("id") is not None else None,
-                        )
+        async with _TREND_DETAIL_LOCK:
+            cached = _TREND_DETAIL_CACHE.get(cache_key)
+            if (
+                cached
+                and time.time() - float(cached[0]) < _TREND_DETAIL_CACHE_TTL_SECONDS
+            ):
+                return cached[1]
+            pending_task = _TREND_DETAIL_INFLIGHT.get(cache_key)
+            if pending_task is None:
+                pending_task = asyncio.create_task(_compute_payload())
+                _TREND_DETAIL_INFLIGHT[cache_key] = pending_task
 
-                cursor.execute(
-                    """
-                    SELECT id, visit_date, created_at, tests
-                    FROM visit_summaries
-                    WHERE user_id = %s AND COALESCE(is_deleted, 0) = 0
-                    AND (visit_date >= now() - %s::interval OR created_at >= now() - %s::interval)
-                    """,
-                    (uid, interval, interval),
-                )
-                rows = cursor.fetchall() or []
-                for row in rows:
-                    tests = row.get("tests")
-                    if isinstance(tests, str):
-                        tests = api._ensure_list_value(tests) or api._ensure_dict_value(
-                            tests
-                        )
-                    if tests:
-                        api._collect_test_points(
-                            store,
-                            tests,
-                            row.get("visit_date") or row.get("created_at"),
-                            "visit_summaries",
-                            str(row.get("id")) if row.get("id") is not None else None,
-                        )
-
-        indicators = api._finalize_indicator_items(store, True)
-        try:
-            await api._maybe_llm_audit_trend_indicators(indicators)
-        except Exception:
-            pass
-        selected = None
-        for item in indicators:
-            if item.get("name") == name:
-                selected = item
-                break
-        if (not selected) and name:
-            name2 = str(name).replace("（待核对）", "").strip()
-            if name2 and name2 != name:
-                for item in indicators:
-                    if str(item.get("name") or "").replace("（待核对）", "").strip() == name2:
-                        selected = item
-                        break
-
+        payload = await asyncio.wait_for(
+            pending_task,
+            timeout=_TREND_QUERY_TIMEOUT_SECONDS,
+        )
+        _TREND_DETAIL_CACHE[cache_key] = (time.time(), payload)
+        _prune_trend_cache(_TREND_DETAIL_CACHE, _TREND_DETAIL_CACHE_TTL_SECONDS)
+        return payload
+    except asyncio.TimeoutError:
+        if cache_key:
+            cached = _TREND_DETAIL_CACHE.get(cache_key)
+            if cached:
+                payload = dict(cached[1] or {})
+                payload["timed_out"] = True
+                payload["from_cache"] = True
+                return payload
         return {
-            "days": days,
-            "indicator": selected,
-            "ocr_pending_count": ocr_pending_count,
-            "ocr_failed_count": ocr_failed_count,
+            "days": int(days),
+            "indicator": None,
+            "ocr_pending_count": 0,
+            "ocr_failed_count": 0,
+            "timed_out": True,
+            "from_cache": False,
         }
     except HTTPException:
         raise
     except Exception as e:
         api.logger.error(f"获取健康趋势详情失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if cache_key and pending_task is not None and pending_task.done():
+            async with _TREND_DETAIL_LOCK:
+                if _TREND_DETAIL_INFLIGHT.get(cache_key) is pending_task:
+                    _TREND_DETAIL_INFLIGHT.pop(cache_key, None)
 
 
 async def get_record_extracted_info(api: Any, *, record_id: str):
@@ -2690,6 +2913,34 @@ async def get_file_attachment(api: Any, *, file_id: str):
                 row[2] if isinstance(row, tuple) else row["mime_type"]
             ) or "application/octet-stream"
             file_path = Path(path_str)
+            if not file_path.exists():
+                alt_dir_env = str(
+                    os.getenv("HEALTH_RECORDS_UPLOAD_DIR", "")
+                ).strip()
+                alt_dirs = []
+                if alt_dir_env:
+                    alt_dirs.append(Path(alt_dir_env))
+                alt_dirs.extend(
+                    [
+                        Path("/app/uploads"),
+                        Path(__file__).resolve().parents[1] / "uploads",
+                    ]
+                )
+                for d in alt_dirs:
+                    candidate = d / file_path.name
+                    if candidate.exists():
+                        file_path = candidate
+                        try:
+                            with api.get_db_connection() as conn2:
+                                with conn2.cursor() as cursor2:
+                                    cursor2.execute(
+                                        "UPDATE file_attachments SET file_path = %s WHERE id = %s",
+                                        (str(candidate), file_id),
+                                    )
+                                    conn2.commit()
+                        except Exception:
+                            pass
+                        break
             if not file_path.exists():
                 raise HTTPException(status_code=404, detail="文件不存在")
             headers = {

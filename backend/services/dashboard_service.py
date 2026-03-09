@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Any
 
+from services import health_records_service
+
 
 async def get_api_status(api: Any) -> dict[str, Any]:
     return {"status": "healthy", "timestamp": datetime.now()}
@@ -213,6 +215,11 @@ async def get_dashboard_stats(
         uid = api._resolve_user_id(request, user_id)
         if not uid:
             return api.DashboardStats()
+        await health_records_service.trigger_user_trend_prewarm(
+            api,
+            user_id=str(uid),
+            days=180,
+        )
 
         health_records_count = 0
         medication_count = 0

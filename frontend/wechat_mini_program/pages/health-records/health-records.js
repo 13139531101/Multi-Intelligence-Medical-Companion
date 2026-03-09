@@ -55,108 +55,163 @@ Page({
   },
 
   onLoad() {
-    this.loadRecords();
+    this._ocrPollTimer = null;
+    this._recordsLoading = false;
+    this._recordsPromise = null;
+    this._lastRecordsLoadAt = 0;
+    this._recordsMinIntervalMs = 8000;
+    this.loadRecords(true, "onLoad", true);
   },
 
   onShow() {
-    // 每次显示页面时刷新数据
-    this.loadRecords();
+    this.loadRecords(true, "onShow");
+  },
+
+  onHide() {
+    this.stopOcrPolling();
+  },
+
+  onUnload() {
+    this.stopOcrPolling();
   },
 
   // 空函数，用于阻止冒泡
   noop() {},
 
-  // 加载健康档案列表
-  async loadRecords(refresh = true) {
-    if (this.data.loading && !refresh) return;
-
-    this.setData({ loading: true });
-
+  markHealthRecordsChanged() {
     try {
-      const page = refresh ? 1 : this.data.page;
-      const response = await request("/api/health-records", {
-        method: "GET",
-        data: {
-          skip: (page - 1) * this.data.limit,
-          limit: this.data.limit,
-        },
-      });
+      wx.setStorageSync("healthRecordsVersion", Date.now());
+    } catch (e) {}
+  },
 
-      let recordsData = [];
-      if (Array.isArray(response)) {
-        recordsData = response;
-      } else if (response && response.records) {
-        recordsData = response.records;
-      }
-
-      if (recordsData) {
-        const formattedRecords = recordsData.map((record) => {
-          const typeLabel = this.getTypeLabel(record.type);
-          const createdAt = record.date || record.created_at;
-          const rawDesc = this.sanitizeSummary(
-            record,
-            record.description || record.summary || "",
-          );
-          const contentText = record.content ? String(record.content) : "";
-          const contentTrimmed = contentText.trim();
-          const hasFiles =
-            Array.isArray(record.files) && record.files.length > 0;
-          const rawTrimmed = String(rawDesc || "").trim();
-          const displayDesc = rawTrimmed
-            ? rawTrimmed
-            : contentTrimmed
-              ? contentTrimmed.length <= 160
-                ? contentTrimmed
-                : "已识别，点击查看详情"
-              : hasFiles
-                ? "已上传附件，内容待识别"
-                : "";
-          const displayTitle = this.getDisplayTitle(record);
-          const merged = Object.assign({}, record);
-          merged.record_type_label = typeLabel;
-          merged.formatted_date = this.formatDate(createdAt);
-          merged.tags = this.normalizeTags(record.tags);
-          merged.description = rawDesc;
-          merged.display_description = displayDesc;
-          merged.display_title = displayTitle;
-          return merged;
-        });
-
-        const records = refresh
-          ? formattedRecords
-          : this.data.records.concat(formattedRecords);
-
-        const tagSet = new Set();
-        records.forEach((r) => {
-          (r.tags || []).forEach((t) => {
-            if (t) tagSet.add(t);
-          });
-        });
-
-        this.setData({
-          records,
-          page: page + 1,
-          hasMore: recordsData.length === this.data.limit,
-          tagOptions: Array.from(tagSet),
-        });
-
-        this.filterRecords();
-      }
-    } catch (error) {
-      console.error("加载健康档案失败:", error);
-      wx.showToast({
-        title: "加载失败",
-        icon: "error",
-      });
-    } finally {
-      this.setData({ loading: false });
+  // 加载健康档案列表
+  async loadRecords(refresh = true, reason = "manual", force = false) {
+    const now = Date.now();
+    if (this._recordsLoading) {
+      return this._recordsPromise || Promise.resolve();
     }
+    if (
+      refresh &&
+      !force &&
+      this._lastRecordsLoadAt > 0 &&
+      now - this._lastRecordsLoadAt < this._recordsMinIntervalMs
+    ) {
+      return Promise.resolve();
+    }
+    this._recordsLoading = true;
+    this._lastRecordsLoadAt = now;
+    const work = (async () => {
+      this.setData({ loading: true });
+      try {
+        const page = refresh ? 1 : this.data.page;
+        const response = await request("/api/health-records", {
+          method: "GET",
+          data: {
+            skip: (page - 1) * this.data.limit,
+            limit: this.data.limit,
+          },
+        });
+
+        let recordsData = [];
+        if (Array.isArray(response)) {
+          recordsData = response;
+        } else if (response && response.records) {
+          recordsData = response.records;
+        }
+
+        if (recordsData) {
+          const formattedRecords = recordsData.map((record) => {
+            const typeLabel = this.getTypeLabel(record.type);
+            const createdAt = record.date || record.created_at;
+            const ocrStatus = this.getOcrStatus(record);
+            const isOcrProcessing =
+              ocrStatus === "pending" || ocrStatus === "processing";
+            const isOcrFailed = ocrStatus === "failed";
+            const rawDesc = this.sanitizeSummary(
+              record,
+              record.description || record.summary || "",
+            );
+            const contentText = record.content ? String(record.content) : "";
+            const contentTrimmed = contentText.trim();
+            const hasFiles =
+              Array.isArray(record.files) && record.files.length > 0;
+            const rawTrimmed = String(rawDesc || "").trim();
+            const displayDesc = isOcrProcessing
+              ? "正在识别，请稍候..."
+              : isOcrFailed
+                ? "识别失败，请重新上传"
+                : rawTrimmed
+                  ? rawTrimmed
+                  : contentTrimmed
+                    ? contentTrimmed.length <= 160
+                      ? contentTrimmed
+                      : "已识别，点击查看详情"
+                    : hasFiles
+                      ? "已上传附件，内容待识别"
+                      : "";
+            const displayTitle = this.getDisplayTitle(record);
+            const merged = Object.assign({}, record);
+            merged.record_type_label = typeLabel;
+            merged.formatted_date = this.formatDate(createdAt);
+            merged.tags = this.normalizeTags(record.tags);
+            merged.description = rawDesc;
+            merged.display_description = displayDesc;
+            merged.display_title = displayTitle;
+            merged.is_ocr_processing = isOcrProcessing;
+            merged.ocr_status_label = isOcrProcessing
+              ? "正在识别"
+              : isOcrFailed
+                ? "识别失败"
+                : "";
+            merged.ocr_status_class = isOcrFailed ? "failed" : "processing";
+            return merged;
+          });
+
+          const records = refresh
+            ? formattedRecords
+            : this.data.records.concat(formattedRecords);
+
+          const tagSet = new Set();
+          records.forEach((r) => {
+            (r.tags || []).forEach((t) => {
+              if (t) tagSet.add(t);
+            });
+          });
+
+          this.setData({
+            records,
+            page: page + 1,
+            hasMore: recordsData.length === this.data.limit,
+            tagOptions: Array.from(tagSet),
+          });
+          this.syncOcrPolling(records);
+          this.filterRecords();
+        }
+      } catch (error) {
+        console.error(`加载健康档案失败(${reason}):`, error);
+        if (
+          !Array.isArray(this.data.records) ||
+          this.data.records.length === 0
+        ) {
+          wx.showToast({
+            title: "加载失败",
+            icon: "error",
+          });
+        }
+      } finally {
+        this.setData({ loading: false });
+        this._recordsLoading = false;
+        this._recordsPromise = null;
+      }
+    })();
+    this._recordsPromise = work;
+    await work;
   },
 
   // 加载更多
   loadMore() {
     if (!this.data.hasMore || this.data.loading) return;
-    this.loadRecords(false);
+    this.loadRecords(false, "loadMore");
   },
 
   buildStructuredSummary(record) {
@@ -278,6 +333,36 @@ Page({
         .toLowerCase();
       return key && key !== "test";
     });
+  },
+
+  getOcrStatus(record) {
+    const metadata =
+      record && record.metadata && typeof record.metadata === "object"
+        ? record.metadata
+        : {};
+    return String(metadata.ocr_status || "")
+      .trim()
+      .toLowerCase();
+  },
+
+  syncOcrPolling(records) {
+    const hasPending = (records || []).some((r) => r && r.is_ocr_processing);
+    if (!hasPending) {
+      this.stopOcrPolling();
+      return;
+    }
+    if (this._ocrPollTimer) return;
+    this._ocrPollTimer = setInterval(() => {
+      if (!this.data.loading) {
+        this.loadRecords();
+      }
+    }, 3000);
+  },
+
+  stopOcrPolling() {
+    if (!this._ocrPollTimer) return;
+    clearInterval(this._ocrPollTimer);
+    this._ocrPollTimer = null;
   },
 
   normalizeMedications(value, limit = 5) {
@@ -558,6 +643,7 @@ Page({
               title: "删除成功",
               icon: "success",
             });
+            this.markHealthRecordsChanged();
             this.loadRecords();
           } catch (error) {
             console.error("删除档案失败:", error);
@@ -607,10 +693,6 @@ Page({
   // 上传文件
   async uploadFile() {
     try {
-      const ocrRes = await wx.showActionSheet({
-        itemList: ["立即识别(推荐)", "仅上传(稍后识别)"],
-      });
-      const skipOcr = ocrRes.tapIndex === 1;
       const actionRes = await wx.showActionSheet({
         itemList: ["拍照", "从相册选择"],
       });
@@ -629,14 +711,13 @@ Page({
         "";
       if (tempFilePath) {
         wx.showLoading({
-          title: skipOcr ? "上传中..." : "识别中...",
+          title: "上传中...",
         });
 
-        const formData = skipOcr ? { skip_ocr: "1" } : {};
         const uploadResult = await uploadFile(
           tempFilePath,
           "/api/health-records/upload",
-          formData,
+          { skip_ocr: "1" },
         );
         let parsedResult = uploadResult;
         if (typeof parsedResult === "string") {
@@ -651,6 +732,12 @@ Page({
         }
         const fileId =
           parsedResult && (parsedResult.file_id || parsedResult.file_url);
+        const recordId = (parsedResult && parsedResult.record_id) || "";
+
+        if (!this.data.showModal && recordId) {
+          await this.cleanupAutoCreatedRecord(recordId);
+          return;
+        }
 
         if (fileId) {
           this.setData({
@@ -660,14 +747,15 @@ Page({
               parsedResult.file_name ||
               parsedResult.filename ||
               "上传的文件",
-            "formData.record_id": parsedResult.record_id || "",
+            "formData.record_id": recordId,
           });
 
           wx.showToast({
-            title: skipOcr ? "已上传" : "已识别",
+            title: "已上传，正在识别",
             icon: "success",
           });
-          if (parsedResult.record_id) {
+          if (recordId) {
+            this.markHealthRecordsChanged();
             await this.loadRecords();
           }
         } else {
@@ -685,6 +773,16 @@ Page({
       });
     } finally {
       wx.hideLoading();
+    }
+  },
+
+  async cleanupAutoCreatedRecord(recordId) {
+    if (!recordId) return;
+    try {
+      await request(`/api/health-records/${recordId}`, { method: "DELETE" });
+      this.markHealthRecordsChanged();
+    } catch (error) {
+      console.warn("清理自动创建档案失败:", error);
     }
   },
 
@@ -777,6 +875,12 @@ Page({
       }
 
       if (timedOut) return;
+      this.markHealthRecordsChanged();
+      if (!this.data.isEditing && this.data.formData.record_id) {
+        this.setData({
+          "formData.record_id": "",
+        });
+      }
       this.closeModal();
       this.loadRecords();
     } catch (error) {
@@ -795,10 +899,29 @@ Page({
   },
 
   // 关闭弹窗
-  closeModal() {
+  async closeModal() {
+    const { isEditing, formData } = this.data;
+    const recordId = formData && formData.record_id;
     this.setData({
       showModal: false,
+      isEditing: false,
+      currentRecordId: null,
+      formData: {
+        title: "",
+        type: "",
+        hospital: "",
+        description: "",
+        tagsText: "",
+        file_id: "",
+        file_name: "",
+        record_id: "",
+      },
+      typeIndex: 0,
     });
+    if (!isEditing && recordId) {
+      await this.cleanupAutoCreatedRecord(recordId);
+      await this.loadRecords();
+    }
   },
 
   // 格式化日期
@@ -826,7 +949,7 @@ Page({
 
   // 下拉刷新
   onPullDownRefresh() {
-    this.loadRecords();
+    this.loadRecords(true, "pullDownRefresh", true);
     wx.stopPullDownRefresh();
   },
 });
