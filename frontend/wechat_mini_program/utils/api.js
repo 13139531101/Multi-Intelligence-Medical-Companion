@@ -1,5 +1,6 @@
 const DEFAULT_SERVER_URL = "http://8.155.166.136:13003";
 // const DEFAULT_SERVER_URL = "http://127.0.0.1:13003";
+// const DEFAULT_SERVER_URL = "http://www.duozhiyiban.icu";
 
 const normalizeBaseUrl = (raw) => {
   let s = String(raw || "")
@@ -84,7 +85,19 @@ const isReleaseLike = () => {
 
 const resolveFileUrl = (fileIdOrUrl) => {
   if (!fileIdOrUrl) return "";
-  const s = String(fileIdOrUrl);
+  let raw = fileIdOrUrl;
+  if (typeof raw === "object") {
+    raw =
+      raw.url ||
+      raw.file_url ||
+      raw.fileId ||
+      raw.file_id ||
+      raw.id ||
+      raw.path ||
+      "";
+  }
+  const s = String(raw || "").trim();
+  if (!s) return "";
   const url =
     s.startsWith("http://") || s.startsWith("https://")
       ? s

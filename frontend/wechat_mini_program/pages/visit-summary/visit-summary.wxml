@@ -76,7 +76,7 @@
             <view class="summary-text collapsed">{{item.errorMessageDisplay || '整理失败，请重试上传'}}</view>
           </view>
           <view class="images-row" wx:if="{{item.fileUrls && item.fileUrls.length}}">
-            <image class="thumb" wx:for="{{item.fileUrls}}" wx:key="*this" wx:for-item="url" src="{{url}}" mode="aspectFill" catchtap="previewImage" data-urls="{{item.fileUrls}}" data-current="{{url}}"></image>
+            <image class="thumb" wx:for="{{item.thumbUrls}}" wx:key="index" wx:for-item="url" wx:for-index="index" src="{{url}}" mode="aspectFill" catchtap="previewImage" binderror="onThumbError" data-summary-id="{{item.id}}" data-index="{{index}}" data-urls="{{item.previewUrls}}" data-current="{{item.previewUrls[index]}}"></image>
           </view>
         </view>
         <view class="item-footer">

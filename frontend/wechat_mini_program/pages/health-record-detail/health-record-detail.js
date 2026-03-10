@@ -5,6 +5,9 @@ Page({
     record: null,
     isLoading: false,
     fileUrls: [],
+    thumbUrls: [],
+    previewUrls: [],
+    thumbFallbackTried: {},
     structuredSummary: "",
     displayKvs: [],
     testItems: [],
@@ -91,6 +94,9 @@ Page({
       this.setData({
         record: merged,
         fileUrls,
+        thumbUrls: fileUrls.slice(),
+        previewUrls: fileUrls.slice(),
+        thumbFallbackTried: {},
         structuredSummary,
         displayKvs,
         testItems,
@@ -517,6 +523,36 @@ Page({
     wx.previewImage({
       urls,
       current: current || urls[0],
+    });
+  },
+
+  onThumbError(e) {
+    const index = Number(e.currentTarget.dataset.index);
+    if (!Number.isFinite(index) || index < 0) return;
+    const tried = this.data.thumbFallbackTried || {};
+    if (tried[index]) return;
+    const sourceUrl =
+      (this.data.previewUrls && this.data.previewUrls[index]) ||
+      (this.data.fileUrls && this.data.fileUrls[index]) ||
+      "";
+    if (!sourceUrl || String(sourceUrl).startsWith("wxfile://")) return;
+    const nextTried = Object.assign({}, tried);
+    nextTried[index] = true;
+    this.setData({ thumbFallbackTried: nextTried });
+    const userInfo = wx.getStorageSync("userInfo");
+    const token = userInfo && userInfo.token ? String(userInfo.token) : "";
+    const header = token ? { Authorization: `Bearer ${token}` } : {};
+    wx.downloadFile({
+      url: sourceUrl,
+      header,
+      success: (res) => {
+        if (res && res.tempFilePath) {
+          const thumbUrls = (this.data.thumbUrls || []).slice();
+          thumbUrls[index] = res.tempFilePath;
+          this.setData({ thumbUrls });
+        }
+      },
+      fail: () => {},
     });
   },
 

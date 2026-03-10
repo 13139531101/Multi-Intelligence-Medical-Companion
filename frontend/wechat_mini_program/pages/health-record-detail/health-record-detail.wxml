@@ -13,7 +13,7 @@
   <view class="section" wx:if="{{fileUrls.length}}">
     <view class="section-title">原图</view>
     <view class="image-grid">
-      <image class="thumb" wx:for="{{fileUrls}}" wx:key="*this" src="{{item}}" mode="aspectFill" catchtap="previewImage" data-urls="{{fileUrls}}" data-current="{{item}}"></image>
+      <image class="thumb" wx:for="{{thumbUrls}}" wx:key="index" wx:for-index="index" src="{{item}}" mode="aspectFill" catchtap="previewImage" binderror="onThumbError" data-index="{{index}}" data-urls="{{previewUrls}}" data-current="{{previewUrls[index]}}"></image>
     </view>
   </view>
 

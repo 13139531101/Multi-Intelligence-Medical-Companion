@@ -17,6 +17,7 @@ from dotenv import load_dotenv
 import json
 import base64
 import time
+import re
 from datetime import date, datetime, timedelta, timezone
 from urllib.parse import unquote, urlparse
 import httpx
@@ -2528,14 +2529,138 @@ async def recognize_medication_image(file: UploadFile = File(...), user: dict = 
             logging.error(f"OCR识别出错: {ocr_err}")
             return {"success": False, "message": f"识别失败: {str(ocr_err)}"}
 
-        # 简单的后处理，尝试提取可能的药物名称（假设第一行是名称）
+        llm_med_names: list[str] = []
+        llm_drug_name = ""
+        try:
+            maybe_llm_display_fields = getattr(health_api, "_maybe_llm_display_fields", None)
+            if maybe_llm_display_fields and str(text or "").strip():
+                seed = {"document_type": "prescription", "original_content": text}
+                display_fields = await maybe_llm_display_fields(
+                    str(text or ""),
+                    seed,
+                    doc_kind="prescription",
+                )
+                meds_val = None
+                if isinstance(display_fields, dict):
+                    meds_val = display_fields.get("medications") or display_fields.get("medication_names")
+                if isinstance(meds_val, list):
+                    for m in meds_val:
+                        name = ""
+                        if isinstance(m, str):
+                            name = m.strip()
+                        elif isinstance(m, dict):
+                            name = str(m.get("name") or "").strip()
+                        if name:
+                            llm_med_names.append(name)
+                if llm_med_names:
+                    llm_med_names = list(dict.fromkeys(llm_med_names))[:8]
+                    llm_drug_name = llm_med_names[0]
+        except Exception as llm_err:
+            logging.warning(f"LLM药名抽取失败，回退规则提取: {llm_err}")
+
         lines = [line.strip() for line in text.split('\n') if line.strip()]
-        drug_name = lines[0] if lines else ""
+        stop_words = {
+            "国药准字",
+            "批准文号",
+            "生产企业",
+            "生产厂家",
+            "功能主治",
+            "适应症",
+            "用法用量",
+            "不良反应",
+            "注意事项",
+            "禁忌",
+            "规格",
+            "有效期",
+            "条形码",
+            "二维码",
+            "说明书",
+            "请仔细阅读",
+            "OTC",
+            "Rx",
+        }
+        suffixes = (
+            "片",
+            "胶囊",
+            "颗粒",
+            "口服液",
+            "糖浆",
+            "混悬液",
+            "注射液",
+            "滴眼液",
+            "滴鼻液",
+            "喷雾剂",
+            "软膏",
+            "乳膏",
+            "凝胶",
+            "贴剂",
+            "贴",
+            "栓",
+            "丸",
+            "散",
+            "合剂",
+        )
+
+        def _normalize_line(line: str) -> str:
+            return (
+                str(line or "")
+                .strip()
+                .replace(" ", "")
+                .replace("\t", "")
+                .replace("（", "(")
+                .replace("）", ")")
+            )
+
+        def _score_name(line: str) -> int:
+            s = _normalize_line(line)
+            if not s:
+                return -999
+            if len(s) < 2 or len(s) > 30:
+                return -999
+            if any(w in s for w in stop_words):
+                return -999
+            if re.search(r"[^A-Za-z0-9\u4e00-\u9fa5·\-\(\)]", s):
+                return -999
+            score = 0
+            if re.search(r"[\u4e00-\u9fa5]", s):
+                score += 10
+            if 3 <= len(s) <= 16:
+                score += 8
+            if any(s.endswith(x) or x in s for x in suffixes):
+                score += 25
+            if re.search(r"(每日|每次|用法|用量|毫克|mg|ml|g)", s, flags=re.I):
+                score -= 12
+            if re.search(r"\d{3,}", s):
+                score -= 8
+            return score
+
+        candidates = []
+        for raw in lines[:24]:
+            s = _normalize_line(raw)
+            if not s:
+                continue
+            s = re.sub(r"^[药品名称品名]+[:：]?", "", s)
+            s = re.sub(r"^[（(]?[甲乙丙丁戊]?[0-9一二三四五六七八九十]+[）).、\-]*", "", s)
+            if s:
+                candidates.append(s)
+        candidates = list(dict.fromkeys(candidates))
+        best = ""
+        best_score = -999
+        for c in candidates:
+            sc = _score_name(c)
+            if sc > best_score:
+                best_score = sc
+                best = c
+        rule_drug_name = best if best_score >= 0 else (candidates[0] if candidates else "")
+        drug_name = llm_drug_name or rule_drug_name
+        if len(drug_name) > 24:
+            drug_name = drug_name[:24]
 
         return {
             "success": True,
             "text": text,
             "drug_name": drug_name,
+            "medication_names": llm_med_names,
             "lines": lines
         }
     except Exception as e:

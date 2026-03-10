@@ -73,9 +73,22 @@ Page({
     medicationTypes: [
       "片剂",
       "胶囊",
+      "颗粒剂",
+      "丸剂",
+      "散剂",
       "口服液",
+      "糖浆剂",
+      "混悬剂",
       "注射剂",
+      "滴眼液",
+      "滴鼻液",
+      "喷雾剂",
       "外用药",
+      "软膏",
+      "乳膏",
+      "凝胶",
+      "贴剂",
+      "栓剂",
       "滴剂",
       "其他",
     ],
@@ -422,6 +435,101 @@ Page({
     };
   },
 
+  pickMedicationNameFromOcr(data) {
+    const payload = data && typeof data === "object" ? data : {};
+    const rawText = String(payload.text || "").trim();
+    const rawLines = Array.isArray(payload.lines)
+      ? payload.lines
+      : rawText
+          .split("\n")
+          .map((s) => String(s || "").trim())
+          .filter(Boolean);
+    const seed = [payload.drug_name]
+      .concat(rawLines || [])
+      .map((s) => String(s || "").trim())
+      .filter(Boolean)
+      .slice(0, 24);
+    const stopWords = [
+      "国药准字",
+      "批准文号",
+      "生产企业",
+      "生产厂家",
+      "适应症",
+      "功能主治",
+      "成分",
+      "用法用量",
+      "不良反应",
+      "禁忌",
+      "注意事项",
+      "规格",
+      "有效期",
+      "条形码",
+      "二维码",
+      "说明书",
+      "请仔细阅读",
+      "OTC",
+      "Rx",
+    ];
+    const suffixList = [
+      "片",
+      "胶囊",
+      "颗粒",
+      "口服液",
+      "糖浆",
+      "混悬液",
+      "注射液",
+      "滴眼液",
+      "滴鼻液",
+      "喷雾剂",
+      "软膏",
+      "乳膏",
+      "凝胶",
+      "贴",
+      "贴剂",
+      "栓",
+      "丸",
+      "散",
+      "合剂",
+    ];
+    const cleaned = seed
+      .map((line) =>
+        line
+          .replace(/\s+/g, "")
+          .replace(/^[^A-Za-z0-9\u4E00-\u9FA5]+/, "")
+          .replace(
+            /^[（(]?[甲乙丙丁戊]?[0-9一二三四五六七八九十]+[）).、\-]*/,
+            "",
+          )
+          .replace(/^[药品名称品名]+[:：]*/, "")
+          .trim(),
+      )
+      .filter(Boolean)
+      .filter((line) => line.length >= 2 && line.length <= 30)
+      .filter((line) => !stopWords.some((w) => line.includes(w)))
+      .filter((line) => !/^\d+$/.test(line))
+      .filter((line) => !/(^\d+mg$|^\d+ml$|^\d+g$)/i.test(line));
+    if (!cleaned.length) return "";
+    let best = "";
+    let bestScore = -1;
+    cleaned.forEach((line) => {
+      let score = 0;
+      if (/[\u4E00-\u9FA5]/.test(line)) score += 10;
+      if (line.length >= 3 && line.length <= 16) score += 8;
+      if (suffixList.some((s) => line.endsWith(s) || line.includes(s)))
+        score += 25;
+      if (/[\(\)（）]/.test(line)) score -= 3;
+      if (/[^A-Za-z0-9\u4E00-\u9FA5·\-\(\)（）]/.test(line)) score -= 8;
+      if (/(每日|用法|用量|一次|每次|说明)/.test(line)) score -= 15;
+      if (score > bestScore) {
+        bestScore = score;
+        best = line;
+      }
+    });
+    if (!best) return "";
+    if (best.length > 24) best = best.slice(0, 24);
+    return best;
+  },
+
   // 拍照识别药品
   scanMedication() {
     const that = this;
@@ -437,13 +545,13 @@ Page({
         uploadMedicationImage(tempFilePaths[0], userId)
           .then((data) => {
             wx.hideLoading();
-            if (data.success && data.drug_name) {
+            const candidateName = that.pickMedicationNameFromOcr(data);
+            if (data.success && candidateName) {
               wx.showToast({ title: "识别成功", icon: "success" });
 
-              // 自动填入识别到的信息
               const currentData = that.data.newMedication;
               const nextMedication = Object.assign({}, currentData);
-              nextMedication.name = data.drug_name;
+              nextMedication.name = candidateName;
               nextMedication.notes =
                 (currentData.notes ? currentData.notes + "\n" : "") +
                 "OCR识别内容: " +
@@ -455,7 +563,6 @@ Page({
             } else {
               wx.showToast({ title: "未能识别药品名称", icon: "none" });
               if (data.text) {
-                // 即使没有识别出 drug_name，也把 text 放入备注
                 const currentData = that.data.newMedication;
                 const nextMedication = Object.assign({}, currentData);
                 nextMedication.notes =

@@ -73,14 +73,8 @@ Page({
           };
 
           const files = Array.isArray(item.files) ? item.files : [];
-          const fileIds = files
-            .map((f) => {
-              if (!f) return "";
-              if (typeof f === "string") return f;
-              return f.file_id || f.id || "";
-            })
-            .filter(Boolean);
-          const fileUrls = fileIds.map((id) => resolveFileUrl(id));
+          const fileUrls = files.map((f) => resolveFileUrl(f)).filter(Boolean);
+          const fileIds = fileUrls.slice();
 
           let agentMedNames = [];
           const tests = Array.isArray(item.tests) ? item.tests : [];
@@ -202,7 +196,9 @@ Page({
           const keyPoints = keyPointsFromDf
             .map((s) => String(s || "").trim())
             .filter(Boolean)
-            .concat(adviceFromDf.map((s) => String(s || "").trim()).filter(Boolean))
+            .concat(
+              adviceFromDf.map((s) => String(s || "").trim()).filter(Boolean),
+            )
             .filter(Boolean)
             .slice(0, 3);
           const keyPointsFallback = extractKeyPoints(summaryText, 3);
@@ -216,6 +212,9 @@ Page({
           merged.diagnosisDisplay = diagnosisDisplay;
           merged.fileIds = fileIds;
           merged.fileUrls = fileUrls;
+          merged.thumbUrls = fileUrls.slice();
+          merged.previewUrls = fileUrls.slice();
+          merged.thumbFallbackTried = {};
           merged.medTags = medTags;
           merged.summaryText = summaryText;
           merged.summaryPreview = summaryPreview;
@@ -408,6 +407,64 @@ Page({
     wx.previewImage({
       urls,
       current: current || urls[0],
+    });
+  },
+
+  onThumbError(e) {
+    const summaryId = e.currentTarget.dataset.summaryId;
+    const index = Number(e.currentTarget.dataset.index);
+    if (!summaryId || !Number.isFinite(index) || index < 0) return;
+    const summaries = Array.isArray(this.data.summaries)
+      ? this.data.summaries
+      : [];
+    const pos = summaries.findIndex((s) => String(s.id) === String(summaryId));
+    if (pos < 0) return;
+    const target = summaries[pos] || {};
+    const tried = target.thumbFallbackTried || {};
+    if (tried[index]) return;
+    const sourceUrl =
+      (target.previewUrls && target.previewUrls[index]) ||
+      (target.fileUrls && target.fileUrls[index]) ||
+      "";
+    if (!sourceUrl || String(sourceUrl).startsWith("wxfile://")) return;
+    const userInfo = wx.getStorageSync("userInfo");
+    const token = userInfo && userInfo.token ? String(userInfo.token) : "";
+    const header = token ? { Authorization: `Bearer ${token}` } : {};
+    wx.downloadFile({
+      url: sourceUrl,
+      header,
+      success: (res) => {
+        if (!res || !res.tempFilePath) return;
+        const latest = Array.isArray(this.data.summaries)
+          ? this.data.summaries.slice()
+          : [];
+        const p = latest.findIndex((s) => String(s.id) === String(summaryId));
+        if (p < 0) return;
+        const item = Object.assign({}, latest[p]);
+        const nextTried = Object.assign({}, item.thumbFallbackTried || {});
+        nextTried[index] = true;
+        const thumbs = Array.isArray(item.thumbUrls)
+          ? item.thumbUrls.slice()
+          : [];
+        thumbs[index] = res.tempFilePath;
+        item.thumbFallbackTried = nextTried;
+        item.thumbUrls = thumbs;
+        latest[p] = item;
+        this.setData({ summaries: latest });
+      },
+      fail: () => {
+        const latest = Array.isArray(this.data.summaries)
+          ? this.data.summaries.slice()
+          : [];
+        const p = latest.findIndex((s) => String(s.id) === String(summaryId));
+        if (p < 0) return;
+        const item = Object.assign({}, latest[p]);
+        const nextTried = Object.assign({}, item.thumbFallbackTried || {});
+        nextTried[index] = true;
+        item.thumbFallbackTried = nextTried;
+        latest[p] = item;
+        this.setData({ summaries: latest });
+      },
     });
   },
 });
