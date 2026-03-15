@@ -68,14 +68,6 @@ async def create_consultation(
 
         with api.get_db_connection() as conn:
             with conn.cursor(row_factory=api.dict_row) as cursor:
-                if consultation.consultation_id:
-                    cursor.execute(
-                        "SELECT id FROM consultations WHERE consultation_id = %s",
-                        (consultation.consultation_id,),
-                    )
-                    if cursor.fetchone():
-                        raise api.HTTPException(status_code=400, detail="咨询ID已存在")
-
                 new_consultation_id = consultation.consultation_id or api.generate_id()
                 now = datetime.now()
 
@@ -85,7 +77,9 @@ async def create_consultation(
                         user_id, consultation_id, session_id, question, answer, tags, created_at
                     ) VALUES (
                         %s, %s, %s, %s, %s, %s, %s
-                    ) RETURNING id
+                    )
+                    ON CONFLICT (consultation_id) DO NOTHING
+                    RETURNING id
                     """,
                     (
                         uid,
@@ -97,11 +91,23 @@ async def create_consultation(
                         now,
                     ),
                 )
-                new_id = cursor.fetchone()["id"]
-                conn.commit()
-
-                cursor.execute("SELECT * FROM consultations WHERE id = %s", (new_id,))
-                row = cursor.fetchone()
+                inserted = cursor.fetchone()
+                if inserted:
+                    new_id = inserted["id"]
+                    conn.commit()
+                    cursor.execute("SELECT * FROM consultations WHERE id = %s", (new_id,))
+                    row = cursor.fetchone()
+                else:
+                    conn.rollback()
+                    cursor.execute(
+                        "SELECT * FROM consultations WHERE consultation_id = %s",
+                        (new_consultation_id,),
+                    )
+                    row = cursor.fetchone()
+                    if not row:
+                        raise api.HTTPException(status_code=409, detail="咨询ID冲突，请重试")
+                    if str(row.get("user_id")) != str(uid):
+                        raise api.HTTPException(status_code=409, detail="咨询ID已被其他用户占用")
 
                 if isinstance(row.get("tags"), str):
                     try:

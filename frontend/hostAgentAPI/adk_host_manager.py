@@ -301,7 +301,7 @@ class ADKHostManager(ApplicationManager):
                             parts.extend(a.parts)
                         if parts:
                             response_msg = Message(
-                                role='model',
+                                role='agent',
                                 parts=parts,
                                 metadata=final_task.metadata or {}
                             )
@@ -311,7 +311,7 @@ class ADKHostManager(ApplicationManager):
                         response_msg.metadata['conversation_id'] = conversation_id
                         if 'message_id' not in response_msg.metadata:
                             response_msg.metadata['message_id'] = str(uuid.uuid4())
-                        response_msg.role = 'model'
+                        response_msg.role = 'agent'
 
                         logging.info(f"Appending response message: {response_msg}")
                         self._messages.append(response_msg)

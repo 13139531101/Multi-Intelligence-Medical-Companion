@@ -169,3 +169,219 @@ sequenceDiagram
 
 - 在 `task_manager.py` 的流式循环末尾，使用 `except Exception as e` 将异常统一转为 `InternalError` 的 JSON-RPC 返回。
 - 该设计能保证 SSE 链路尽量不断开，但具体故障原因需结合日志中的 traceback 定位。
+
+---
+
+## 5. 面试速记：A2A 底层、记忆系统、HostAgent 触发与分发
+
+本节按“面试追问顺序”组织，适合反复背诵与扩展回答。
+
+### 5.1 A2A 底层执行主链路（你可以先讲这一段）
+
+1. 前端或 HostAPI 发起 JSON-RPC 请求，方法通常是 `tasks/sendSubscribe`。
+2. A2AServer 入口 `common/server/server.py` 解析请求、做就绪校验与鉴权信息透传。
+3. 请求分发给 `AgentTaskManager.on_send_task_subscribe`。
+4. `task_manager.py` 调用 `agent.stream(...)`，持续产出 `reasoning/tool_call/tool_result/normal` 事件。
+5. 任务管理器将事件转换为 `TaskStatusUpdateEvent` 或 `TaskArtifactUpdateEvent`，通过 SSE 回推给调用方。
+6. 流式结束后更新任务状态，标记为 `COMPLETED` 或错误状态。
+
+一句话总结：A2A 的核心不是“函数互调”，而是“JSON-RPC + 任务状态机 + SSE 增量事件”。
+
+### 5.2 记忆系统实现路径（检索注入 + 异步写回）
+
+1. `BasicAgent._build_initial_conversation` 阶段按 `query + user_id + agent_id` 检索历史记忆。
+2. 检索结果拼成证据块注入 system prompt，影响本轮推理。
+3. 推理完成后，`_store_memory_async` 异步写回最终回答或工具结果。
+4. 记忆门面由 `backend/memory_system.py` 提供统一接口，底层落到 `MemoryStorage/MemoryRetrieval/MemoryManager`。
+5. 向量存储当前在 PostgreSQL JSONB 中，语义相似度在 Python 侧计算（非 pgvector 原生检索）。
+
+一句话总结：当前记忆链路是“召回增强输入 + 异步沉淀输出”的闭环。
+
+### 5.3 HostAgent 是怎么被触发的
+
+Host 相关有两条入口链路：
+
+- 链路 A（强指定）：`/a2a` 代理转发
+  - 从 `X-Target-Agent` 或 `message.metadata.selected_agent` 取目标智能体。
+  - 找到 URL 后直接把 JSON-RPC 原样转发到目标 A2A 服务。
+  - 这条链路不做“自动猜测分发”，属于显式路由。
+
+- 链路 B（会话分发）：`/message/send` -> `ADKHostManager.process_message`
+  - 若 metadata 里有 `selected_agent`，优先直连该 agent。
+  - 若没有，才走关键词 heuristic（头疼/发烧->健康顾问，药->用药提醒等）。
+  - heuristic 仍未命中时，回退到 host runner，让 Host LLM 用 `list_remote_agents/send_task` 工具做委派。
+
+这就是“你问的不在关键词里怎么分发”的答案：会走 Host LLM 工具委派，而不是直接失败。
+
+### 5.4 面试官追问“当前实现对不对”怎么答
+
+建议回答方式：先肯定主干正确，再讲工程风险与改进方向。
+
+主干正确点：
+
+1. 协议层正确：JSON-RPC 2.0 + task/sendSubscribe 流式模型清晰。
+2. 状态层正确：Task 状态与 Artifact 分离，前端可增量渲染。
+3. 架构层正确：Host 协调与子 Agent 解耦，支持横向扩展。
+4. 记忆层有闭环：可检索可写回，并绑定 user_id。
+
+当前风险点：
+
+1. 路由策略分散：`/a2a`、`/smart_chat`、`/message/send` 各有一套选择逻辑，容易行为不一致。
+2. 记忆接口历史兼容包袱：部分子项目仍有 async/sync 和返回结构不一致问题。
+3. 向量检索性能瓶颈：JSONB + Python 相似度在高并发和大数据量下会变慢。
+4. 长任务生命周期薄弱：缺少标准的后台队列、断线续传与进度恢复策略。
+
+---
+
+## 6. 长时间任务场景的调整建议（可直接作为改造清单）
+
+### 6.1 协议与任务状态
+
+1. 统一采用 `tasks/sendSubscribe + tasks/get + tasks/resubscribe` 组合。
+2. 明确状态机：`SUBMITTED -> WORKING -> INPUT_REQUIRED/COMPLETED/FAILED/CANCELED`。
+3. 每个阶段都输出可观测进度（例如百分比、当前步骤、预计剩余步骤）。
+
+### 6.2 任务持久化与可恢复
+
+1. 将 InMemoryTaskManager 升级为持久化存储（PostgreSQL/Redis），避免进程重启丢任务。
+2. 为 task 记录 checkpoint（已完成阶段、产物游标、最后事件偏移）。
+3. 支持客户端断线后按 task_id 重连并续流。
+
+### 6.3 执行模型与并发控制
+
+1. 长任务改为后台 worker 执行（Celery/RQ/Arq 任一），API 层只负责接入与查询。
+2. 将工具调用设置超时、重试、幂等键，避免重复副作用。
+3. 为每类任务加并发配额与限流，防止慢任务拖垮实时请求。
+
+### 6.4 Host 分发策略升级
+
+1. 保留“显式指定优先”原则，避免模型误判。
+2. heuristic 从硬编码关键词升级为可配置规则表（热更新）。
+3. LLM 委派前先做意图分类打分，低置信度时触发澄清问题。
+
+### 6.5 记忆系统专项优化
+
+1. 高并发场景改用 pgvector/HNSW 索引，降低检索延迟。
+2. 引入记忆分层：working(短期)/long_term(长期)/episodic(会话摘要)。
+3. 增加写入节流与去重窗口，避免流式 token 频繁写库。
+4. 为记忆写入与召回增加审计字段，支持问题复盘。
+
+### 6.6 可观测性与运维
+
+1. 打通 trace_id：前端请求、Host路由、子Agent任务、工具调用全链路可追踪。
+2. 增加关键指标：首 token 延迟、任务完成时长、工具失败率、重试次数。
+3. 建立“慢任务画像”与自动告警阈值。
+
+---
+
+## 7. 可直接复述的 30 秒回答模板
+
+我们的 A2A 实现是标准 JSON-RPC + 任务状态机架构。请求通过 `tasks/sendSubscribe` 进入 A2AServer，TaskManager 调用 Agent 流式推理，把工具调用和文本增量都以事件回推前端。HostAgent 分发是三层：显式指定智能体优先，其次关键词规则兜底，最后由 Host LLM 使用 `list_remote_agents/send_task` 工具做委派。记忆系统在推理前做召回注入、推理后异步写回，形成闭环。当前主干是正确的，但如果要支撑长时间任务，需要补齐任务持久化、断线续流、后台队列、幂等重试和可观测性体系。
+
+---
+
+## 8. 官方 SDK 迁移落地清单（按文件、函数、优先级）
+
+本清单目标：保持上层业务接口不变，先替换通信与事件层，再替换路由与任务持久化。
+
+### 8.1 P0（第一批，低风险高收益）
+
+1. `frontend/hostAgentAPI/hosts/multiagent/remote_agent_connection.py`
+   - 替换对象：`RemoteAgentConnections.send_task`
+   - 动作：
+     - 保留函数签名不变，内部改为官方 SDK 调用。
+     - 统一映射官方事件到现有 `TaskStatusUpdateEvent/TaskArtifactUpdateEvent`。
+     - 保留 metadata merge 逻辑（`conversation_id/message_id/last_message_id`）。
+   - 验收：
+     - 流式与非流式两种卡片能力都可用。
+     - 回调 `task_callback` 触发次数与原实现一致。
+
+2. `frontend/hostAgentAPI/hosts/multiagent/host_agent.py`
+   - 替换对象：`send_task`（工具函数）
+   - 动作：
+     - 不改工具名与参数，继续暴露给 Host LLM。
+     - 使用新 `RemoteAgentConnections` 返回结构，保持现有 `convert_parts` 不变。
+   - 验收：
+     - Host 的工具委派链路不变。
+     - 关键词未命中时仍可委派成功。
+
+3. `frontend/hostAgentAPI/adk_host_manager.py`
+   - 替换对象：`process_message` 中 direct routing 分支
+   - 动作：
+     - 只替换 connection.send_task 的实现来源，不改路由策略。
+     - 保持“显式 selected_agent 优先 -> heuristic -> host runner”优先级。
+   - 验收：
+     - 已选中 agent 的请求不回退到 host runner。
+     - 失败时仍按原逻辑兜底。
+
+### 8.2 P1（第二批，网关与代理层）
+
+1. `frontend/hostAgentAPI/api.py`
+   - 替换对象：`/a2a` 的转发与流式读取
+   - 动作：
+     - 将当前 httpx stream 代理改为官方 SDK 客户端转发适配层。
+     - 保留 `X-Target-Agent` 与 `metadata.selected_agent` 解析逻辑。
+     - 保留 OCR 注入逻辑 `_inject_auto_ocr_parts`。
+   - 验收：
+     - 前端 `sendTaskStreamingViaHost` 无需改动可继续消费。
+     - chunk 顺序、结束标记、错误返回语义不退化。
+
+2. `frontend/hostAgentAPI/server.py`
+   - 替换对象：`_send_message` 后台任务创建与回调
+   - 动作：
+     - 保持 `/message/send` 入参出参不变。
+     - 对接新 SDK 事件模型，确保 conversation 消息拼接顺序一致。
+   - 验收：
+     - 前端消息列表顺序与“思考/回答”展示无回归。
+
+### 8.3 P2（第三批，任务管理与持久化）
+
+1. `backend/A2AServer/src/A2AServer/task_manager.py`
+   - 替换对象：`on_send_task_subscribe`、`_stream_generator`
+   - 动作：
+     - 对齐官方 SDK 的事件类型，减少手写分支解析。
+     - 明确终止条件与 final 事件输出策略。
+   - 验收：
+     - 任务状态机可重入、可恢复、可回放。
+
+2. `backend/A2AServer/src/A2AServer/common/server/task_manager.py`
+   - 替换对象：`InMemoryTaskManager` 的存储实现
+   - 动作：
+     - 迁移到持久化后端（PostgreSQL 或 Redis）。
+     - 增加 task checkpoint 与 resubscribe 游标。
+   - 验收：
+     - 服务重启后任务状态可查询，断线可续流。
+
+### 8.4 兼容适配层（必须先做）
+
+建议新增一个适配器模块（可放 `frontend/hostAgentAPI/hosts/multiagent/`）：
+
+- `A2AClientAdapter.send_task(payload, streaming=True)`
+- `A2AClientAdapter.normalize_event(event)`
+- `A2AClientAdapter.normalize_error(error)`
+
+要求：
+
+1. 上层函数签名不改。
+2. 统一 message metadata 注入规则。
+3. 统一异常码与错误文案，避免前端感知变化。
+
+### 8.5 灰度发布计划（四阶段）
+
+1. 双跑影子模式：旧链路回包，SDK 链路仅记录日志。
+2. 10% 灰度：只放流式请求，观察长任务完成率与中断率。
+3. 50% 灰度：放开全部请求，重点看错误分布与尾延迟。
+4. 100% 切换：保留回滚开关一周后再删除旧实现。
+
+### 8.6 验收指标（上线门槛）
+
+1. 功能一致性：关键场景通过率 >= 99%。
+2. 稳定性：5xx 比例不高于旧版本。
+3. 长任务能力：30 分钟任务完成率显著提升，断线续订成功率可量化。
+4. 性能：首 token 延迟、总耗时 P95 不劣化。
+
+### 8.7 回滚预案（必须提前准备）
+
+1. 所有新调用走 feature flag：`USE_OFFICIAL_A2A_SDK`。
+2. 出现异常可在 1 分钟内切回旧实现。
+3. 回滚后保留故障样本（request id、task id、event dump）用于复盘。

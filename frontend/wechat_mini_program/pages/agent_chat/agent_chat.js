@@ -107,12 +107,13 @@ Page({
       }
     }
     const sessionId = conversationId || this.generateUUID();
+    const shouldPersistType = this.shouldPersistConversationToDb(agentType);
 
     this.setData({
       agentType,
       sessionId,
       conversationId: conversationId,
-      isHistorySynced: false,
+      isHistorySynced: !!conversationId && shouldPersistType,
     });
 
     if (conversationId) {

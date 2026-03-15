@@ -188,10 +188,12 @@ async def generate_with_deepseek(conversation: List[Dict], model_cfg: Dict,
         If stream=True: AsyncGenerator yielding chunks of assistant text and tool calls
     """
     api_key = model_cfg.get("apiKey") or os.getenv("DEEPSEEK_API_KEY")
-    if "apiBase" in model_cfg:
-        client = AsyncOpenAI(api_key=api_key, base_url=model_cfg["apiBase"])
-    else:
-        client = AsyncOpenAI(api_key=api_key, base_url="https://api.deepseek.com/v1")
+    if not api_key:
+        raise ValueError("DeepSeek API key 未配置，请设置 model_cfg.apiKey 或环境变量 DEEPSEEK_API_KEY")
+
+    raw_base_url = model_cfg.get("apiBase") or "https://api.deepseek.com/v1"
+    base_url = str(raw_base_url).strip().strip("`").strip().strip('"').strip("'")
+    client = AsyncOpenAI(api_key=api_key, base_url=base_url)
 
     model_name = model_cfg["model"]
     temperature = model_cfg.get("temperature", None)
