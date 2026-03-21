@@ -481,9 +481,12 @@ class BasicAgent:
                     if not chunk.get("is_reasoning"):
                         accumulated_text += chunk["assistant_text"]
                 else:
-                    remaining = chunk["assistant_text"][len(accumulated_text):]
+                    # 修复：先计算新增部分，再累加
+                    current_text = chunk.get("assistant_text", "")
+                    remaining = current_text[len(accumulated_text):] if accumulated_text else current_text
                     if remaining:
                         yield {"text": remaining, "type": "reasoning"} # YIELD here as well 剩余文本
+                    accumulated_text += remaining  # 只累加新增部分
 
                     tool_calls = chunk.get("tool_calls", [])
                     if tool_calls:

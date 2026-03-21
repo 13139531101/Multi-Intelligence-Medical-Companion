@@ -771,6 +771,7 @@ def _kb_search(
 def search_symptom_info(
     symptom: str, user_id: str = "", limit: int = 10
 ) -> Dict[str, Any]:
+    """搜索症状相关信息（如头痛、发烧、咳嗽等），用于初步健康咨询"""
     symptom = (symptom or "").strip()
     limit = _coerce_limit(limit, default=10, max_limit=50)
     try:
@@ -789,6 +790,7 @@ def search_symptom_info(
 def search_medication_info(
     medication: str, user_id: str = "", limit: int = 10
 ) -> Dict[str, Any]:
+    """搜索药品信息（如阿司匹林、布洛芬等），用于药品查询和用药参考"""
     medication = (medication or "").strip()
     limit = _coerce_limit(limit, default=10, max_limit=50)
     try:
@@ -805,6 +807,7 @@ def search_medication_info(
 
 @mcp.tool()
 def get_health_tips(category: str = "all") -> Dict[str, Any]:
+    """获取健康小贴士/建议，已废弃，返回提示信息"""
     return {
         "status": "info",
         "message": "建议由模型生成或来源于真实数据分析，当前工具不再提供模拟建议。"
@@ -815,6 +818,7 @@ def get_health_tips(category: str = "all") -> Dict[str, Any]:
 def analyze_health_concern(
     concern: str, symptoms: List[str] = None, user_id: str = ""
 ) -> Dict[str, Any]:
+    """分析健康问题，结合症状搜索相关证据，返回症状与知识的关联分析"""
     symptoms = symptoms or []
     try:
         related = []
@@ -841,6 +845,7 @@ def upsert_medical_kb_document(
     user_id: str = "",
     overwrite: bool = True,
 ) -> Dict[str, Any]:
+    """新增或更新医疗知识库文档，支持批量文本切分后向量化存储"""
     try:
         return _upsert_medical_kb_chunks(
             user_id=user_id,
@@ -858,6 +863,7 @@ def upsert_medical_kb_document(
 def delete_medical_kb_document(
     source_id: str, user_id: str = "", embedding_model: str = ""
 ) -> Dict[str, Any]:
+    """删除指定的医疗知识库文档及其所有分块"""
     uid = (user_id or "").strip() or _GLOBAL_KB_USER_ID
     sid = (source_id or "").strip()
     if not sid:
@@ -889,6 +895,7 @@ def delete_medical_kb_document(
 
 @mcp.tool()
 def list_medical_kb_documents(user_id: str = "", limit: int = 50) -> Dict[str, Any]:
+    """列出用户或全局知识库中的所有文档，返回文档列表及元信息"""
     uid = (user_id or "").strip() or _GLOBAL_KB_USER_ID
     limit = _coerce_limit(limit, default=50, max_limit=200)
     try:

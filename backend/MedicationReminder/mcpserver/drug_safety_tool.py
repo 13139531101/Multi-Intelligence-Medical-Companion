@@ -188,6 +188,7 @@ def check_drug_interaction(
     user_id: str | None = None,
     current_drugs: list[str] | None = None,
 ) -> dict[str, Any]:
+    """检查新药物与当前用药之间是否存在相互作用或禁忌"""
     new_drug = (new_drug or "").strip()
     uid = (user_id or "").strip()
     if not new_drug:

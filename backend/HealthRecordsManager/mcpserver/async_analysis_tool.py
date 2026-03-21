@@ -71,10 +71,7 @@ def background_task(user_id, feature, period, openid):
 
 @mcp.tool()
 def analyze_health_trends_async(user_id: str, feature: str, period: str = "90d") -> str:
-    """
-    Start an asynchronous health trend analysis.
-    Returns a message indicating the task has started.
-    """
+    """启动异步健康趋势分析任务，分析用户健康指标随时间的变化"""
     # Need to get openid from DB or passed in.
     # For now, we assume we can fetch it or it's passed.
     # But the tool signature is fixed by what the LLM provides.

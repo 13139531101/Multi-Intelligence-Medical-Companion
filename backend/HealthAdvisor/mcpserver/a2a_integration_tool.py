@@ -112,6 +112,7 @@ def get_health_records_overview(agent_address: str, user_id: Optional[str] = "",
 
 @mcp.tool()
 def get_medication_overview(agent_address: str, user_id: Optional[str] = "") -> Dict[str, Any]:
+    """通过A2A协议获取药物提醒Agent的用药概览，返回当前用药和已停药列表"""
     card = _fetch_agent_card(agent_address)
     endpoint = _resolve_endpoint(agent_address)
     instr = (
@@ -128,6 +129,7 @@ def get_medication_overview(agent_address: str, user_id: Optional[str] = "") -> 
 
 @mcp.tool()
 def get_visit_summary_overview(agent_address: str, user_id: Optional[str] = "", days: int = 180) -> Dict[str, Any]:
+    """通过A2A协议获取就诊摘要Agent的统计和最近就诊记录"""
     card = _fetch_agent_card(agent_address)
     endpoint = _resolve_endpoint(agent_address)
     instr = (
@@ -148,6 +150,7 @@ def aggregate_health_report(user_id: str,
                             medication_agent: str = "medication_reminder:10012",
                             visit_summary_agent: str = "visit_summary:10013",
                             days: int = 180) -> Dict[str, Any]:
+    """聚合健康报告，同时查询健康记录、用药提醒、就诊摘要三个Agent并汇总"""
     with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
         f1 = executor.submit(get_health_records_history, health_records_agent, user_id, days)
         f2 = executor.submit(get_medication_overview, medication_agent, user_id)
@@ -161,6 +164,7 @@ def aggregate_health_report(user_id: str,
 
 @mcp.tool()
 def get_health_records_history(agent_address: str, user_id: str, days: int = 180) -> Dict[str, Any]:
+    """通过A2A协议获取健康记录Agent的历史健康记录，包含统计和最近记录"""
     card = _fetch_agent_card(agent_address)
     endpoint = _resolve_endpoint(agent_address)
     instr = (
