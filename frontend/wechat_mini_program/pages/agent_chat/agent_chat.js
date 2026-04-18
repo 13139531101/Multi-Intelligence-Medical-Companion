@@ -1699,6 +1699,8 @@ Page({
         if (payloadParts.length === 0) {
           payloadParts.push({ type: "text", text: fallbackText });
         }
+        const userInfo = wx.getStorageSync("userInfo") || {};
+        const userId = userInfo.user_id || userInfo.id || "";
         const payload = {
           id: this.generateUUID(),
           sessionId: convId,
@@ -1709,8 +1711,9 @@ Page({
               ? {
                   selected_agent: selectedAgentName,
                   message_id: userMessage.id,
+                  user_id: userId,
                 }
-              : { message_id: userMessage.id },
+              : { message_id: userMessage.id, user_id: userId },
           },
         };
 

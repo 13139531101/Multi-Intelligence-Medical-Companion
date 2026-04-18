@@ -8,6 +8,7 @@ import sys
 import json
 import asyncio
 import logging
+import contextvars
 import traceback
 from datetime import timedelta
 from typing import Any, Dict, List, Optional, Union, AsyncGenerator
@@ -46,6 +47,19 @@ from .providers.bytedance import generate_with_bytedance
 from .providers.zhipu import generate_with_zhipu
 
 logger = logging.getLogger(__name__)
+
+# 使用 contextvars 存储当前请求的用户ID，避免并发时环境变量互相覆盖
+_current_user_id: contextvars.ContextVar[str] = contextvars.ContextVar("current_user_id", default="")
+
+
+def set_current_user_id(user_id: str):
+    """设置当前请求的用户ID"""
+    _current_user_id.set(user_id)
+
+
+def get_current_user_id() -> str:
+    """获取当前请求的用户ID"""
+    return _current_user_id.get()
 
 
 class SSEMCPClient:
@@ -543,19 +557,18 @@ async def process_tool_call(tc: Dict, servers: Dict[str, MCPClient], quiet_mode:
     except:
         func_args = {}
 
-    # Inject user_id fallback if missing or placeholder
+    # 强制使用 contextvar 中的用户ID（线程安全，支持并发）
+    # LLM 可能会使用环境变量中的默认值（如 "111"），这里强制覆盖为当前请求的正确用户ID
     try:
-        uid = func_args.get("user_id")
-        if (uid is None) or (isinstance(uid, str) and uid.strip() in ("", "current_user", "<当前用户>", "<用户>", "user")):
+        ctx_uid = get_current_user_id()
+        logger.info(f"[DEBUG] contextvar user_id: '{ctx_uid}', env A2A_CURRENT_USER_ID: '{os.environ.get('A2A_CURRENT_USER_ID')}'")
+        if ctx_uid and isinstance(ctx_uid, str) and ctx_uid.strip():
+            func_args["user_id"] = ctx_uid.strip()
+        else:
+            # 回退到环境变量
             env_uid = os.environ.get("A2A_CURRENT_USER_ID") or os.environ.get("USER_ID")
             if env_uid and isinstance(env_uid, str) and env_uid.strip():
                 func_args["user_id"] = env_uid.strip()
-        elif isinstance(uid, str) and uid.strip().lower() == "default_user":
-            env_uid = os.environ.get("A2A_CURRENT_USER_ID") or os.environ.get("USER_ID")
-            if env_uid and isinstance(env_uid, str):
-                euid = env_uid.strip()
-                if euid and euid.lower() != "default_user":
-                    func_args["user_id"] = euid
     except Exception:
         pass
 

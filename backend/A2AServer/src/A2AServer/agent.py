@@ -9,12 +9,13 @@ import asyncio
 import sys
 import re
 import hashlib
+import contextvars
 from dotenv import load_dotenv
 from typing import AsyncIterable, Any, Literal
 from pydantic import BaseModel
 from datetime import datetime
 
-from A2AServer.mcp_client.client import *
+from A2AServer.mcp_client.client import set_current_user_id, process_tool_call, generate_text, load_mcp_config_from_file, MCPClient, SSEMCPClient
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +80,7 @@ class BasicAgent:
         self.all_functions = []
         self.session_conversations = collections.defaultdict(list) # Initial conversation might be built later in run() or here
         self.session_rollups = collections.defaultdict(str)
+        self.session_user_ids = collections.defaultdict(str)  # 存储每个 session 的用户ID
         self._memory_hash_by_session = {}
         self.tool_ready = False
         # 只能做同步的事情，不能直接“等”异步的初始化完成，不能在这里初始化
@@ -401,6 +403,14 @@ class BasicAgent:
          # 确定用户ID (优先使用传入的user_id，其次环境变量，最后是sessionId)
          final_user_id = str(user_id) if user_id else (os.environ.get("A2A_CURRENT_USER_ID") or os.environ.get("USER_ID") or str(sessionId))
 
+         # 将用户ID存储到 session 级别的字典中，确保异步生成器中也能获取到
+         self.session_user_ids[sessionId] = final_user_id
+
+         # 将确定的用户ID设置到 contextvar，确保MCP工具调用时能获取到正确的用户ID（线程安全，支持并发）
+         set_current_user_id(final_user_id)
+         # 同时设置环境变量作为回退
+         os.environ["A2A_CURRENT_USER_ID"] = final_user_id
+
          # 加上当前的时间和用户ID信息到System Prompt
          header_info = f"当前用户ID: {final_user_id}。\n当前时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}。"
          system_content = header_info + "\n" + agent_prompt
@@ -465,6 +475,11 @@ class BasicAgent:
 
     async def _stream_response_generator(self, sessionId):
         """Handles the streaming response logic (async generator)."""
+        # 重新设置 contextvar，确保异步生成器中也能获取到正确的用户ID
+        session_uid = self.session_user_ids.get(sessionId, "")
+        if session_uid:
+            set_current_user_id(session_uid)
+        
         #分5种返回类型，1. reasoning, 2. normal,  4. tool_call, 5. tool_result
         while True:
             generator = await generate_text(self.session_conversations[sessionId], self.chosen_model, self.all_functions, stream=True)
@@ -546,6 +561,11 @@ class BasicAgent:
 
     async def _non_stream_response(self, sessionId):
         """Handles the non-streaming response logic."""
+        # 重新设置 contextvar，确保非流式响应中也能获取到正确的用户ID
+        session_uid = self.session_user_ids.get(sessionId, "")
+        if session_uid:
+            set_current_user_id(session_uid)
+        
         final_text = ""
         while True:
             gen_result = await generate_text(self.session_conversations[sessionId], self.chosen_model, self.all_functions, stream=False)

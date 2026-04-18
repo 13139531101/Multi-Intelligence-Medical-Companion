@@ -65,10 +65,14 @@ class AgentTaskManager(InMemoryTaskManager):
         query = self._get_user_query(task_send_params)
         user_parts = self._extract_user_parts(task_send_params)
 
-        # 从元数据中提取用户ID
+        # 从元数据中提取用户ID（优先级：message.metadata > task_send_params.metadata > 环境变量）
         user_id = None
-        if task_send_params.metadata:
-             user_id = task_send_params.metadata.get("user_id")
+        if task_send_params.message and hasattr(task_send_params.message, 'metadata') and task_send_params.message.metadata:
+            user_id = task_send_params.message.metadata.get("user_id")
+        if not user_id and task_send_params.metadata:
+            user_id = task_send_params.metadata.get("user_id")
+        if not user_id:
+            user_id = os.environ.get("A2A_CURRENT_USER_ID") or os.environ.get("USER_ID")
 
         try:
             # 使用 Agent 的非流式推理以实现同步调用
@@ -154,10 +158,14 @@ class AgentTaskManager(InMemoryTaskManager):
         query = self._get_user_query(task_send_params)
         user_parts = self._extract_user_parts(task_send_params)
 
-        # 从元数据中提取用户ID
+        # 从元数据中提取用户ID（优先级：message.metadata > task_send_params.metadata > 环境变量）
         user_id = None
-        if task_send_params.metadata:
-             user_id = task_send_params.metadata.get("user_id")
+        if task_send_params.message and hasattr(task_send_params.message, 'metadata') and task_send_params.message.metadata:
+            user_id = task_send_params.message.metadata.get("user_id")
+        if not user_id and task_send_params.metadata:
+            user_id = task_send_params.metadata.get("user_id")
+        if not user_id:
+            user_id = os.environ.get("A2A_CURRENT_USER_ID") or os.environ.get("USER_ID")
 
         logger.info(f"发送过来的请求是 {query}, 参数是 {task_send_params}")
         is_first_token = True
