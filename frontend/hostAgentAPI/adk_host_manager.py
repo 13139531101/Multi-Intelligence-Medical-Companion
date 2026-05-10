@@ -174,7 +174,7 @@ class ADKHostManager(ApplicationManager):
                 timestamp=datetime.datetime.now(datetime.UTC).timestamp(),
             )
         )
-        final_event: GenAIEvent | None = None
+        final_event: ADKEvent | None = None
         # Determine if a task is to be resumed.
         session = self._session_service.get_session(
             app_name='A2A', user_id=self.user_id, session_id=conversation_id
@@ -734,7 +734,7 @@ class ADKHostManager(ApplicationManager):
                             file_uri=part.uri, mime_type=part.mimeType
                         )
                     )
-                elif content_part.bytes:
+                elif part.bytes:
                     parts.append(
                         types.Part.from_bytes(
                             data=part.bytes.encode('utf-8'),

@@ -34,6 +34,14 @@
   - `extract_text_from_image(image_base64)`: 从药品包装或说明书图片中提取文字信息。
 - 药物安全工具: `drug_safety_tool.py`
   - `check_drug_interaction(new_drug, current_drugs=None)`: 通过 A2A 调用 HealthAdvisor 检查药物相互作用风险。
+- 提醒工具: `reminder_tool.py`
+  - `add_medication_reminder(user_id, medication_name, dosage, frequency, start_date, times_list, end_date, notes)`: 添加用药提醒
+  - `get_medication_reminders(user_id, date, active_only)`: 获取用药提醒列表
+  - `log_medication_taken(reminder_id, actual_time, notes, user_id, scheduled_time)`: 标记用药已服用
+- 通知工具: `notification_tool.py`
+  - `send_medication_notification(user_id, medication_name, dosage, scheduled_time, notification_type)`: 发送用药通知
+
+**重要**: 调用所有工具时，必须传入 `user_id` 参数（值为当前用户ID）。系统会自动注入当前用户ID到环境变量中，你无需询问用户获取。
 
 ## 工作流程
 

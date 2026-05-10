@@ -16,7 +16,7 @@ class AgentMemorySystem:
     提供统一的记忆管理API，整合存储、检索、管理等功能
     """
 
-    def __init__(self, db_config: MemoryDatabaseConfig = None):
+    def __init__(self, db_config: Optional[MemoryDatabaseConfig] = None):
         """初始化记忆系统
 
         Args:
@@ -71,8 +71,8 @@ class AgentMemorySystem:
         content: Dict[str, Any],
         memory_type: str = 'long_term',
         importance: float = 0.5,
-        tags: List[str] = None,
-        expires_hours: int = None,
+        tags: Optional[List[str]] = None,
+        expires_hours: Optional[int] = None,
     ) -> str:
         """存储新记忆
 
@@ -115,9 +115,9 @@ class AgentMemorySystem:
     def update_memory(
         self,
         memory_id: str,
-        content: Dict[str, Any] = None,
-        importance: float = None,
-        tags: List[str] = None,
+        content: Optional[Dict[str, Any]] = None,
+        importance: Optional[float] = None,
+        tags: Optional[List[str]] = None,
     ) -> bool:
         """更新记忆
 
@@ -161,7 +161,7 @@ class AgentMemorySystem:
         query: str,
         agent_id: str,
         user_id: str,
-        memory_types: List[str] = None,
+        memory_types: Optional[List[str]] = None,
         limit: int = 10,
         min_similarity: float = 0.5,
     ) -> List[Dict[str, Any]]:
@@ -187,7 +187,7 @@ class AgentMemorySystem:
         agent_id: str,
         user_id: str,
         hours: int = 24,
-        memory_types: List[str] = None,
+        memory_types: Optional[List[str]] = None,
         limit: int = 20,
     ) -> List[Dict[str, Any]]:
         """获取最近记忆
@@ -209,7 +209,7 @@ class AgentMemorySystem:
         agent_id: str,
         user_id: str,
         min_importance: float = 0.7,
-        memory_types: List[str] = None,
+        memory_types: Optional[List[str]] = None,
         limit: int = 20,
     ) -> List[Dict[str, Any]]:
         """获取重要记忆
@@ -234,7 +234,7 @@ class AgentMemorySystem:
         agent_id: str,
         user_id: str,
         match_all: bool = False,
-        memory_types: List[str] = None,
+        memory_types: Optional[List[str]] = None,
         limit: int = 50,
     ) -> List[Dict[str, Any]]:
         """基于标签搜索记忆
@@ -260,7 +260,7 @@ class AgentMemorySystem:
         end_time: datetime,
         agent_id: str,
         user_id: str,
-        memory_types: List[str] = None,
+        memory_types: Optional[List[str]] = None,
         limit: int = 50,
     ) -> List[Dict[str, Any]]:
         """基于时间范围搜索记忆
@@ -388,7 +388,7 @@ class AgentMemorySystem:
         user_id: str,
         user_message: str,
         agent_response: str,
-        context: Dict[str, Any] = None,
+        context: Optional[Dict[str, Any]] = None,
     ) -> str:
         """存储对话记忆
 
@@ -543,8 +543,8 @@ class AgentMemorySystem:
 
     def perform_maintenance(
         self,
-        agent_id: str = None,
-        user_id: str = None,
+        agent_id: Optional[str] = None,
+        user_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """执行系统维护
 

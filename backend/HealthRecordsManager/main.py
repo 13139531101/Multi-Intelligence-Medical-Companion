@@ -29,7 +29,7 @@ try:
     _spec.loader.exec_module(_module)
     get_db_manager = getattr(_module, 'get_db_manager')
 except Exception as _e:
-    logger.error(f"加载本地 database_config 失败：{_e}")
+    logging.error(f"加载本地 database_config 失败：{_e}")
     raise
 
 load_dotenv()

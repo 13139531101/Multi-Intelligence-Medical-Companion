@@ -1,4 +1,4 @@
-const DEFAULT_SERVER_URL = "http://8.155.166.136:13003";
+const DEFAULT_SERVER_URL = "http://8.155.166.136:13002";
 // const DEFAULT_SERVER_URL = "http://127.0.0.1:13002";
 // const DEFAULT_SERVER_URL = "http://www.duozhiyiban.icu";
 

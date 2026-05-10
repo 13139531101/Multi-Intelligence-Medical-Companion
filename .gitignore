@@ -48,8 +48,12 @@ backend/**/uploads/
 *.local
 *.secret
 
+# 论文相关（不提交）
+论文参考资料/
+
 # Large binaries (do not commit)
 backend/tesseract_setup.exe
 tessdata/
 # Ignore root multiagent_front
 multiagent_front/
+论文相关/

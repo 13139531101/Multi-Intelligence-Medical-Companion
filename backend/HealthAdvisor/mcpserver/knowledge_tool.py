@@ -158,8 +158,8 @@ def _keyword_search_medical_kb(
                 scored: List[tuple[int, float]] = []
                 for it in results:
                     try:
-                        idx = int(it.get("index"))
-                        sc = float(it.get("relevance_score"))
+                        idx = int(it.get("index"))  # type: ignore[arg-type]
+                        sc = float(it.get("relevance_score"))  # type: ignore[arg-type]
                         scored.append((idx, sc))
                     except Exception:
                         continue
@@ -722,8 +722,8 @@ def _rag_search(
                 scored: List[tuple[int, float]] = []
                 for it in results:
                     try:
-                        idx = int(it.get("index"))
-                        sc = float(it.get("relevance_score"))
+                        idx = int(it.get("index"))  # type: ignore[arg-type]
+                        sc = float(it.get("relevance_score"))  # type: ignore[arg-type]
                         scored.append((idx, sc))
                     except Exception:
                         continue
@@ -816,7 +816,7 @@ def get_health_tips(category: str = "all") -> Dict[str, Any]:
 
 @mcp.tool()
 def analyze_health_concern(
-    concern: str, symptoms: List[str] = None, user_id: str = ""
+    concern: str, symptoms: Optional[List[str]] = None, user_id: str = ""
 ) -> Dict[str, Any]:
     """分析健康问题，结合症状搜索相关证据，返回症状与知识的关联分析"""
     symptoms = symptoms or []

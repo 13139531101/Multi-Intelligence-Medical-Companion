@@ -20,14 +20,16 @@ except ImportError:
     
     # 导入 database_config
     spec = importlib.util.spec_from_file_location("database_config", os.path.join(current_dir, "database_config.py"))
-    database_config_module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(database_config_module)
+    assert spec is not None
+    database_config_module = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
+    spec.loader.exec_module(database_config_module)  # type: ignore[union-attr]
     MemoryDatabaseConfig = database_config_module.MemoryDatabaseConfig
     
     # 导入 embedding_service
     spec = importlib.util.spec_from_file_location("embedding_service", os.path.join(current_dir, "embedding_service.py"))
-    embedding_service_module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(embedding_service_module)
+    assert spec is not None
+    embedding_service_module = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
+    spec.loader.exec_module(embedding_service_module)  # type: ignore[union-attr]
     EmbeddingService = embedding_service_module.EmbeddingService
 
 logger = logging.getLogger(__name__)
@@ -91,13 +93,13 @@ def _json_safe(obj: Any) -> Any:
 class MemoryStorage:
     """记忆存储模块 - 负责记忆的存储、更新和删除"""
     
-    def __init__(self, db_config: MemoryDatabaseConfig = None):
+    def __init__(self, db_config: Optional[MemoryDatabaseConfig] = None):
         self.db_config = db_config or MemoryDatabaseConfig()
         self.embedding_service = EmbeddingService()
     
     def store_memory(self, agent_id: str, user_id: str, content: Dict[str, Any], 
                     memory_type: str = 'long_term', importance: float = 0.5,
-                    tags: List[str] = None, expires_hours: int = None) -> str:
+                    tags: Optional[List[str]] = None, expires_hours: Optional[int] = None) -> str:
         """存储新的记忆
         
         Args:
@@ -193,8 +195,8 @@ class MemoryStorage:
                     pass
                 self.db_config.put_connection(connection)
     
-    def update_memory(self, memory_id: str, content: Dict[str, Any] = None,
-                     importance: float = None, tags: List[str] = None) -> bool:
+    def update_memory(self, memory_id: str, content: Optional[Dict[str, Any]] = None,
+                     importance: Optional[float] = None, tags: Optional[List[str]] = None) -> bool:
         """更新记忆内容
         
         Args:
