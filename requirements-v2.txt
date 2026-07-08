@@ -1,0 +1,72 @@
+# =============================================================================
+# v2 依赖（向后兼容：保留旧业务包，新增 LangChain 1.x / LangGraph 1.x）
+# 安装方式：
+#   pip install -r requirements-v2.txt
+# 或使用 uv（推荐，快 10x）：
+#   uv pip install -r requirements-v2.txt
+# =============================================================================
+
+# ---- AI 框架（v1.0+）----
+langchain>=1.2.10,<2.0
+langgraph>=1.0.2,<1.1
+langgraph-checkpoint-postgres>=3.0.2,<4.0
+langchain-postgres>=0.0.15
+langchain-openai>=0.3.0
+langchain-mcp-adapters>=0.1.0
+a2a-sdk>=0.3.0
+langsmith>=0.2.0
+
+# ---- Web / 数据 ----
+fastapi>=0.128.0
+uvicorn[standard]>=0.32.0
+pydantic>=2.9.0
+pydantic-settings>=2.6.0
+psycopg[binary,pool]>=3.2.3
+sqlalchemy[asyncio]>=2.0.36
+redis>=5.2.0
+httpx>=0.28.1
+httpx-sse>=0.4.0
+orjson>=3.10.0
+
+# ---- 鉴权 / 观测 ----
+authlib>=1.3.2
+pyjwt>=2.9.0
+opentelemetry-api>=1.27.0
+opentelemetry-sdk>=1.27.0
+opentelemetry-instrumentation-fastapi>=0.48b0
+opentelemetry-instrumentation-httpx>=0.48b0
+langfuse>=2.0.0
+
+# ---- 业务侧（保留）----
+python-multipart>=0.0.6
+python-dotenv>=1.0.0
+pandas>=2.2.0
+numpy>=2.0.0
+pypdf>=5.0.0
+python-dateutil>=2.9.0
+Pillow>=11.0.0
+cryptography>=43.0.0
+loguru>=0.7.2
+psutil>=6.1.0
+schedule>=1.2.2
+typing-extensions>=4.12.0
+tenacity>=9.0.0
+cachetools>=5.5.0
+deprecated>=1.2.14
+email-validator>=2.2.0
+SQLAlchemy>=2.0.36
+
+# ---- AI/OCR 集成 ----
+alibabacloud-ocr20191230>=3.1.0
+alibabacloud-ocr-api20210707>=3.1.3
+alibabacloud-tea-openapi>=0.3.13
+alibabacloud-tea-util>=0.3.13
+
+# ---- LLM 客户端 ----
+openai>=1.50.0
+google-genai>=1.10.0
+zhipuai>=2.0.0
+
+# ---- A2A / MCP 运行时（保留旧实现作为 fallback）----
+fastmcp>=0.4.0
+mcp>=1.0.0
