@@ -24,13 +24,21 @@ logger = logging.getLogger(__name__)
 # ---- LangChain 1.x 探测 ----
 _LANGCHAIN_V2_OK = False
 try:
-    from langchain.agents import create_agent
-    from langchain.agents.middleware import (
-        SummarizationMiddleware,
-        PIIRedactionMiddleware,
-    )
+    from langchain.agents import create_agent  # noqa: F401
     from langgraph.checkpoint.memory import InMemorySaver
-    from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+    try:
+        from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+    except ImportError:
+        AsyncPostgresSaver = None
+    # Middleware 是 LangChain 1.0+ 新特性，独立子包
+    try:
+        from langchain.agents.middleware import (
+            SummarizationMiddleware,
+            PIIRedactionMiddleware,
+        )
+    except ImportError:
+        SummarizationMiddleware = None
+        PIIRedactionMiddleware = None
     _LANGCHAIN_V2_OK = True
 except ImportError as e:
     logger.warning(
@@ -62,21 +70,20 @@ class V2AgentRuntime:
             return None
 
         db_url = os.getenv("PHA_CHECKPOINT_DB_URL") or os.getenv("DATABASE_URL")
-        if db_url:
+        if db_url and AsyncPostgresSaver is not None:
             try:
                 # 生产：PostgresSaver（需先调 setup() 建表）
                 self._checkpointer = AsyncPostgresSaver.from_conn_string(db_url)
                 await self._checkpointer.setup()
                 logger.info("[v2_runtime] Checkpointer = AsyncPostgresSaver")
+                return self._checkpointer
             except Exception as e:
                 logger.warning(
                     "[v2_runtime] PostgresSaver 初始化失败，回退 InMemorySaver: %s", e
                 )
-                self._checkpointer = InMemorySaver()
-        else:
-            self._checkpointer = InMemorySaver()
-            logger.info("[v2_runtime] Checkpointer = InMemorySaver (开发模式)")
 
+        self._checkpointer = InMemorySaver()
+        logger.info("[v2_runtime] Checkpointer = InMemorySaver (开发模式)")
         return self._checkpointer
 
     def get_middlewares(self, model: str):
@@ -84,15 +91,22 @@ class V2AgentRuntime:
         if not _LANGCHAIN_V2_OK:
             return []
 
-        middlewares = [
-            PIIRedactionMiddleware(patterns=["email", "phone", "id_card"]),
-        ]
+        middlewares = []
+
+        if PIIRedactionMiddleware is not None:
+            try:
+                middlewares.append(
+                    PIIRedactionMiddleware(patterns=["email", "phone", "id_card"])
+                )
+            except Exception as e:
+                logger.debug("[v2_runtime] PIIRedactionMiddleware 初始化失败: %s", e)
 
         # 长上下文自动压缩（节省 token）
-        try:
-            middlewares.append(SummarizationMiddleware(model=model))
-        except Exception as e:
-            logger.debug("[v2_runtime] SummarizationMiddleware 不可用: %s", e)
+        if SummarizationMiddleware is not None:
+            try:
+                middlewares.append(SummarizationMiddleware(model=model))
+            except Exception as e:
+                logger.debug("[v2_runtime] SummarizationMiddleware 不可用: %s", e)
 
         return middlewares
 

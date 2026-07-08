@@ -6,9 +6,14 @@
 #   uv pip install -r requirements-v2.txt
 # =============================================================================
 
-# ---- AI 框架（v1.0+）----
+# ---- AI 框架（v1.0+，已锁定可用组合）----
+# 注意：langgraph-prebuilt 1.0.9+ 与 langgraph 1.0.x 不兼容
+# 必须 pin langgraph-prebuilt==1.0.5 + langgraph-checkpoint==3.0.1
+# 参考：https://github.com/langchain-ai/langgraph/issues/7404
 langchain>=1.2.10,<2.0
-langgraph>=1.0.2,<1.1
+langgraph>=1.0.5,<1.1
+langgraph-prebuilt==1.0.5
+langgraph-checkpoint==3.0.1
 langgraph-checkpoint-postgres>=3.0.2,<4.0
 langchain-postgres>=0.0.15
 langchain-openai>=0.3.0
