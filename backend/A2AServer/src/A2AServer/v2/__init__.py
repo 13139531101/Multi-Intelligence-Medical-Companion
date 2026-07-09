@@ -1,4 +1,4 @@
-"""PHA v2 智能体运行时层（阶段2）"""
+"""PHA v2 智能体运行时层（阶段2 + 阶段3）"""
 from .v2_runtime import V2AgentRuntime, get_runtime
 from .v2_agent import V2Agent
 from .sub_agents import (
@@ -6,6 +6,12 @@ from .sub_agents import (
     HealthRecordsV2,
     MedicationReminderV2,
     VisitSummaryV2,
+)
+from .host_graph import (
+    build_host_graph,
+    get_host_graph,
+    route_and_invoke,
+    HostState,
 )
 
 __all__ = [
@@ -16,4 +22,8 @@ __all__ = [
     "HealthRecordsV2",
     "MedicationReminderV2",
     "VisitSummaryV2",
+    "build_host_graph",
+    "get_host_graph",
+    "route_and_invoke",
+    "HostState",
 ]

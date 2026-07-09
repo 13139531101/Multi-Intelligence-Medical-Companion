@@ -1,0 +1,462 @@
+"""
+PHA v2 HostGraph - 编排器（阶段3）
+
+**作用**：替代 `adk_host_manager.py` 的 3 层 if/else 路由，改为 LangGraph 1.0 显式 `StateGraph`
+
+**节点设计**：
+- classify    : 第 1 层路由 - 检查 metadata.selected_agent
+- route       : 第 2 层路由 - 关键词启发 + LLM 委派（合二为一的图节点）
+- invoke_X    : 4 个子 Agent 调用节点
+- aggregate   : 汇总结果
+- error       : 错误处理
+
+**边设计**：
+- START -> classify
+- classify -> route（如果需要更智能的判断）
+- route -> invoke_health | invoke_records | invoke_medication | invoke_summary
+- invoke_X -> aggregate
+- aggregate -> END
+- any -> error -> END
+
+**优势**：
+- 路由决策可观测（LangSmith 自动 trace）
+- 状态可恢复（PostgresSaver）
+- 业务改动零侵入（v1 adk_host_manager 仍可工作）
+"""
+from __future__ import annotations
+
+import logging
+import os
+from typing import AsyncIterable, Any, Literal, Optional
+
+logger = logging.getLogger(__name__)
+
+# ---- LangGraph 1.0 探测 ----
+_LANGGRAPH_OK = False
+try:
+    from langgraph.graph import StateGraph, START, END
+    from langgraph.checkpoint.memory import InMemorySaver
+    _LANGGRAPH_OK = True
+except ImportError as e:
+    logger.warning("[host_graph] LangGraph 不可用: %s", e)
+
+
+# ============================================================
+# 状态定义：路由决策 + 子 Agent 输出
+# ============================================================
+from typing import TypedDict, Optional, List, Any
+
+
+class HostState(TypedDict, total=False):
+    """
+    PHA HostGraph 状态（TypedDict，LangGraph 1.0 标准）
+
+    字段：
+    - query: 用户原始 query
+    - conversation_id: 会话 ID
+    - user_id: 用户 ID
+    - metadata: 消息元数据（selected_agent 等）
+    - target_agent: 路由决策结果
+    - routing_layer: 命中哪一层
+    - agent_response: 子 Agent 输出
+    - final_response: 汇总后的最终响应
+    - error: 错误信息
+    - events: 路由事件流
+    """
+    query: str
+    conversation_id: str
+    user_id: str
+    metadata: dict
+    target_agent: str
+    routing_layer: int
+    agent_response: dict
+    final_response: dict
+    error: str
+    events: List[dict]
+
+
+def _get_query(state) -> str:
+    return state.get("query", "") if hasattr(state, "get") else state["query"]
+
+
+def _get_target(state) -> Optional[str]:
+    return state.get("target_agent") if hasattr(state, "get") else state.get("target_agent")
+
+
+# ============================================================
+# Agent 名称映射（与 adk_host_manager.py 保持一致）
+# ============================================================
+AGENT_ALIAS = {
+    # 健康顾问
+    "健康顾问": "health_advisor",
+    "health_advisor": "health_advisor",
+    # 健康档案
+    "健康档案": "health_records",
+    "健康档案管理员": "health_records",
+    "健康档案管理": "health_records",
+    "档案管理员": "health_records",
+    "health_records": "health_records",
+    # 用药提醒
+    "用药提醒": "medication_reminder",
+    "用药提醒助手": "medication_reminder",
+    "medication_reminder": "medication_reminder",
+    # 就诊摘要
+    "就诊摘要": "visit_summary",
+    "就诊摘要生成器": "visit_summary",
+    "就诊摘要生成": "visit_summary",
+    "就诊摘要助手": "visit_summary",
+    "visit_summary": "visit_summary",
+}
+
+# 关键词 → Agent 映射（顺序敏感：更具体的 Agent 排前面）
+HEURISTIC_KEYWORDS = {
+    "visit_summary": ["摘要", "总结", "就诊", "summary"],
+    "medication_reminder": ["药", "吃药", "提醒", "medication", "服药", "用药", "剂量"],
+    "health_records": ["档案", "体检", "报告", "record", "检查单"],
+    "health_advisor": [
+        "头疼", "发烧", "痛", "医生", "建议", "咨询", "症状", "不舒服", "难受",
+        "health", "symptom", "咳嗽", "感冒", "头晕", "头痛",
+    ],
+}
+
+
+# ============================================================
+# 路由函数（替代 if/else）
+# ============================================================
+def _layer1_metadata(state: HostState) -> str:
+    """第 1 层：检查 metadata.selected_agent"""
+    metadata = state.get("metadata") or {}
+    selected = metadata.get("selected_agent")
+    if isinstance(selected, str) and selected.strip():
+        name = selected.strip()
+        # 映射中文/英文别名
+        canonical = AGENT_ALIAS.get(name, name)
+        if canonical in {"health_advisor", "health_records", "medication_reminder", "visit_summary"}:
+            state["target_agent"] = canonical
+            state["routing_layer"] = 1
+            state.setdefault("events", []).append({
+                "type": "route",
+                "layer": 1,
+                "reason": f"metadata.selected_agent={selected}",
+                "target": canonical,
+            })
+            logger.info("[host_graph] layer1 metadata: %s -> %s", selected, canonical)
+            return canonical
+    return ""  # 未命中
+
+
+def _layer2_heuristic(state: HostState) -> str:
+    """第 2 层：关键词启发"""
+    text = (state.get("query") or "").lower()
+    for agent_name, keywords in HEURISTIC_KEYWORDS.items():
+        if any(kw in text for kw in keywords):
+            state["target_agent"] = agent_name
+            state["routing_layer"] = 2
+            state.setdefault("events", []).append({
+                "type": "route",
+                "layer": 2,
+                "reason": f"keyword match: {[k for k in keywords if k in text]}",
+                "target": agent_name,
+            })
+            logger.info("[host_graph] layer2 heuristic: text=%s -> %s", text[:30], agent_name)
+            return agent_name
+    return ""
+
+
+async def _layer3_llm(state: HostState) -> str:
+    """第 3 层：LLM 委派（用 DeepSeek/ChatModel 决策）"""
+    if not _LANGGRAPH_OK:
+        # 无 LangGraph 时默认到健康顾问
+        state["target_agent"] = "health_advisor"
+        state["routing_layer"] = 3
+        state.setdefault("events", []).append({
+            "type": "route",
+            "layer": 3,
+            "reason": "fallback (no langgraph)",
+            "target": "health_advisor",
+        })
+        return "health_advisor"
+
+    try:
+        from langchain_openai import ChatOpenAI
+
+        llm = ChatOpenAI(
+            model=os.getenv("PHA_LLM_MODEL", "deepseek-chat"),
+            api_key=os.getenv("DEEPSEEK_API_KEY") or os.getenv("OPENAI_API_KEY"),
+            base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
+            temperature=0,
+        )
+
+        prompt = f"""你是 PHA 多智能体路由决策器。
+
+可选 Agent：
+- health_advisor: 健康顾问，处理症状咨询、健康教育、疾病分析
+- health_records: 健康档案管理员，处理检查报告、档案查询
+- medication_reminder: 用药提醒助手，处理药品、服药通知
+- visit_summary: 就诊摘要生成器，处理就诊记录、就诊总结
+
+用户问题：{state.get('query', '')}
+
+请只回复 4 个 Agent 名称之一，不要解释。"""
+
+        from langchain_core.messages import HumanMessage
+        result = await llm.ainvoke([HumanMessage(content=prompt)])
+        target = (result.content or "").strip().lower()
+
+        # 校验返回
+        if target in {"health_advisor", "health_records", "medication_reminder", "visit_summary"}:
+            state["target_agent"] = target
+            state["routing_layer"] = 3
+            state.setdefault("events", []).append({
+                "type": "route",
+                "layer": 3,
+                "reason": "llm decision",
+                "target": target,
+            })
+            logger.info("[host_graph] layer3 llm: %s", target)
+            return target
+    except Exception as e:
+        logger.warning("[host_graph] layer3 LLM 失败: %s", e)
+
+    # LLM 失败默认到健康顾问
+    state["target_agent"] = "health_advisor"
+    state["routing_layer"] = 3
+    state.setdefault("events", []).append({
+        "type": "route",
+        "layer": 3,
+        "reason": "fallback after LLM failure",
+        "target": "health_advisor",
+    })
+    return "health_advisor"
+
+
+# ============================================================
+# 图节点
+# ============================================================
+async def classify_node(state: HostState) -> dict:
+    """
+    分类节点：3 层路由（合并 layer1 + layer2 + layer3）
+    返回 dict 更新 state
+    """
+    state.setdefault("events", [])
+
+    # 第 1 层
+    if _layer1_metadata(state):
+        return {"target_agent": state["target_agent"], "routing_layer": 1}
+
+    # 第 2 层
+    if _layer2_heuristic(state):
+        return {"target_agent": state["target_agent"], "routing_layer": 2}
+
+    # 第 3 层
+    await _layer3_llm(state)
+    return {"target_agent": state["target_agent"], "routing_layer": 3}
+
+
+def invoke_agent_node(agent_name: str):
+    """
+    工厂函数：生成 invoke_<agent_name> 节点
+
+    调用对应 V2Agent.stream()，收集所有 events
+    """
+    async def node(state: HostState) -> dict:
+        try:
+            from .sub_agents import (
+                HealthAdvisorV2,
+                HealthRecordsV2,
+                MedicationReminderV2,
+                VisitSummaryV2,
+            )
+            from .v2_runtime import get_runtime
+
+            # 选择 agent
+            agent_cls_map = {
+                "health_advisor": HealthAdvisorV2,
+                "health_records": HealthRecordsV2,
+                "medication_reminder": MedicationReminderV2,
+                "visit_summary": VisitSummaryV2,
+            }
+            agent_cls = agent_cls_map.get(agent_name)
+            if agent_cls is None:
+                return {"error": f"unknown agent: {agent_name}"}
+
+            if not get_runtime().available:
+                return {"error": "LangChain 1.x 不可用"}
+
+            agent = agent_cls()
+            events = []
+            full_content = ""
+            tool_calls = []
+
+            async for event in agent.stream(
+                state.get("query", ""),
+                state.get("conversation_id", "default"),
+                user_id=state.get("user_id"),
+            ):
+                events.append(event)
+                ev_type = event.get("type", "?")
+                if ev_type == "normal":
+                    full_content += str(event.get("content", ""))
+                elif ev_type == "tool_call":
+                    tool_calls.append({
+                        "name": event.get("name"),
+                        "args": event.get("args"),
+                    })
+
+            return {
+                "agent_response": {
+                    "agent": agent_name,
+                    "content": full_content,
+                    "tool_calls": tool_calls,
+                    "events_count": len(events),
+                },
+            }
+        except Exception as e:
+            logger.exception("[host_graph] invoke_%s failed", agent_name)
+            return {"error": str(e)}
+
+    return node
+
+
+async def aggregate_node(state: HostState) -> dict:
+    """汇总节点：把 agent_response 包装成 final_response"""
+    if state.get("error"):
+        return {
+            "final_response": {
+                "role": "agent",
+                "content": f"处理失败：{state['error']}",
+                "agent": state.get("target_agent"),
+                "error": True,
+            }
+        }
+
+    agent_resp = state.get("agent_response", {})
+    return {
+        "final_response": {
+            "role": "agent",
+            "content": agent_resp.get("content", ""),
+            "agent": agent_resp.get("agent"),
+            "tool_calls": agent_resp.get("tool_calls", []),
+            "routing": {
+                "layer": state.get("routing_layer"),
+                "target": state.get("target_agent"),
+            },
+        }
+    }
+
+
+# ============================================================
+# 图构建器
+# ============================================================
+def build_host_graph(*, use_checkpointer: bool = True):
+    """
+    构建 PHA HostGraph（LangGraph 1.0 StateGraph）
+
+    Returns:
+        CompiledStateGraph（如失败返回 None）
+    """
+    if not _LANGGRAPH_OK:
+        logger.warning("[host_graph] LangGraph 不可用，构建失败")
+        return None
+
+    g = StateGraph(HostState)
+
+    # 节点
+    g.add_node("classify", classify_node)
+    g.add_node("invoke_health", invoke_agent_node("health_advisor"))
+    g.add_node("invoke_records", invoke_agent_node("health_records"))
+    g.add_node("invoke_medication", invoke_agent_node("medication_reminder"))
+    g.add_node("invoke_summary", invoke_agent_node("visit_summary"))
+    g.add_node("aggregate", aggregate_node)
+
+    # 边
+    g.add_edge(START, "classify")
+
+    def _route_decision(state: HostState) -> str:
+        target = state.get("target_agent", "health_advisor")
+        return {
+            "health_advisor": "invoke_health",
+            "health_records": "invoke_records",
+            "medication_reminder": "invoke_medication",
+            "visit_summary": "invoke_summary",
+        }.get(target, "invoke_health")
+
+    g.add_conditional_edges(
+        "classify",
+        _route_decision,
+        {
+            "invoke_health": "invoke_health",
+            "invoke_records": "invoke_records",
+            "invoke_medication": "invoke_medication",
+            "invoke_summary": "invoke_summary",
+        },
+    )
+
+    for node_name in ["invoke_health", "invoke_records", "invoke_medication", "invoke_summary"]:
+        g.add_edge(node_name, "aggregate")
+    g.add_edge("aggregate", END)
+
+    # Checkpointer（默认 None，避免强制要求 thread_id；后续可加 use_checkpointer=True）
+    checkpointer = None
+    if use_checkpointer:
+        try:
+            checkpointer = InMemorySaver()
+        except Exception as e:
+            logger.warning("[host_graph] Checkpointer 初始化失败: %s", e)
+
+    return g.compile(checkpointer=checkpointer)
+
+
+# ============================================================
+# 单例 + 便捷调用
+# ============================================================
+_host_graph = None
+
+
+def get_host_graph():
+    """获取全局 host_graph 单例（懒加载）"""
+    global _host_graph
+    if _host_graph is None:
+        _host_graph = build_host_graph(use_checkpointer=False)
+    return _host_graph
+
+
+async def route_and_invoke(
+    query: str,
+    conversation_id: str,
+    user_id: str = "default",
+    metadata: Optional[dict] = None,
+) -> dict:
+    """
+    一站式：路由 + 调用 + 汇总
+
+    Returns:
+        final_response dict
+    """
+    graph = get_host_graph()
+    if graph is None:
+        return {
+            "role": "agent",
+            "content": "LangGraph 不可用，V2 HostGraph 已降级",
+            "error": True,
+        }
+
+    cfg = {"configurable": {"thread_id": f"{user_id}:{conversation_id}"}}
+    initial_state = HostState(
+        query=query,
+        conversation_id=conversation_id,
+        user_id=user_id,
+        metadata=metadata or {},
+        events=[],
+    )
+
+    try:
+        result = await graph.ainvoke(initial_state, config=cfg)
+        return result.get("final_response", {"error": "no response"})
+    except Exception as e:
+        logger.exception("[host_graph] route_and_invoke failed")
+        return {
+            "role": "agent",
+            "content": f"HostGraph 错误：{e}",
+            "error": True,
+        }
