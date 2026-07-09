@@ -296,7 +296,48 @@ class ConversationServer:
         pass
     
     message = self.manager.sanitize_message(message)
-    task = asyncio.create_task(self.manager.process_message(message))
+
+    # === PHA v2 灰度路由（阶段4）===
+    # Header: X-Use-V2=true 或 X-PHA-Version=v2 走 v2 HostGraph
+    # 环境变量 PHA_USE_V2=true 全量切流
+    # v2 失败时自动 fallback 到 v1 adk_host_manager
+    v2_attempted = False
+    try:
+        from A2AServer.v2.bridge import is_v2_request, v2_process_message
+        if is_v2_request(request):
+            v2_attempted = True
+            logging.info("[PHA v2] routing to v2 HostGraph")
+            # 异步包装：bridge 是 async，process_message 是同步接口
+            async def _v2_runner():
+                try:
+                    r = await v2_process_message(message)
+                    if r.get("error"):
+                        logging.warning(f"[PHA v2] error, fallback to v1: {r['error']}")
+                        await self.manager.process_message(message)
+                    elif r.get("message") is not None:
+                        # 注入 v2 结果到 manager 的会话
+                        try:
+                            self.manager._messages.append(r["message"])
+                            conv_id = message.metadata.get("conversation_id") if message.metadata else None
+                            if conv_id:
+                                conv = self.manager.get_conversation(conv_id)
+                                if conv:
+                                    conv.messages.append(r["message"])
+                        except Exception as inner_e:
+                            logging.warning(f"[PHA v2] inject result failed: {inner_e}")
+                        logging.info(f"[PHA v2] success: agent={r.get('result', {}).get('agent')}")
+                except Exception as e:
+                    logging.exception(f"[PHA v2] runner exception, fallback to v1: {e}")
+                    await self.manager.process_message(message)
+
+            task = asyncio.create_task(_v2_runner())
+    except ImportError as e:
+        logging.debug(f"[PHA v2] import not available: {e}")
+    except Exception as e:
+        logging.warning(f"[PHA v2] setup failed, fallback to v1: {e}")
+
+    if not v2_attempted:
+        task = asyncio.create_task(self.manager.process_message(message))
     def _done_cb(t):
       try:
         exc = t.exception()
