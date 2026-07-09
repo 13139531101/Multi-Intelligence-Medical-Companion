@@ -40,10 +40,20 @@ class V2Agent:
         agent = HealthAdvisorV2()
         async for event in agent.stream(query, session_id, user_id):
             print(event)
+
+    **单例化（阶段8 优化）**：
+    - 类级别 `_agent_instance` 缓存：相同类（HealthAdvisorV2）共享同一个 LangGraph agent
+    - 第一次创建耗时 ~3s，后续请求直接复用，节省 3s/请求
+    - 安全性：LangGraph agent 是无状态的（state 由 thread_id 隔离），共用安全
     """
 
     name: str = "v2_agent"
     system_prompt: str = "You are a helpful AI assistant."
+
+    # === 类级别单例缓存（阶段8 优化）===
+    # key: (class, model) 元组；value: LangGraph agent 实例
+    _agent_instance_cache: dict = {}
+    _agent_instance_lock = None  # 延迟初始化的 asyncio.Lock
 
     def __init__(self, model: str | None = None):
         # 自动识别 LLM 提供方：DeepSeek（默认）/ OpenAI / 其它
@@ -55,6 +65,7 @@ class V2Agent:
                 self.model = os.getenv("PHA_LLM_MODEL", "openai:gpt-4o-mini")
         else:
             self.model = model
+        # 实例级别 _agent 保留，但优先用类单例
         self._agent = None
         self._tools = None
 
@@ -63,8 +74,25 @@ class V2Agent:
         return []
 
     async def _ensure_agent(self):
-        """懒加载：第一次调用时创建 agent"""
+        """
+        懒加载 + 类单例：第一次调用时创建 agent，相同类后续直接复用
+
+        阶段8 优化：每个 V2Agent 子类共享一个 LangGraph agent 实例
+        节省每次请求的 ~3s 初始化时间
+        """
+        # 优先返回实例级缓存（向后兼容）
         if self._agent is not None:
+            return self._agent
+
+        # 类级别单例缓存
+        cache_key = (type(self), self.model)
+        if cache_key in self._agent_instance_cache:
+            self._agent = self._agent_instance_cache[cache_key]
+            logger.debug(
+                "[v2_agent:%s] reused class-singleton agent (model=%s)",
+                self.name,
+                self.model,
+            )
             return self._agent
 
         runtime = get_runtime()
@@ -90,7 +118,7 @@ class V2Agent:
                 base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
                 temperature=0,
             )
-            self._agent = create_agent(
+            agent = create_agent(
                 model=chat_model,
                 tools=self._tools,
                 system_prompt=self.system_prompt,
@@ -107,7 +135,7 @@ class V2Agent:
                 base_url=os.getenv("OPENAI_API_BASE"),  # None 默认 OpenAI 官方
                 temperature=0,
             )
-            self._agent = create_agent(
+            agent = create_agent(
                 model=chat_model,
                 tools=self._tools,
                 system_prompt=self.system_prompt,
@@ -116,7 +144,7 @@ class V2Agent:
             )
         else:
             # 其它直接走 create_agent(model=str) 路径
-            self._agent = create_agent(
+            agent = create_agent(
                 model=self.model,
                 tools=self._tools,
                 system_prompt=self.system_prompt,
@@ -124,14 +152,18 @@ class V2Agent:
                 checkpointer=checkpointer,
             )
 
+        # 缓存到类级别
+        self._agent_instance_cache[cache_key] = agent
+        self._agent = agent
+
         logger.info(
-            "[v2_agent:%s] created: model=%s, tools=%d, middlewares=%d",
+            "[v2_agent:%s] created (singleton): model=%s, tools=%d, middlewares=%d",
             self.name,
             self.model,
             len(self._tools),
             len(middlewares),
         )
-        return self._agent
+        return agent
 
     async def stream(
         self,
