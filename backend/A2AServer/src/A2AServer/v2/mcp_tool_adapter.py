@@ -109,6 +109,12 @@ def _load_real_mcp_tools(agent_name: str) -> list:
                 BaseTool=BaseTool,
             )
             if tool is not None:
+                # 阶段7 性能优化：自动应用工具调用缓存
+                try:
+                    from .tool_cache import wrap_tool_with_cache
+                    tool = wrap_tool_with_cache(tool, use_cache=True)
+                except ImportError:
+                    pass
                 tools.append(tool)
         except Exception as e:
             logger.debug(

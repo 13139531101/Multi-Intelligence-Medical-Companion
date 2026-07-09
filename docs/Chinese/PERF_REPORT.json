@@ -1,0 +1,76 @@
+{
+  "summary": {
+    "total_runs": 4,
+    "successful": 4,
+    "errors": 0,
+    "error_rate": 0.0,
+    "latency_p50": 14.51,
+    "latency_p95": 70.66,
+    "latency_p99": 70.66,
+    "latency_mean": 25.88,
+    "total_elapsed_sec": 103.54,
+    "rps": 0.04
+  },
+  "by_agent": {
+    "health_advisor": {
+      "total_runs": 1,
+      "successful": 1,
+      "errors": 0,
+      "error_rate": 0.0,
+      "latency_p50": 70.66,
+      "latency_p95": 70.66,
+      "latency_p99": 70.66,
+      "latency_mean": 70.66,
+      "latency_min": 70.66,
+      "latency_max": 70.66,
+      "tool_calls_mean": 15,
+      "tool_calls_max": 15,
+      "content_len_mean": 934
+    },
+    "health_records": {
+      "total_runs": 1,
+      "successful": 1,
+      "errors": 0,
+      "error_rate": 0.0,
+      "latency_p50": 8.6,
+      "latency_p95": 8.6,
+      "latency_p99": 8.6,
+      "latency_mean": 8.6,
+      "latency_min": 8.6,
+      "latency_max": 8.6,
+      "tool_calls_mean": 3,
+      "tool_calls_max": 3,
+      "content_len_mean": 211
+    },
+    "medication_reminder": {
+      "total_runs": 1,
+      "successful": 1,
+      "errors": 0,
+      "error_rate": 0.0,
+      "latency_p50": 20.42,
+      "latency_p95": 20.42,
+      "latency_p99": 20.42,
+      "latency_mean": 20.42,
+      "latency_min": 20.42,
+      "latency_max": 20.42,
+      "tool_calls_mean": 0,
+      "tool_calls_max": 0,
+      "content_len_mean": 168
+    },
+    "visit_summary": {
+      "total_runs": 1,
+      "successful": 1,
+      "errors": 0,
+      "error_rate": 0.0,
+      "latency_p50": 3.85,
+      "latency_p95": 3.85,
+      "latency_p99": 3.85,
+      "latency_mean": 3.85,
+      "latency_min": 3.85,
+      "latency_max": 3.85,
+      "tool_calls_mean": 3,
+      "tool_calls_max": 3,
+      "content_len_mean": 438
+    }
+  }
+}
