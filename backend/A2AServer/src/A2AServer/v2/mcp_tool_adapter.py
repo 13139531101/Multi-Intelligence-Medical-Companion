@@ -1,193 +1,265 @@
 """
-PHA v2 MCP 工具适配器（阶段2-4）
+PHA v2 MCP 工具适配器（阶段2-5）
 
 **作用**：
-- 把现有 `mcpserver/*_tool.py` 的函数封装成 LangChain 1.x `BaseTool`
-- 阶段2-4：手动 adapter（不引入 langchain-mcp-adapters，零额外依赖）
-- 阶段2-5 可选：升级为 `langchain-mcp-adapters`（官方方案）
+- 自动扫描 `backend/<Agent>/mcpserver/*_tool.py` 里的 `@mcp.tool()` 装饰函数
+- 动态加载这些 MCP 工具函数
+- 包装成 LangChain 1.x `BaseTool`
 
-**设计原则**：
-- 失败不阻塞：tool 加载失败返回空列表
-- 元数据保留：保留原有 tool 的 name / description / params
+**两阶段发现**：
+1. 静态扫描（不执行 module）→ 拿到工具元数据（name/description/args）
+2. 动态加载（按需）→ 拿到真实可调用函数
+
+**降级机制**：
+- 如果某个 agent 目录下没有 *tool.py，自动用 stub
+- 如果加载真实工具失败（缺依赖等），降级到 stub
 """
 from __future__ import annotations
 
 import logging
 import inspect
-from typing import Any, Callable
+from typing import Any
+
+from .mcp_discover import (
+    discover_mcp_tools_static,
+    load_mcp_tool_function,
+)
 
 logger = logging.getLogger(__name__)
 
+# 缓存：避免每次重新加载
+_TOOL_CACHE: dict[str, list] = {}
 
-def load_mcp_tools(agent_name: str) -> list:
+
+def load_mcp_tools(agent_name: str, *, use_real: bool = True) -> list:
     """
-    加载指定 agent 的 MCP 工具列表，返回 LangChain BaseTool 实例
+    加载指定 agent 的 MCP 工具列表
 
     Args:
         agent_name: agent 标识（health_advisor / health_records / ...）
+        use_real: True 用真实 MCP 工具；False 用 stub
 
     Returns:
-        list of BaseTool（LangChain 1.x 标准）
+        list of LangChain BaseTool
     """
-    # 延迟导入，避免循环依赖
-    try:
-        from langchain_core.tools import BaseTool
-    except ImportError:
-        logger.warning("[mcp_tool_adapter] langchain_core 不可用")
-        return []
+    cache_key = f"{agent_name}:{use_real}"
+    if cache_key in _TOOL_CACHE:
+        return _TOOL_CACHE[cache_key]
 
-    # 工具清单（按 agent 划分，阶段2-4 手动维护）
-    tool_specs = _get_tool_specs(agent_name)
+    if not use_real:
+        tools = _load_stub_tools(agent_name)
+        _TOOL_CACHE[cache_key] = tools
+        return tools
 
-    tools = []
-    for spec in tool_specs:
-        try:
-            tool = _wrap_to_base_tool(spec, BaseTool)
-            if tool is not None:
-                tools.append(tool)
-        except Exception as e:
-            logger.warning(
-                "[mcp_tool_adapter] 包装工具失败: %s -> %s", spec.get("name"), e
-            )
+    tools = _load_real_mcp_tools(agent_name)
+    if not tools:
+        logger.warning(
+            "[mcp_tool_adapter] agent=%s 真实工具为空，回退 stub", agent_name
+        )
+        tools = _load_stub_tools(agent_name)
 
+    _TOOL_CACHE[cache_key] = tools
     logger.info(
-        "[mcp_tool_adapter] agent=%s loaded %d tools: %s",
+        "[mcp_tool_adapter] agent=%s loaded %d tools",
         agent_name,
         len(tools),
-        [t.name for t in tools],
     )
     return tools
 
 
-def _get_tool_specs(agent_name: str) -> list[dict]:
-    """
-    返回 agent 对应的工具规格列表
-
-    阶段2-4 暂时用占位（每个 agent 1-2 个示例工具）
-    阶段2-5 会扫描 mcpserver/ 目录自动发现
-    """
-    # TODO 阶段2-5: 改为自动扫描 backend/<Agent>/mcpserver/*_tool.py
-    if agent_name == "health_advisor":
-        return [
-            {
-                "name": "symptom_lookup",
-                "description": "根据症状名查询可能的健康风险与建议",
-                "func": _stub_symptom_lookup,
-            },
-            {
-                "name": "knowledge_search",
-                "description": "在医疗知识库中搜索相关信息",
-                "func": _stub_knowledge_search,
-            },
-        ]
-    elif agent_name == "health_records":
-        return [
-            {
-                "name": "ocr_extract",
-                "description": "从图片/PDF 中提取检查报告文本",
-                "func": _stub_ocr,
-            },
-        ]
-    elif agent_name == "medication_reminder":
-        return [
-            {
-                "name": "drug_safety_check",
-                "description": "检查多种药物的相互作用与禁忌",
-                "func": _stub_drug_check,
-            },
-        ]
-    elif agent_name == "visit_summary":
-        return [
-            {
-                "name": "summarize_visits",
-                "description": "汇总历史就诊记录生成摘要",
-                "func": _stub_summarize,
-            },
-        ]
-    return []
-
-
-def _wrap_to_base_tool(spec: dict, base_tool_cls) -> Any:
-    """把 spec 包装成 LangChain BaseTool"""
-    tool_name = spec["name"]
-    tool_desc = spec["description"]
-    func = spec["func"]
-
-    # 动态创建 BaseTool 子类（Pydantic v2：name/description 用 Pydantic 字段）
+def _load_real_mcp_tools(agent_name: str) -> list:
+    """从 backend/<Agent>/mcpserver 加载真实 MCP 工具"""
     try:
-        # LangChain 1.x 风格：用 pydantic Field
-        from pydantic import Field
+        from langchain_core.tools import BaseTool
+    except ImportError:
+        return []
 
-        class _Tool(base_tool_cls):
+    # 1. 静态扫描
+    tool_specs = discover_mcp_tools_static(agent_name)
+    if not tool_specs:
+        return []
+
+    # 2. 过滤：跳过有副作用 / 集成类工具（避免循环依赖 / DB 连接等）
+    SKIP_TOOLS = {
+        # 集成类
+        "a2a_integration_tool",         # 避免循环
+        "memory_integration_tool",      # memory 系统独立
+        # DB / 数据层（顶层会连接 DB，本地无容器会失败）
+        "database_tool",
+        "storage_tool",
+        # 异步分析（依赖外部 worker）
+        "async_analysis_tool",
+    }
+    tool_specs = [t for t in tool_specs if t["tool_module"] not in SKIP_TOOLS]
+
+    # 3. 动态加载每个工具
+    tools = []
+    for spec in tool_specs:
+        try:
+            func = load_mcp_tool_function(
+                agent_name, spec["tool_module"], spec["name"]
+            )
+            if func is None:
+                continue
+
+            tool = _wrap_function_as_base_tool(
+                func=func,
+                name=spec["name"],
+                description=spec["description"] or f"Tool from {spec['tool_module']}",
+                BaseTool=BaseTool,
+            )
+            if tool is not None:
+                tools.append(tool)
+        except Exception as e:
+            logger.debug(
+                "[mcp_tool_adapter] 跳过 %s.%s: %s",
+                spec["tool_module"],
+                spec["name"],
+                e,
+            )
+            continue
+
+    return tools
+
+
+def _wrap_function_as_base_tool(
+    func, name: str, description: str, BaseTool
+) -> Any:
+    """把普通函数包装成 LangChain BaseTool"""
+    # 检查函数签名
+    sig = inspect.signature(func)
+    is_async = inspect.iscoroutinefunction(func)
+
+    # 捕获到闭包里（避免与 inner class 字段同名）
+    tool_name = name
+    tool_desc = description
+    tool_func = func
+    tool_is_async = is_async
+    tool_sig = sig
+
+    try:
+        from pydantic import Field, create_model
+
+        # 用函数签名动态构建 args_schema
+        fields = {}
+        for param_name, param in tool_sig.parameters.items():
+            annotation = param.annotation if param.annotation != inspect.Parameter.empty else str
+            default = param.default if param.default != inspect.Parameter.empty else ...
+            fields[param_name] = (annotation, default)
+
+        if fields:
+            ArgsSchema = create_model(f"{tool_name}_args", **fields)  # type: ignore
+        else:
+            ArgsSchema = None
+
+        class _Tool(BaseTool):
             name: str = Field(default=tool_name)
             description: str = Field(default=tool_desc)
+            args_schema: type = Field(default=ArgsSchema) if ArgsSchema else None
 
             def _run(self, **kwargs) -> str:
                 try:
-                    result = func(**kwargs)
+                    # 过滤掉 LangChain 注入的多余字段
+                    valid_kwargs = {k: v for k, v in kwargs.items() if k in tool_sig.parameters}
+                    if not valid_kwargs and tool_sig.parameters:
+                        return "Error: missing required arguments"
+
+                    result = tool_func(**valid_kwargs)
+                    if isinstance(result, (dict, list)):
+                        import json
+                        return json.dumps(result, ensure_ascii=False, default=str)
                     return str(result)
                 except Exception as e:
                     return f"Error: {e}"
 
             async def _arun(self, **kwargs) -> str:
                 try:
-                    if inspect.iscoroutinefunction(func):
-                        result = await func(**kwargs)
+                    valid_kwargs = {k: v for k, v in kwargs.items() if k in tool_sig.parameters}
+                    if tool_is_async:
+                        result = await tool_func(**valid_kwargs)
                     else:
-                        result = func(**kwargs)
+                        result = tool_func(**valid_kwargs)
+                    if isinstance(result, (dict, list)):
+                        import json
+                        return json.dumps(result, ensure_ascii=False, default=str)
                     return str(result)
                 except Exception as e:
                     return f"Error: {e}"
 
-    except Exception:
-        # 旧版 langchain_core 兼容
-        class _Tool(base_tool_cls):
-            name = tool_name
-            description = tool_desc
-
-            def _run(self, *args, **kwargs) -> str:
-                try:
-                    return str(func(*args, **kwargs))
-                except Exception as e:
-                    return f"Error: {e}"
-
-            async def _arun(self, *args, **kwargs) -> str:
-                try:
-                    if inspect.iscoroutinefunction(func):
-                        return str(await func(*args, **kwargs))
-                    return str(func(*args, **kwargs))
-                except Exception as e:
-                    return f"Error: {e}"
-
-    try:
         return _Tool()
     except Exception as e:
-        # 兜底：返回 None 让上层跳过
-        logger.debug("[mcp_tool_adapter] 实例化失败 %s: %s", tool_name, e)
+        logger.debug("[mcp_tool_adapter] 包装失败 %s: %s", tool_name, e)
         return None
 
 
 # ============================================================
-# Stub 工具实现（占位，阶段2-5 替换为真实 MCP 工具）
+# Stub 工具（真实工具加载失败时 fallback）
 # ============================================================
-def _stub_symptom_lookup(symptom: str) -> str:
+def _load_stub_tools(agent_name: str) -> list:
+    """加载 stub 工具（与原 v2 行为一致）"""
+    try:
+        from langchain_core.tools import BaseTool
+    except ImportError:
+        return []
+
+    stub_specs = {
+        "health_advisor": [
+            ("symptom_lookup", "根据症状名查询可能的健康风险与建议", _stub_symptom_lookup),
+            ("knowledge_search", "在医疗知识库中搜索相关信息", _stub_knowledge_search),
+        ],
+        "health_records": [
+            ("ocr_extract", "从图片/PDF 中提取检查报告文本", _stub_ocr),
+        ],
+        "medication_reminder": [
+            ("drug_safety_check", "检查多种药物的相互作用与禁忌", _stub_drug_check),
+        ],
+        "visit_summary": [
+            ("summarize_visits", "汇总历史就诊记录生成摘要", _stub_summarize),
+        ],
+    }
+
+    specs = stub_specs.get(agent_name, [])
+    tools = []
+    for name, desc, func in specs:
+        try:
+            from pydantic import Field
+
+            class _Tool(BaseTool):
+                name: str = Field(default=name)
+                description: str = Field(default=desc)
+
+                def _run(self, **kwargs) -> str:
+                    return str(func(**kwargs))
+
+                async def _arun(self, **kwargs) -> str:
+                    return str(func(**kwargs))
+
+            tools.append(_Tool())
+        except Exception:
+            pass
+    return tools
+
+
+def _stub_symptom_lookup(**kwargs) -> str:
+    symptom = kwargs.get("symptoms", "未知")
     return (
-        f"[MOCK] 症状分析：{symptom} 建议多休息、多饮水，"
-        "如持续超过 3 天请就医（占位实现，需替换为真实医疗知识库）。"
+        f"[STUB] 症状分析：{symptom} 建议多休息、多饮水"
+        "（占位实现，未加载真实 MCP 工具）。"
     )
 
 
-def _stub_knowledge_search(query: str) -> str:
-    return f"[MOCK] 知识库检索：{query} 的相关结果（占位实现）。"
+def _stub_knowledge_search(**kwargs) -> str:
+    query = kwargs.get("query", "未知")
+    return f"[STUB] 知识库检索：{query}（占位）。"
 
 
-def _stub_ocr(image_url: str = "") -> str:
-    return f"[MOCK] OCR 提取文本（占位实现）：{image_url}"
+def _stub_ocr(**kwargs) -> str:
+    return f"[STUB] OCR 提取文本（占位）"
 
 
-def _stub_drug_check(drugs: list = None) -> str:
-    return f"[MOCK] 药物相互作用检查：{drugs or []}（占位实现）。"
+def _stub_drug_check(**kwargs) -> str:
+    return f"[STUB] 药物相互作用检查（占位）"
 
 
-def _stub_summarize(patient_id: str = "") -> str:
-    return f"[MOCK] 就诊摘要生成：{patient_id}（占位实现）。"
+def _stub_summarize(**kwargs) -> str:
+    return f"[STUB] 就诊摘要生成（占位）"

@@ -46,7 +46,15 @@ class V2Agent:
     system_prompt: str = "You are a helpful AI assistant."
 
     def __init__(self, model: str | None = None):
-        self.model = model or os.getenv("PHA_LLM_MODEL", "openai:gpt-4o-mini")
+        # 自动识别 LLM 提供方：DeepSeek（默认）/ OpenAI / 其它
+        if model is None:
+            if os.getenv("DEEPSEEK_API_KEY") and not os.getenv("OPENAI_API_BASE"):
+                # DeepSeek（OpenAI 兼容协议）
+                self.model = os.getenv("PHA_LLM_MODEL", "deepseek-chat")
+            else:
+                self.model = os.getenv("PHA_LLM_MODEL", "openai:gpt-4o-mini")
+        else:
+            self.model = model
         self._agent = None
         self._tools = None
 
@@ -65,18 +73,57 @@ class V2Agent:
 
         # 延迟导入 LangChain 1.x（确保失败时不阻塞）
         from langchain.agents import create_agent
+        from langchain.chat_models import init_chat_model
 
         self._tools = self.get_tools()
         checkpointer = await runtime.get_checkpointer()
         middlewares = runtime.get_middlewares(self.model)
 
-        self._agent = create_agent(
-            model=self.model,
-            tools=self._tools,
-            system_prompt=self.system_prompt,
-            middleware=middlewares,
-            checkpointer=checkpointer,
-        )
+        # DeepSeek / 自定义 endpoint：用 ChatOpenAI + base_url
+        # DeepSeek 兼容 OpenAI 协议，不需要 langchain-deepseek 单独包
+        if self.model.startswith("deepseek"):
+            from langchain_openai import ChatOpenAI
+
+            chat_model = ChatOpenAI(
+                model=self.model,
+                api_key=os.getenv("DEEPSEEK_API_KEY") or os.getenv("OPENAI_API_KEY"),
+                base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
+                temperature=0,
+            )
+            self._agent = create_agent(
+                model=chat_model,
+                tools=self._tools,
+                system_prompt=self.system_prompt,
+                middleware=middlewares,
+                checkpointer=checkpointer,
+            )
+        elif self.model.startswith("openai:"):
+            from langchain_openai import ChatOpenAI
+
+            model_name = self.model.split(":", 1)[1]
+            chat_model = ChatOpenAI(
+                model=model_name,
+                api_key=os.getenv("OPENAI_API_KEY"),
+                base_url=os.getenv("OPENAI_API_BASE"),  # None 默认 OpenAI 官方
+                temperature=0,
+            )
+            self._agent = create_agent(
+                model=chat_model,
+                tools=self._tools,
+                system_prompt=self.system_prompt,
+                middleware=middlewares,
+                checkpointer=checkpointer,
+            )
+        else:
+            # 其它直接走 create_agent(model=str) 路径
+            self._agent = create_agent(
+                model=self.model,
+                tools=self._tools,
+                system_prompt=self.system_prompt,
+                middleware=middlewares,
+                checkpointer=checkpointer,
+            )
+
         logger.info(
             "[v2_agent:%s] created: model=%s, tools=%d, middlewares=%d",
             self.name,
@@ -126,12 +173,15 @@ class V2Agent:
         cfg = {"configurable": {"thread_id": thread_id}}
 
         try:
-            # LangGraph 标准流式
-            async for chunk in agent.stream(
+            # LangGraph 1.0：stream() 在 stream_mode="values" 下是同步生成器
+            # 用同步 iter 包一层（不影响异步语义）
+            stream_iter = agent.stream(
                 {"messages": [{"role": "user", "content": query}]},
                 config=cfg,
                 stream_mode="values",
-            ):
+            )
+
+            for chunk in stream_iter:
                 messages = chunk.get("messages", []) if isinstance(chunk, dict) else []
                 for msg in messages:
                     msg_type = getattr(msg, "type", "ai")
