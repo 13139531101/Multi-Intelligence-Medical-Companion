@@ -106,6 +106,12 @@ class V2Agent:
                 self.name,
                 self.model,
             )
+            # 阶段14 监控
+            try:
+                from .monitoring import record_agent_reuse
+                record_agent_reuse()
+            except ImportError:
+                pass
             return self._agent
 
         runtime = get_runtime()
@@ -169,6 +175,13 @@ class V2Agent:
         self._agent_instance_cache[cache_key] = agent
         self._agent = agent
 
+        # 阶段14 监控
+        try:
+            from .monitoring import record_agent_new
+            record_agent_new()
+        except ImportError:
+            pass
+
         logger.info(
             "[v2_agent:%s] created (singleton): model=%s, tools=%d, middlewares=%d",
             self.name,
@@ -197,6 +210,11 @@ class V2Agent:
         - {"type": "complete", "content": " "}
         - {"type": "error", "content": "...", "require_user_input": True}
         """
+        # 阶段14 监控：记录端到端延迟
+        import time as _time
+        _stream_start = _time.time()
+        _stream_error = False
+
         agent = await self._ensure_agent()
         if agent is None:
             yield {
@@ -267,8 +285,16 @@ class V2Agent:
 
         except Exception as e:
             logger.exception("[v2_agent:%s] stream error", self.name)
+            _stream_error = True
             yield {
                 "is_task_complete": False,
                 "require_user_input": True,
                 "updates": f"Error processing request: {str(e)}",
             }
+        finally:
+            # 阶段14 监控：保证 stream 退出时记录
+            try:
+                from .monitoring import record_request
+                record_request(_time.time() - _stream_start, error=_stream_error)
+            except ImportError:
+                pass
