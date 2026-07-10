@@ -235,6 +235,24 @@ class V2Agent:
         thread_id = f"{user_id or 'anon'}:{session_id}"
         cfg = {"configurable": {"thread_id": thread_id}}
 
+        # 阶段12 限流检查
+        if os.getenv("PHA_RATE_LIMIT", "true").lower() in {"true", "1", "yes", "on"}:
+            try:
+                from .rate_limit import get_rate_limiter, RateLimitError
+                limiter = get_rate_limiter()
+                _rl = await limiter.allow_llm_call(user_id=user_id, agent_name=self.name)
+                if not _rl:
+                    yield {
+                        "is_task_complete": False,
+                        "require_user_input": False,
+                        "content": "请求过于频繁，请稍后再试。",
+                        "type": "error",
+                        "rate_limited": True,
+                    }
+                    return
+            except ImportError:
+                pass
+
         try:
             # LangGraph 1.0：stream() 在 stream_mode="values" 下是同步生成器
             # 用同步 iter 包一层（不影响异步语义）
