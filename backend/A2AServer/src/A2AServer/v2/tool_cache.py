@@ -1,5 +1,5 @@
 """
-PHA v2 工具调用缓存（阶段7 性能优化）
+PHA v2 工具调用缓存（阶段7 性能优化 + 阶段9 写操作白名单）
 
 **问题**：压测发现 health_advisor 单次请求调用 15 个工具，延迟 70s
 
@@ -27,6 +27,60 @@ import time
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
+
+
+# ============================================================
+# 写操作白名单（阶段9）
+# ============================================================
+_WRITE_PREFIXES = (
+    "add_", "delete_", "remove_", "update_", "set_",
+    "send_", "create_", "insert_", "mark_", "complete_",
+    "upsert_", "save_", "register_", "unregister_",
+)
+
+_READ_PREFIXES = (
+    "get_", "list_", "search_", "find_", "query_",
+    "check_", "validate_", "analyze_", "generate_", "extract_",
+    "detect_", "parse_", "ai_", "recommend_",
+)
+
+
+def is_write_tool(tool) -> bool:
+    """
+    判断工具是否为写操作（不应缓存）
+
+    判断规则（按优先级）：
+    1. 显式标签：tool.tags 包含 "write" 或 "side-effect"
+    2. 显式标签：tool.tags 包含 "read-only" / "idempotent" -> 视为读
+    3. 命名约定：tool.name 以写前缀开头 -> 写
+    4. 命名约定：tool.name 以读前缀开头 -> 读
+    5. 未知 -> 默认按写（保守，避免副作用）
+
+    用法：
+        @mcp.tool(tags=["read-only"])
+        def search_symptom_info(...): ...
+
+        @mcp.tool(tags=["write"])
+        def add_medication_reminder(...): ...
+    """
+    name = getattr(tool, "name", "") or ""
+
+    # 1. 显式标签
+    tags = set(getattr(tool, "tags", []) or [])
+    if "write" in tags or "side-effect" in tags or "mutating" in tags:
+        return True
+    if "read-only" in tags or "idempotent" in tags or "pure" in tags:
+        return False
+
+    # 2. 命名约定
+    lower = name.lower()
+    if any(lower.startswith(p) for p in _WRITE_PREFIXES):
+        return True
+    if any(lower.startswith(p) for p in _READ_PREFIXES):
+        return False
+
+    # 3. 保守：未知按写
+    return True
 
 
 class ToolCallCache:
@@ -114,8 +168,18 @@ def wrap_tool_with_cache(tool, use_cache: bool = True):
     包装 LangChain BaseTool，添加调用缓存
 
     适用场景：相同 query 在 60s 内重复时（如 Agent 多次同质调用）
+
+    **写操作白名单（阶段9）**：
+    - 写操作工具（add_/delete_/send_/update_/mark_/create_）默认**不缓存**
+    - 通过 `tool.tags` 或命名约定识别写操作
+    - 可通过 `force_cache=True` 强制缓存（仅对幂等写操作）
     """
     if not use_cache:
+        return tool
+
+    # 阶段9：写操作白名单检查
+    if is_write_tool(tool) and not getattr(tool, "force_cache", False):
+        logger.debug(f"[tool_cache] SKIP write tool: {tool.name}")
         return tool
 
     cache = get_tool_cache()

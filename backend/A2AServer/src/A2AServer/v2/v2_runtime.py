@@ -120,3 +120,66 @@ def get_runtime() -> V2AgentRuntime:
     if _runtime is None:
         _runtime = V2AgentRuntime()
     return _runtime
+
+
+# ============================================================
+# 预热（阶段10 P0 优化）
+# ============================================================
+async def warmup_v2():
+    """
+    启动时预热 v2 runtime + 4 个 V2Agent
+
+    节省首次请求的 ~3-5s 初始化时间
+    适用：服务启动时调用一次
+
+    预热内容：
+    1. 初始化 Checkpointer
+    2. 创建 4 个 V2Agent（触发 LangGraph 编译 + 工具加载）
+    3. 触发 Embedding 模型初始化（如果用了 DashScope）
+    """
+    import time
+    start = time.time()
+    runtime = get_runtime()
+    if not runtime.available:
+        logger.warning("[v2_runtime] warmup skipped: LangChain 1.x 不可用")
+        return False
+
+    logger.info("[v2_runtime] starting warmup...")
+
+    # 1. Checkpointer
+    try:
+        await runtime.get_checkpointer()
+    except Exception as e:
+        logger.warning(f"[v2_runtime] warmup checkpointer 失败: {e}")
+
+    # 2. 4 个 V2Agent（触发 LangGraph 编译 + 工具发现）
+    try:
+        from .sub_agents import (
+            HealthAdvisorV2,
+            HealthRecordsV2,
+            MedicationReminderV2,
+            VisitSummaryV2,
+        )
+        for cls in [HealthAdvisorV2, HealthRecordsV2, MedicationReminderV2, VisitSummaryV2]:
+            try:
+                instance = cls()
+                await instance._ensure_agent()  # 触发懒加载
+                logger.info(f"[v2_runtime] warmup {cls.__name__} ok")
+            except Exception as e:
+                logger.warning(f"[v2_runtime] warmup {cls.__name__} 失败: {e}")
+    except Exception as e:
+        logger.warning(f"[v2_runtime] warmup sub_agents 失败: {e}")
+
+    elapsed = time.time() - start
+    logger.info(f"[v2_runtime] warmup 完成 (耗时 {elapsed:.1f}s)")
+    return True
+
+
+def warmup_v2_sync():
+    """同步版本的预热（用于启动脚本）"""
+    import asyncio
+    try:
+        return asyncio.run(warmup_v2())
+    except Exception as e:
+        logger.warning(f"[v2_runtime] warmup_sync 失败: {e}")
+        return False
