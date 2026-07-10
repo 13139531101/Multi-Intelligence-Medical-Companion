@@ -73,6 +73,19 @@ class V2Agent:
         """子类重写：返回 LangChain BaseTool 列表"""
         return []
 
+    def _concurrent_kwargs(self) -> dict:
+        """
+        阶段13 集成：返回 create_agent 的并发工具 kwargs
+
+        注意：LangChain 1.0 `create_agent()` 不直接接受 `awrap_tool_call`，
+        所以这里返回空 dict。要启用并发工具调用需要：
+        1. 等 LangChain 1.x 升级暴露 ToolNode 替换
+        2. 或者用户用 `concurrent_tools.execute_tool_calls_concurrent` 手动包装
+
+        保留此方法是为了将来兼容性。
+        """
+        return {}  # 暂不集成到 create_agent（LangChain API 限制）
+
     async def _ensure_agent(self):
         """
         懒加载 + 类单例：第一次调用时创建 agent，相同类后续直接复用
