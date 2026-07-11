@@ -1,0 +1,131 @@
+# ============================================================
+# PHA v2 K8s Manifest - PostgreSQL (StatefulSet)
+# ============================================================
+# 学习点：
+# - Deployment 适合无状态服务（API server）
+# - StatefulSet 适合有状态服务（DB / MQ）— Pod 有稳定标识 + 持久化存储
+# - PersistentVolumeClaim (PVC) 是 K8s 存储抽象
+# - headless Service (clusterIP: None) 让 Pod 有 DNS 记录
+apiVersion: v1
+kind: Service
+metadata:
+  name: pha-postgres
+  namespace: pha
+  labels:
+    app: pha-postgres
+spec:
+  type: ClusterIP
+  clusterIP: None  # headless service
+  selector:
+    app: pha-postgres
+  ports:
+    - port: 5432
+      targetPort: 5432
+      name: postgres
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pha-postgres-data
+  namespace: pha
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: standard  # 取决于 K8s 集群
+  resources:
+    requests:
+      storage: 20Gi
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: pha-postgres
+  namespace: pha
+  labels:
+    app: pha-postgres
+spec:
+  serviceName: pha-postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pha-postgres
+  template:
+    metadata:
+      labels:
+        app: pha-postgres
+    spec:
+      initContainers:
+        # 初始化 pgvector schema（如果集群有 init job 可以省略）
+        - name: init-db-schema
+          image: pgvector/pgvector:pg16
+          command: ["sh", "-c", "until pg_isready -h pha-postgres -p 5432; do sleep 2; done"]
+      containers:
+        - name: postgres
+          image: pgvector/pgvector:pg16
+          ports:
+            - containerPort: 5432
+              name: postgres
+          envFrom:
+            - configMapRef:
+                name: pha-config
+            - secretRef:
+                name: pha-secrets
+          env:
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: pha-secrets
+                  key: POSTGRES_PASSWORD
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              cpu: 2
+              memory: 4Gi
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "pha", "-d", "personal_health_assistant"]
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "pha", "-d", "personal_health_assistant"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            - name: init-scripts
+              mountPath: /docker-entrypoint-initdb.d
+      volumes:
+        - name: init-scripts
+          configMap:
+            name: pha-db-init
+            optional: true
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        storageClassName: standard
+        resources:
+          requests:
+            storage: 20Gi
+---
+# 数据库初始化脚本（如果还没有 init configmap，可以手动 kubectl create cm 注入）
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pha-db-init
+  namespace: pha
+data:
+  01_pgvector.sql: |
+    -- pgvector 扩展
+    CREATE EXTENSION IF NOT EXISTS vector;
+  02_init.sql: |
+    -- 基础 schema（按项目 database/personal_health_assistant.sql）
+    -- 此处仅放占位符，生产环境用 init job / Operator 管理
+    SELECT 'PHA DB init placeholder' AS info;

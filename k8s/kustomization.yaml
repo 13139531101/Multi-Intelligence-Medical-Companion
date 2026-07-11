@@ -1,0 +1,20 @@
+# ============================================================
+# PHA v2 Kustomization - 一键 apply
+# ============================================================
+# 学习点：
+# - Kustomize 是 K8s 配置管理工具（kubectl 内置）
+# - 不用 Helm，YAML 原生支持 patch + overlay
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: pha
+commonLabels:
+  app.kubernetes.io/part-of: pha-v2
+  app.kubernetes.io/managed-by: kustomize
+resources:
+  - 00-namespace.yaml
+  - 01-secrets.yaml
+  - 02-postgres.yaml
+  - 03-redis.yaml
+  - 04-mcps.yaml
+  - 05-hostapi.yaml
+  - 06-scaling.yaml

@@ -1,0 +1,271 @@
+# ============================================================
+# PHA v2 K8s Manifest - 4 个 MCP 服务
+# ============================================================
+# 学习点：
+# - 用 Kustomize 模板（kustomization.yaml）共享配置
+# - 这里直接写 4 个独立 Deployment，便于直接 kubectl apply
+# - 每个 MCP 是 A2A 协议 stdio/HTTP 服务，独立扩缩
+---
+# ----------- health_advisor (10011) -----------
+apiVersion: v1
+kind: Service
+metadata:
+  name: pha-health-advisor
+  namespace: pha
+  labels:
+    app: pha-health-advisor
+spec:
+  type: ClusterIP
+  selector:
+    app: pha-health-advisor
+  ports:
+    - port: 10011
+      targetPort: 10011
+      name: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pha-health-advisor
+  namespace: pha
+  labels:
+    app: pha-health-advisor
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pha-health-advisor
+  template:
+    metadata:
+      labels:
+        app: pha-health-advisor
+    spec:
+      containers:
+        - name: mcp
+          image: crpi-zr8m4m7ism94623a.cn-hangzhou.personal.cr.aliyuncs.com/duozhiyiban/a2aserver-health_advisor:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 10011
+              name: http
+          env:
+            - { name: PORT, value: "10011" }
+            - { name: HOST, value: "0.0.0.0" }
+            - { name: PYTHONPATH, value: "/app" }
+            - { name: DB_HOST, value: "pha-postgres" }
+            - { name: DB_PORT, value: "5432" }
+            - { name: DB_NAME, value: "personal_health_assistant" }
+            - { name: A2A_CURRENT_USER_ID, value: "111" }
+          envFrom:
+            - configMapRef:
+                name: pha-config
+            - secretRef:
+                name: pha-secrets
+          resources:
+            requests: { cpu: 200m, memory: 512Mi }
+            limits:   { cpu: 1, memory: 2Gi }
+          livenessProbe:
+            httpGet: { path: /.well-known/agent.json, port: 10011 }
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            httpGet: { path: /.well-known/agent.json, port: 10011 }
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 2
+---
+# ----------- health_records (10010) -----------
+apiVersion: v1
+kind: Service
+metadata:
+  name: pha-health-records
+  namespace: pha
+  labels:
+    app: pha-health-records
+spec:
+  type: ClusterIP
+  selector:
+    app: pha-health-records
+  ports:
+    - port: 10010
+      targetPort: 10010
+      name: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pha-health-records
+  namespace: pha
+  labels:
+    app: pha-health-records
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pha-health-records
+  template:
+    metadata:
+      labels:
+        app: pha-health-records
+    spec:
+      containers:
+        - name: mcp
+          image: crpi-zr8m4m7ism94623a.cn-hangzhou.personal.cr.aliyuncs.com/duozhiyiban/a2aserver-health_records:latest
+          imagePullPolicy: IfNotPresent
+          ports: [{ containerPort: 10010, name: http }]
+          env:
+            - { name: PORT, value: "10010" }
+            - { name: HOST, value: "0.0.0.0" }
+            - { name: PYTHONPATH, value: "/app" }
+            - { name: DB_HOST, value: "pha-postgres" }
+            - { name: DB_PORT, value: "5432" }
+            - { name: DB_NAME, value: "personal_health_assistant" }
+            - { name: A2A_CURRENT_USER_ID, value: "111" }
+          envFrom:
+            - configMapRef: { name: pha-config }
+            - secretRef:  { name: pha-secrets }
+          resources:
+            requests: { cpu: 200m, memory: 512Mi }
+            limits:   { cpu: 1, memory: 2Gi }
+          livenessProbe:
+            httpGet: { path: /.well-known/agent.json, port: 10010 }
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            httpGet: { path: /.well-known/agent.json, port: 10010 }
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 2
+---
+# ----------- medication_reminder (10012) -----------
+apiVersion: v1
+kind: Service
+metadata:
+  name: pha-medication-reminder
+  namespace: pha
+  labels:
+    app: pha-medication-reminder
+spec:
+  type: ClusterIP
+  selector:
+    app: pha-medication-reminder
+  ports:
+    - port: 10012
+      targetPort: 10012
+      name: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pha-medication-reminder
+  namespace: pha
+  labels:
+    app: pha-medication-reminder
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pha-medication-reminder
+  template:
+    metadata:
+      labels:
+        app: pha-medication-reminder
+    spec:
+      containers:
+        - name: mcp
+          image: crpi-zr8m4m7ism94623a.cn-hangzhou.personal.cr.aliyuncs.com/duozhiyiban/a2aserver-medication_reminder:latest
+          imagePullPolicy: IfNotPresent
+          ports: [{ containerPort: 10012, name: http }]
+          env:
+            - { name: PORT, value: "10012" }
+            - { name: HOST, value: "0.0.0.0" }
+            - { name: PYTHONPATH, value: "/app" }
+            - { name: DB_HOST, value: "pha-postgres" }
+            - { name: DB_PORT, value: "5432" }
+            - { name: DB_NAME, value: "personal_health_assistant" }
+            - { name: A2A_CURRENT_USER_ID, value: "111" }
+          envFrom:
+            - configMapRef: { name: pha-config }
+            - secretRef:  { name: pha-secrets }
+          resources:
+            requests: { cpu: 200m, memory: 512Mi }
+            limits:   { cpu: 1, memory: 2Gi }
+          livenessProbe:
+            httpGet: { path: /.well-known/agent.json, port: 10012 }
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            httpGet: { path: /.well-known/agent.json, port: 10012 }
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 2
+---
+# ----------- visit_summary (10013) -----------
+apiVersion: v1
+kind: Service
+metadata:
+  name: pha-visit-summary
+  namespace: pha
+  labels:
+    app: pha-visit-summary
+spec:
+  type: ClusterIP
+  selector:
+    app: pha-visit-summary
+  ports:
+    - port: 10013
+      targetPort: 10013
+      name: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pha-visit-summary
+  namespace: pha
+  labels:
+    app: pha-visit-summary
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pha-visit-summary
+  template:
+    metadata:
+      labels:
+        app: pha-visit-summary
+    spec:
+      containers:
+        - name: mcp
+          image: crpi-zr8m4m7ism94623a.cn-hangzhou.personal.cr.aliyuncs.com/duozhiyiban/a2aserver-visit_summary:latest
+          imagePullPolicy: IfNotPresent
+          ports: [{ containerPort: 10013, name: http }]
+          env:
+            - { name: PORT, value: "10013" }
+            - { name: HOST, value: "0.0.0.0" }
+            - { name: PYTHONPATH, value: "/app" }
+            - { name: DB_HOST, value: "pha-postgres" }
+            - { name: DB_PORT, value: "5432" }
+            - { name: DB_NAME, value: "personal_health_assistant" }
+            - { name: A2A_CURRENT_USER_ID, value: "111" }
+          envFrom:
+            - configMapRef: { name: pha-config }
+            - secretRef:  { name: pha-secrets }
+          resources:
+            requests: { cpu: 200m, memory: 512Mi }
+            limits:   { cpu: 1, memory: 2Gi }
+          livenessProbe:
+            httpGet: { path: /.well-known/agent.json, port: 10013 }
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            httpGet: { path: /.well-known/agent.json, port: 10013 }
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 2

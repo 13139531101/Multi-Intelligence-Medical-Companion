@@ -1,0 +1,169 @@
+# ============================================================
+# PHA v2 K8s Manifest - HPA + PDB + Ingress + NodePort
+# ============================================================
+# 学习点：
+# - HPA (HorizontalPodAutoscaler): 基于 CPU/内存/自定义指标自动扩缩
+# - PDB (PodDisruptionBudget): 控制自愿中断时最少可用 Pod 数
+# - Ingress: L7 路由（基于域名 / 路径）
+# - NodePort: K8s 外暴露服务（开发 / kind 友好）
+---
+# ----------- HPA: hostapi 自动扩缩 -----------
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: pha-hostapi-hpa
+  namespace: pha
+  labels:
+    app: pha-hostapi
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: pha-hostapi
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300  # 缩容冷却 5 分钟
+      policies:
+        - type: Percent
+          value: 50
+          periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 30
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 30
+        - type: Pods
+          value: 2
+          periodSeconds: 30
+      selectPolicy: Max
+---
+# ----------- PDB: 保证最少可用 Pod -----------
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: pha-hostapi-pdb
+  namespace: pha
+spec:
+  minAvailable: 1  # 至少 1 个 Pod 可用
+  selector:
+    matchLabels:
+      app: pha-hostapi
+---
+# ----------- NodePort Service: K8s 外部访问 -----------
+apiVersion: v1
+kind: Service
+metadata:
+  name: pha-hostapi-nodeport
+  namespace: pha
+  labels:
+    app: pha-hostapi
+spec:
+  type: NodePort
+  selector:
+    app: pha-hostapi
+  ports:
+    - port: 13002
+      targetPort: 13002
+      nodePort: 31302  # K8s 节点 31302 -> Pod 13002
+      name: http
+---
+# ----------- Ingress: 域名路由（需要 ingress-nginx controller） -----------
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: pha-hostapi-ingress
+  namespace: pha
+  labels:
+    app: pha-hostapi
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      proxy_set_header X-Forwarded-Proto $scheme;
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: pha.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: pha-hostapi
+                port:
+                  number: 13002
+---
+# ----------- MCP 独立 NodePort（开发用） -----------
+apiVersion: v1
+kind: Service
+metadata:
+  name: pha-health-advisor-nodeport
+  namespace: pha
+spec:
+  type: NodePort
+  selector:
+    app: pha-health-advisor
+  ports:
+    - port: 10011
+      targetPort: 10011
+      nodePort: 31011
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pha-health-records-nodeport
+  namespace: pha
+spec:
+  type: NodePort
+  selector:
+    app: pha-health-records
+  ports:
+    - port: 10010
+      targetPort: 10010
+      nodePort: 31010
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pha-medication-reminder-nodeport
+  namespace: pha
+spec:
+  type: NodePort
+  selector:
+    app: pha-medication-reminder
+  ports:
+    - port: 10012
+      targetPort: 10012
+      nodePort: 31012
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pha-visit-summary-nodeport
+  namespace: pha
+spec:
+  type: NodePort
+  selector:
+    app: pha-visit-summary
+  ports:
+    - port: 10013
+      targetPort: 10013
+      nodePort: 31013
