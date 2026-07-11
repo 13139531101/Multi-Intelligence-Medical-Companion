@@ -96,6 +96,16 @@ except Exception as _e:
     print(f"[hostapi] v2 RAG endpoints mount failed: {_e}")
     traceback.print_exc()
 
+# 阶段24：集成多模型协同端点
+try:
+    from A2AServer.v2.multi_model_endpoints import mm_router
+    app.include_router(mm_router)
+    print("[hostapi] v2 multi-model endpoints mounted: /v2/models/*")
+except Exception as _e:
+    import traceback
+    print(f"[hostapi] v2 multi-model endpoints mount failed: {_e}")
+    traceback.print_exc()
+
 @app.on_event("startup")
 async def startup_event():
     """应用启动时尝试初始化记忆系统"""
