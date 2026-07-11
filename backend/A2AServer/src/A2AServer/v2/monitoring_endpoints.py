@@ -167,6 +167,30 @@ async def v2_summary():
     return {"summary": f.getvalue()}
 
 
+# ============================================================
+# 阶段19：写操作审计端点
+# ============================================================
+@router.get("/audit/stats")
+async def v2_audit_stats():
+    """写操作审计统计"""
+    from .write_audit import get_write_guard
+    return get_write_guard().stats()
+
+
+@router.get("/audit/recent")
+async def v2_audit_recent(limit: int = 50, user_id: str = "", tool_name: str = ""):
+    """最近写操作审计记录"""
+    from .write_audit import get_write_guard
+    return {
+        "entries": get_write_guard().get_recent(
+            limit=min(limit, 500),
+            user_id=user_id or None,
+            tool_name=tool_name or None,
+        ),
+        "count": limit,
+    }
+
+
 @router.post("/metrics/reset")
 async def v2_metrics_reset():
     """重置指标（仅用于测试）"""
