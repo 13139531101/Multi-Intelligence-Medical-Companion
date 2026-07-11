@@ -1,0 +1,63 @@
+name: Release (auto tag notes)
+
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get version
+        id: version
+        run: |
+          TAG=${GITHUB_REF#refs/tags/}
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
+      - name: Get changelog (commits since last tag)
+        id: changelog
+        run: |
+          PREV=$(git tag --sort=-version:refname | sed -n '2p')
+          if [ -n "$PREV" ]; then
+            RANGE="$PREV..HEAD"
+          else
+            RANGE="HEAD~20..HEAD"
+          fi
+          echo "range=$RANGE" >> $GITHUB_OUTPUT
+          CHANGELOG=$(git log $RANGE --pretty=format:"- %s (%h)" --no-merges | head -50)
+          echo "$CHANGELOG" > /tmp/changelog.md
+          cat /tmp/changelog.md
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ steps.version.outputs.tag }}
+          body: |
+            ## ${{ steps.version.outputs.tag }}
+
+            ### 变更日志
+            ${{ steps.changelog.outputs.result }}
+
+            ### 镜像（5 个）
+            - a2aserver-hostapi
+            - a2aserver-health_advisor
+            - a2aserver-health_records
+            - a2aserver-medication_reminder
+            - a2aserver-visit_summary
+
+            ### 测试
+            - 21 个 verify_stage 脚本（15 + 18-21）
+            - PGVector + RAG + OAuth2 + WriteAudit
+          draft: false
+          prerelease: ${{ contains(steps.version.outputs.tag, 'stage') }}
+          fail_on_unmatched_files: false

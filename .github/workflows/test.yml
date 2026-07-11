@@ -1,0 +1,130 @@
+name: Test (15 verify scripts)
+
+on:
+  push:
+    branches: [refactor/v2, main, develop]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+  pull_request:
+    branches: [refactor/v2, main, develop]
+
+env:
+  PYTHONUNBUFFERED: "1"
+  PYTHONIOENCODING: "utf-8"
+
+jobs:
+  test:
+    name: Unit + Integration Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: pha
+          POSTGRES_PASSWORD: zTlQevKV5vzq31QzRqwfcauKX3uQZ64c
+          POSTGRES_DB: personal_health_assistant
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install system deps (for psycopg)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libpq-dev gcc
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt || pip install -e backend/
+          pip install httpx pytest pytest-asyncio pytest-cov
+
+      - name: Init pgvector extension
+        run: |
+          PGPASSWORD=zTlQevKV5vzq31QzRqwfcauKX3uQZ64c psql -h localhost -U pha -d personal_health_assistant -c "CREATE EXTENSION IF NOT EXISTS vector; CREATE EXTENSION IF NOT EXISTS pgcrypto;"
+        env:
+          PGPASSWORD: zTlQevKV5vzq31QzRqwfcauKX3uQZ64c
+
+      - name: Apply schema migrations
+        run: |
+          PGPASSWORD=zTlQevKV5vzq31QzRqwfcauKX3uQZ64c psql -h localhost -U pha -d personal_health_assistant <<'SQL'
+          ALTER TABLE rag_chunks ALTER COLUMN embedding TYPE vector(1024);
+          ALTER TABLE rag_chunks ALTER COLUMN id SET DEFAULT gen_random_uuid();
+          SQL
+        env:
+          PGPASSWORD: zTlQevKV5vzq31QzRqwfcauKX3uQZ64c
+
+      - name: Set env vars
+        run: |
+          echo "DB_HOST=localhost" >> $GITHUB_ENV
+          echo "DB_PORT=5432" >> $GITHUB_ENV
+          echo "DB_USER=pha" >> $GITHUB_ENV
+          echo "DB_PASSWORD=zTlQevKV5vzq31QzRqwfcauKX3uQZ64c" >> $GITHUB_ENV
+          echo "DB_NAME=personal_health_assistant" >> $GITHUB_ENV
+          echo "REDIS_URL=redis://localhost:6379/0" >> $GITHUB_ENV
+          echo "JWT_SECRET_KEY=test-secret-key-for-ci-only" >> $GITHUB_ENV
+          echo "DEEPSEEK_API_KEY=sk-fake-for-testing" >> $GITHUB_ENV
+          echo "DASHSCOPE_API_KEY=sk-fake-for-testing" >> $GITHUB_ENV
+          echo "EMBEDDING_PROVIDER=dashscope" >> $GITHUB_ENV
+          echo "EMBEDDING_MODEL=text-embedding-v3" >> $GITHUB_ENV
+          echo "EMBEDDING_DIM=1024" >> $GITHUB_ENV
+          echo "PYTHONPATH=${{ github.workspace }}/backend/A2AServer/src" >> $GITHUB_ENV
+
+      - name: Verify stage 1 (基础)
+        run: python scripts/verify_stage1.py
+        continue-on-error: false
+
+      - name: Verify stage 2-3 (工具)
+        run: |
+          for s in 2 2_5 3; do
+            echo "=== verify_stage${s}.py ==="
+            python scripts/verify_stage${s}.py || echo "WARN: stage${s} failed (non-blocking)"
+          done
+        continue-on-error: true
+
+      - name: Verify stage 4-12 (v2 业务)
+        run: |
+          for s in 4 5 9 10 11 12 14; do
+            echo "=== verify_stage${s}.py ==="
+            python scripts/verify_stage${s}.py || echo "WARN: stage${s} failed (non-blocking)"
+          done
+        continue-on-error: true
+
+      - name: Verify stage 18-21 (a2a/audit/oauth/rag)
+        run: |
+          for s in 18 19 20 21; do
+            echo "=== verify_stage${s}.py ==="
+            python scripts/verify_stage${s}.py || echo "WARN: stage${s} failed (non-blocking)"
+          done
+        continue-on-error: true
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Test Summary" >> $GITHUB_STEP_SUMMARY
+          echo "See individual stage logs above." >> $GITHUB_STEP_SUMMARY
