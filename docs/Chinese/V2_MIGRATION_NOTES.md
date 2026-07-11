@@ -2,6 +2,8 @@
 
 > 面向：从 v1 BasicAgent / adk_host_manager 迁移到 v2 V2Agent / HostGraph 的开发人员
 > 阅读时间：~15 分钟
+>
+> **最后更新**：2026-07-11（v2.0 阶段 17，含 K8s 迁移）
 
 ---
 
