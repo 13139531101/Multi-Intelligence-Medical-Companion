@@ -3,7 +3,7 @@ name: Build & Push (5 images)
 on:
   push:
     branches: [refactor/v2, main]
-    tags: ['v*.*.*']
+    tags: ["v*.*.*"]
   workflow_dispatch:
 
 env:
@@ -15,25 +15,31 @@ jobs:
     name: Build & Push Images
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    continue-on-error: true # 单个镜像失败不阻断其他
     strategy:
       fail-fast: false
       matrix:
-        target:
+        include:
           - name: hostapi
-            context: frontend/hostAgentAPI
+            context: .
             dockerfile: frontend/hostAgentAPI/Dockerfile
+            description: "Host API (FastAPI gateway)"
           - name: health_advisor
-            context: backend/agents/health_advisor
-            dockerfile: backend/agents/health_advisor/Dockerfile
+            context: backend/HealthAdvisor
+            dockerfile: backend/HealthAdvisor/Dockerfile
+            description: "Health Advisor MCP"
           - name: health_records
-            context: backend/agents/health_records
-            dockerfile: backend/agents/health_records/Dockerfile
+            context: backend/HealthRecordsManager
+            dockerfile: backend/HealthRecordsManager/Dockerfile
+            description: "Health Records MCP"
           - name: medication_reminder
-            context: backend/agents/medication_reminder
-            dockerfile: backend/agents/medication_reminder/Dockerfile
+            context: backend/MedicationReminder
+            dockerfile: backend/MedicationReminder/Dockerfile
+            description: "Medication Reminder MCP"
           - name: visit_summary
-            context: backend/agents/visit_summary
-            dockerfile: backend/agents/visit_summary/Dockerfile
+            context: backend/VisitSummaryGenerator
+            dockerfile: backend/VisitSummaryGenerator/Dockerfile
+            description: "Visit Summary MCP"
 
     steps:
       - uses: actions/checkout@v4
@@ -44,7 +50,19 @@ jobs:
           echo "sha=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
           echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
 
+      - name: Verify Dockerfile exists
+        id: check
+        run: |
+          if [ -f "${{ matrix.target.dockerfile }}" ]; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "::notice::Building ${{ matrix.target.name }} from ${{ matrix.target.dockerfile }}"
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "::error::Dockerfile not found: ${{ matrix.target.dockerfile }}"
+          fi
+
       - name: Login to Aliyun Container Registry
+        if: steps.check.outputs.exists == 'true'
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
@@ -53,17 +71,8 @@ jobs:
         continue-on-error: true
 
       - name: Set up Docker Buildx
+        if: steps.check.outputs.exists == 'true'
         uses: docker/setup-buildx-action@v3
-
-      - name: Check if Dockerfile exists
-        id: check
-        run: |
-          if [ -f "${{ matrix.target.dockerfile }}" ]; then
-            echo "exists=true" >> $GITHUB_OUTPUT
-          else
-            echo "exists=false" >> $GITHUB_OUTPUT
-            echo "::warning::Dockerfile not found: ${{ matrix.target.dockerfile }}, using generic"
-          fi
 
       - name: Build image
         if: steps.check.outputs.exists == 'true'
@@ -71,14 +80,20 @@ jobs:
         with:
           context: ${{ matrix.target.context }}
           file: ${{ matrix.target.dockerfile }}
-          push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/refactor/v2' || startsWith(github.ref, 'refs/tags/v') }}
+          push: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/refactor/v2' || startsWith(github.ref, 'refs/tags/v')) }}
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-${{ matrix.target.name }}:${{ steps.vars.outputs.sha }}
             ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-${{ matrix.target.name }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          platforms: linux/amd64
+        continue-on-error: true
 
       - name: Build summary
         if: always()
         run: |
-          echo "Built: ${{ matrix.target.name }} (sha=${{ steps.vars.outputs.sha }})"
+          echo "### ${{ matrix.target.name }}" >> $GITHUB_STEP_SUMMARY
+          echo "${{ matrix.target.description }}" >> $GITHUB_STEP_SUMMARY
+          echo "Dockerfile: \`${{ matrix.target.dockerfile }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "SHA: \`${{ steps.vars.outputs.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
