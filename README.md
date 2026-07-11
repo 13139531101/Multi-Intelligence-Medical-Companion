@@ -1,5 +1,26 @@
 # 个人智能健康助手 (Personal Health Assistant)
 
+## 🚀 v2.0 当前状态 (2026-07-11)
+
+**最新**：v2.0-stage24（多模型协同 + RAG + CI/CD + OAuth2 鉴权 + 写操作审计 + a2a 修复）
+
+- ✅ **OAuth2 鉴权**（GitHub 授权码 + JWT 双 token + 轮转 + 限流）
+- ✅ **RAG 索引/检索/反馈**（PGVector + DashScope embedding-v3 + 1024 维）
+- ✅ **写操作安全审计**（5 端点）
+- ✅ **多模型协同**（DeepSeek + Qwen + Claude + Local，4 provider + 路由 + fallback + 限流）
+- ✅ **CI/CD**（GitHub Actions：test + lint + build + release 4 工作流）
+- ✅ **build 路径修复**（5 Dockerfile 全验证）
+
+**HTTP 端点**：`/v2/oauth/*` (7) + `/v2/rag/*` (5) + `/v2/models/*` (4) + `/v2/audit/*` (4) + `/health` + `/metrics`
+
+**4 阶段总验收**：37 + 45 + 38 + 58 = **178/178 全过** ✅
+
+**Tag 历史**：v2.0-stage1 → v2.0-stage24（24 个 tag 全部推送）
+
+详见 [CHANGELOG.md](CHANGELOG.md) 和 [docs/V2_STAGE21_24_REPORT.md](docs/V2_STAGE21_24_REPORT.md)
+
+---
+
 ## 📖 项目愿景
 
 本项目旨在打造一个私密、智能、贴心的个人健康管理助手。通过利用先进的 AI 技术（多智能体、RAG、OCR），我们将用户的个人病历、检查报告、用药记录等信息，安全地整合为一个个人健康知识库。在此基础上，系统提供从日常健康咨询、用药提醒到辅助就医沟通的全方位智能服务，成为用户值得信赖的健康伙伴。
