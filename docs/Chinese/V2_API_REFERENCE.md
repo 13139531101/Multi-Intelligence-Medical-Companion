@@ -1,5 +1,6 @@
 # PHA v2 API 参考
 
+> 面向：调用 v2 HostGraph / a2a-sdk Server 的前端 / 集成方
 > PHA 私有协议 + a2a-sdk 0.3.x 协议的 HTTP API 完整参考
 > 阅读时间：~20 分钟
 >
