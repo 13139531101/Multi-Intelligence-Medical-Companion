@@ -76,6 +76,16 @@ except Exception as _e:
     print(f"[hostapi] v2 monitoring endpoints mount failed: {_e}")
     traceback.print_exc()
 
+# 阶段20：集成 OAuth2 端点
+try:
+    from A2AServer.v2.oauth2_endpoints import oauth_router
+    app.include_router(oauth_router)
+    print("[hostapi] v2 oauth2 endpoints mounted: /v2/oauth/*")
+except Exception as _e:
+    import traceback
+    print(f"[hostapi] v2 oauth2 endpoints mount failed: {_e}")
+    traceback.print_exc()
+
 @app.on_event("startup")
 async def startup_event():
     """应用启动时尝试初始化记忆系统"""
