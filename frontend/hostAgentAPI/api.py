@@ -86,6 +86,16 @@ except Exception as _e:
     print(f"[hostapi] v2 oauth2 endpoints mount failed: {_e}")
     traceback.print_exc()
 
+# 阶段21：集成 RAG 端点
+try:
+    from A2AServer.v2.rag_endpoints import rag_router
+    app.include_router(rag_router)
+    print("[hostapi] v2 RAG endpoints mounted: /v2/rag/*")
+except Exception as _e:
+    import traceback
+    print(f"[hostapi] v2 RAG endpoints mount failed: {_e}")
+    traceback.print_exc()
+
 @app.on_event("startup")
 async def startup_event():
     """应用启动时尝试初始化记忆系统"""
