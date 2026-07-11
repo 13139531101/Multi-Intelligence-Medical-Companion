@@ -64,6 +64,18 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 app = FastAPI()
 
+# 阶段14：集成 v2 监控端点（/health /health/deep /metrics /v2/status 等）
+try:
+    sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "backend", "A2AServer", "src")))
+    from A2AServer.v2.monitoring_endpoints import router as v2_monitor_router, health_router
+    app.include_router(health_router)
+    app.include_router(v2_monitor_router)
+    print("[hostapi] v2 monitoring endpoints mounted: /health, /health/deep, /metrics, /v2/*")
+except Exception as _e:
+    import traceback
+    print(f"[hostapi] v2 monitoring endpoints mount failed: {_e}")
+    traceback.print_exc()
+
 @app.on_event("startup")
 async def startup_event():
     """应用启动时尝试初始化记忆系统"""

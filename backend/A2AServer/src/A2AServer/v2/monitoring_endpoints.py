@@ -37,7 +37,14 @@ from .monitoring import (
 )
 from .rate_limit import get_rate_limiter
 from .tool_cache import get_tool_cache
-from .v2_agent import V2Agent
+
+# v2_agent 仅在 /v2/status 端点里用，懒加载（避免未装 langchain 时模块加载失败）
+def _get_v2_agent_singleton_keys():
+    try:
+        from .v2_agent import V2Agent
+        return list(V2Agent._agent_instance_cache.keys())
+    except Exception:
+        return []
 
 logger = logging.getLogger(__name__)
 
@@ -114,9 +121,15 @@ async def health_deep():
 # ============================================================
 # Prometheus 端点
 # ============================================================
+def _prometheus_response():
+    return Response(
+        content=get_prometheus_metrics(),
+        media_type="text/plain; version=0.0.4; charset=utf-8",
+    )
+
 health_router.add_api_route(
     "/metrics",
-    lambda: Response(content=get_prometheus_metrics(), media_type="text/plain; version=0.0.4"),
+    _prometheus_response,
     methods=["GET"],
     tags=["metrics"],
 )
@@ -132,7 +145,7 @@ async def v2_status():
         "metrics": get_metrics(),
         "tool_cache": get_tool_cache().stats(),
         "rate_limiter": get_rate_limiter().stats(),
-        "agent_singleton_classes": list(V2Agent._agent_instance_cache.keys()),
+        "agent_singleton_classes": _get_v2_agent_singleton_keys(),
     }
 
 
