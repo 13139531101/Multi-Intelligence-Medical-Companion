@@ -22,9 +22,10 @@ from typing import AsyncIterable, Any
 logger = logging.getLogger(__name__)
 
 # ---- LangChain 1.x 探测 ----
+# 真正调用 create_agent 的是 v2_agent.py；这里只测 langgraph.checkpoint 是否装好
+# （v2_agent.py 内部自己 import langchain.agents.create_agent）
 _LANGCHAIN_V2_OK = False
 try:
-    from langchain.agents import create_agent  # noqa: F401
     from langgraph.checkpoint.memory import InMemorySaver
     try:
         from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
