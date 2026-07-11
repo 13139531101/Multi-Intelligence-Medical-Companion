@@ -349,6 +349,19 @@ def _normalize_agent_name(name: str) -> str:
         "健康档案": "健康档案管理员",
         "健康档案管理": "健康档案管理员",
         "档案管理员": "健康档案管理员",
+        # 阶段18：英文 alias 方便测试（避免中文编码问题）
+        "health_advisor": "健康顾问",
+        "health_adviser": "健康顾问",
+        "advisor": "健康顾问",
+        "health_records": "健康档案管理员",
+        "records": "健康档案管理员",
+        "hrm": "健康档案管理员",
+        "medication_reminder": "用药提醒助手",
+        "medication": "用药提醒助手",
+        "reminder": "用药提醒助手",
+        "visit_summary": "就诊摘要生成",
+        "visit": "就诊摘要生成",
+        "summary": "就诊摘要生成",
     }
     return alias.get(n, n)
 
@@ -356,7 +369,8 @@ def _normalize_agent_name(name: str) -> str:
 def _resolve_agent_url_by_name(agent_name: str) -> str | None:
     name = _normalize_agent_name(agent_name)
     agents = getattr(agent_server, "manager", None)
-    cards = getattr(agents, "agents", None) if agents else None
+    # ADKHostManager 内部存的是 _agents（带下划线），不是 agents
+    cards = getattr(agents, "_agents", None) or getattr(agents, "agents", None) if agents else None
     if not cards:
         return None
 
