@@ -4725,6 +4725,12 @@ async def smart_chat(
                                 conv = agent_server.manager.get_conversation(conversation.conversation_id)
                                 if conv:
                                     conv.messages.append(r["message"])
+                                # 阶段29 debug: 打印 v2 真返回的 content
+                                msg_obj = r["message"]
+                                content_text = ""
+                                if hasattr(msg_obj, 'parts') and msg_obj.parts:
+                                    content_text = getattr(msg_obj.parts[0], 'text', str(msg_obj.parts[0]))[:200]
+                                logging.info(f"[smart_chat][PHA v2] agent={r.get('result', {}).get('agent')} content_len={len(content_text)} content_preview={content_text!r}")
                             except Exception as inner_e:
                                 logging.warning(f"[smart_chat][PHA v2] inject failed: {inner_e}")
                             logging.info(f"[smart_chat][PHA v2] success: agent={r.get('result', {}).get('agent')}")
