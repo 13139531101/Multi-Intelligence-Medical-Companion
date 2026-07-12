@@ -297,16 +297,33 @@ class ConversationServer:
     
     message = self.manager.sanitize_message(message)
 
-    # === PHA v2 灰度路由（阶段4）===
-    # Header: X-Use-V2=true 或 X-PHA-Version=v2 走 v2 HostGraph
-    # 环境变量 PHA_USE_V2=true 全量切流
-    # v2 失败时自动 fallback 到 v1 adk_host_manager
+    # === PHA v2 主路径（阶段27：默认开启，失败回 v1）===
+    # 决策逻辑：
+    # - is_v2_request() 默认 True（PHA_USE_V2 默认 true）
+    # - header X-PHA-V2-Disable=true 可显式关 v2（强制 v1）
+    # - v2 失败/异常 → 自动 fallback v1 ADK
+    #
+    # 优势（vs 阶段4 灰度路由）：
+    # - 100% 流量走 v2（42 MCP 工具 + StateGraph 可观测）
+    # - 失败兜底 v1（永远不挂）
+    # - 部署可缩到 1 容器（v2 in-process）
     v2_attempted = False
+    v2_disabled_by_header = False
     try:
+        # 显式关闭：X-PHA-V2-Disable=true
+        if request is not None:
+            try:
+                if request.headers.get("x-pha-v2-disable", "").lower() == "true":
+                    v2_disabled_by_header = True
+                    logging.info("[PHA v2] disabled by X-PHA-V2-Disable header")
+            except Exception:
+                pass
+
         from A2AServer.v2.bridge import is_v2_request, v2_process_message
-        if is_v2_request(request):
+        # 阶段27：默认尝试 v2，除非显式关闭
+        if not v2_disabled_by_header and is_v2_request(request):
             v2_attempted = True
-            logging.info("[PHA v2] routing to v2 HostGraph")
+            logging.info("[PHA v2] routing to v2 HostGraph (default since stage27)")
             # 异步包装：bridge 是 async，process_message 是同步接口
             async def _v2_runner():
                 try:

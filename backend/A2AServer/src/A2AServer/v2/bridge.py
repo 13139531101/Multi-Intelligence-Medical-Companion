@@ -32,8 +32,16 @@ if str(_PHA_BACKEND / "backend" / "A2AServer" / "src") not in sys.path:
 
 
 def is_v2_enabled() -> bool:
-    """v2 路径是否启用（环境变量控制）"""
-    return os.getenv("PHA_USE_V2", "false").lower() in {"true", "1", "yes", "on"}
+    """
+    v2 路径是否启用（环境变量控制）
+
+    阶段27 改动：默认开启 v2。
+    - 旧：PHA_USE_V2=false 默认 → 走 v1 ADK
+    - 新：PHA_USE_V2=true 默认 → 走 v2 LangChain in-process（42 工具 + StateGraph）
+
+    关闭方式：PHA_USE_V2=false（保留给 v1 兜底/回退）
+    """
+    return os.getenv("PHA_USE_V2", "true").lower() in {"true", "1", "yes", "on"}
 
 
 def is_v2_request(request) -> bool:
