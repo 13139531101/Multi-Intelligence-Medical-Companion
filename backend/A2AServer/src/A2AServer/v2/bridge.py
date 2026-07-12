@@ -24,11 +24,42 @@ from typing import Any, Optional
 logger = logging.getLogger(__name__)
 
 # ---- PHA v2 路径配置 ----
-_PHA_BACKEND = Path(__file__).resolve().parents[5]  # 项目根
-if str(_PHA_BACKEND) not in sys.path:
-    sys.path.insert(0, str(_PHA_BACKEND))
-if str(_PHA_BACKEND / "backend" / "A2AServer" / "src") not in sys.path:
-    sys.path.insert(0, str(_PHA_BACKEND / "backend" / "A2AServer" / "src"))
+# 阶段27 修复：兼容容器浅路径（parents[5] 在 /app/A2AServer/v2/ 下越界）
+_PHA_BACKEND = None
+try:
+    # 本机路径: .../A2AServer/v2/bridge.py → parents[5] 是项目根
+    _candidate = Path(__file__).resolve().parents[5]
+    if (_candidate / "backend" / "A2AServer" / "src").exists():
+        _PHA_BACKEND = _candidate
+except IndexError:
+    pass
+
+# 容器路径: /app/A2AServer/v2/bridge.py → parents[3] 是 /app，尝试更高
+if _PHA_BACKEND is None:
+    for n in [3, 2, 4, 5, 6]:
+        try:
+            cand = Path(__file__).resolve().parents[n]
+            if (cand / "A2AServer").exists() and (cand / "A2AServer" / "v2" / "bridge.py").exists():
+                _PHA_BACKEND = cand
+                break
+        except IndexError:
+            continue
+
+# 最后 fallback：尝试环境变量 PHA_PROJECT_ROOT，否则当前文件目录上溯到含 A2AServer 的
+if _PHA_BACKEND is None:
+    env_root = os.getenv("PHA_PROJECT_ROOT")
+    if env_root:
+        _PHA_BACKEND = Path(env_root)
+
+if _PHA_BACKEND is None:
+    logger.warning("[bridge] 无法定位 PHA 项目根，路径配置跳过")
+
+if _PHA_BACKEND is not None:
+    _backend_src = str(_PHA_BACKEND / "backend" / "A2AServer" / "src") if (_PHA_BACKEND / "backend").exists() else str(_PHA_BACKEND / "src") if (_PHA_BACKEND / "src").exists() else None
+    if _backend_src:
+        if _backend_src not in sys.path:
+            sys.path.insert(0, _backend_src)
+    logger.info(f"[bridge] PHA_BACKEND = {_PHA_BACKEND}")
 
 
 def is_v2_enabled() -> bool:
@@ -53,19 +84,24 @@ def is_v2_request(request) -> bool:
     2. Header `X-Use-V2: true`
     3. 环境变量 `PHA_USE_V2=true`（全量切流）
     """
-    if is_v2_enabled():
-        return True
-    if request is None:
-        return False
     try:
-        headers = request.headers
-        if headers.get("x-pha-version", "").lower() == "v2":
+        if is_v2_enabled():
             return True
-        if headers.get("x-use-v2", "").lower() == "true":
-            return True
-    except Exception:
-        pass
-    return False
+        if request is None:
+            return False
+        try:
+            headers = request.headers
+            if headers.get("x-pha-version", "").lower() == "v2":
+                return True
+            if headers.get("x-use-v2", "").lower() == "true":
+                return True
+        except Exception:
+            pass
+        return False
+    except Exception as e:
+        # 任何异常都默认走 v1（兜底）
+        logger.warning(f"[bridge.is_v2_request] error: {type(e).__name__}: {e}, fallback False")
+        return False
 
 
 def _extract_text_from_message(message) -> str:

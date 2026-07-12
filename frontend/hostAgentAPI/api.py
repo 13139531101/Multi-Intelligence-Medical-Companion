@@ -4694,8 +4694,57 @@ async def smart_chat(
             pass
 
         # 发送消息到智能体
-        message = agent_server.manager.sanitize_message(message)
-        task = asyncio.create_task(agent_server.manager.process_message(message))
+        try:
+            message = agent_server.manager.sanitize_message(message)
+        except Exception as e:
+            import traceback
+            logging.error(f"[smart_chat] sanitize_message FAILED: {type(e).__name__}: {e}")
+            logging.error(f"[smart_chat] TRACEBACK: {traceback.format_exc()}")
+            raise
+        # 阶段27：先尝试 v2，失败/禁用再 v1（与 server.py process_message 同样的灰度逻辑）
+        v2_attempted = False
+        try:
+            logging.info("[smart_chat] DEBUG: enter v2 try block")
+            from A2AServer.v2.bridge import is_v2_request, v2_process_message
+            logging.info(f"[smart_chat] DEBUG: imported is_v2_request={is_v2_request}")
+            v2_enabled = is_v2_request(request)
+            logging.info(f"[smart_chat] DEBUG: v2_enabled={v2_enabled}")
+            logging.info(f"[smart_chat] v2 attempt: is_v2_request={v2_enabled}")
+            if v2_enabled:
+                v2_attempted = True
+                logging.info("[smart_chat][PHA v2] routing to v2 HostGraph")
+                async def _v2_runner():
+                    try:
+                        r = await v2_process_message(message)
+                        if r.get("error"):
+                            logging.warning(f"[smart_chat][PHA v2] error, fallback to v1: {r['error']}")
+                            await agent_server.manager.process_message(message)
+                        elif r.get("message") is not None:
+                            try:
+                                agent_server.manager._messages.append(r["message"])
+                                conv = agent_server.manager.get_conversation(conversation.conversation_id)
+                                if conv:
+                                    conv.messages.append(r["message"])
+                            except Exception as inner_e:
+                                logging.warning(f"[smart_chat][PHA v2] inject failed: {inner_e}")
+                            logging.info(f"[smart_chat][PHA v2] success: agent={r.get('result', {}).get('agent')}")
+                    except Exception as e:
+                        import traceback
+                        logging.error(f"[smart_chat][PHA v2] exception, fallback to v1: {type(e).__name__}: {e}")
+                        logging.error(traceback.format_exc())
+                        await agent_server.manager.process_message(message)
+                task = asyncio.create_task(_v2_runner())
+        except ImportError as e:
+            logging.warning(f"[smart_chat][PHA v2] import failed: {e}")
+        except Exception as e:
+            import traceback
+            import sys
+            tb_str = traceback.format_exc()
+            logging.error(f"[smart_chat][PHA v2] setup failed: {type(e).__name__}: {e}")
+            logging.error(f"[smart_chat][PHA v2] TRACEBACK:\n{tb_str}")
+
+        if not v2_attempted:
+            task = asyncio.create_task(agent_server.manager.process_message(message))
 
         def _done_cb(t):
             try:

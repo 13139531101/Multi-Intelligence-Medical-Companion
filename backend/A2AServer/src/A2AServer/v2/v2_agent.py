@@ -58,8 +58,15 @@ class V2Agent:
     def __init__(self, model: str | None = None):
         # 自动识别 LLM 提供方：DeepSeek（默认）/ OpenAI / 其它
         if model is None:
-            if os.getenv("DEEPSEEK_API_KEY") and not os.getenv("OPENAI_API_BASE"):
+            # 阶段27 修复：只要 DEEPSEEK_API_KEY 存在就走 DeepSeek
+            # （OPENAI_API_KEY 经常被 .env 复用装 DeepSeek key，不能据此走 OpenAI）
+            if os.getenv("DEEPSEEK_API_KEY"):
                 # DeepSeek（OpenAI 兼容协议）
+                self.model = os.getenv("PHA_LLM_MODEL", "deepseek-chat")
+            elif os.getenv("OPENAI_API_KEY") and os.getenv("OPENAI_API_BASE"):
+                self.model = os.getenv("PHA_LLM_MODEL", "openai:gpt-4o-mini")
+            elif os.getenv("OPENAI_API_KEY"):
+                # 有 OPENAI_API_KEY 但无 BASE → 假设是 DeepSeek key 复用
                 self.model = os.getenv("PHA_LLM_MODEL", "deepseek-chat")
             else:
                 self.model = os.getenv("PHA_LLM_MODEL", "openai:gpt-4o-mini")

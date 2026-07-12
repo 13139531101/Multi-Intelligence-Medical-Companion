@@ -40,6 +40,13 @@ COPY backend/AgentMemorySystem ./backend/AgentMemorySystem
 # Provide A2AServer package required by Host API
 COPY backend/A2AServer/src/A2AServer ./A2AServer
 
+# === 阶段28：v2 LangGraph MCP 工具源 ===
+# v2 mcp_discover AST 扫描这些目录找 tool 函数
+COPY backend/HealthAdvisor/mcpserver ./backend/HealthAdvisor/mcpserver
+COPY backend/HealthRecordsManager/mcpserver ./backend/HealthRecordsManager/mcpserver
+COPY backend/MedicationReminder/mcpserver ./backend/MedicationReminder/mcpserver
+COPY backend/VisitSummaryGenerator/mcpserver ./backend/VisitSummaryGenerator/mcpserver
+
 # Ensure Python can resolve local package and backend modules
 ENV PYTHONPATH=/app:/app/backend
 

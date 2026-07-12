@@ -16,3 +16,17 @@ psycopg_pool>=3.2
 python-dotenv>=1.0.0
 email-validator>=2.0.0
 SQLAlchemy>=2.0
+
+# === PHA v2 依赖（阶段28：方向A 默认开启 v2 LangGraph）===
+# LangChain 1.x 核心
+langchain>=1.2.10
+langchain-core>=1.2.0
+langchain-openai>=1.0.0
+# LangGraph StateGraph 编排
+langgraph>=0.6.0
+# LangSmith 监控（可选）
+langsmith>=0.4.0
+# RAG / Embeddings
+dashscope>=1.20.0
+psycopg2-binary>=2.9.9
+numpy>=1.26.0

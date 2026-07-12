@@ -27,16 +27,24 @@ from typing import Callable
 
 logger = logging.getLogger(__name__)
 
-# 仓库根目录（兼容不同 cwd）
-_REPO_ROOT = Path(__file__).resolve().parents[5]  # .../A2AServer/src/A2AServer/v2/ -> A2AServer
-if not (_REPO_ROOT / "backend").exists():
-    _REPO_ROOT = Path(os.getcwd())
-    if not (_REPO_ROOT / "backend").exists():
-        # 继续往上找
-        for parent in Path(__file__).resolve().parents:
-            if (parent / "backend").exists():
-                _REPO_ROOT = parent
-                break
+# 仓库根目录（兼容不同 cwd）— 阶段28 修复：不用 parents[5]，遍历找到含 backend 的父目录
+_REPO_ROOT = None
+for parent in Path(__file__).resolve().parents:
+    if (parent / "backend").exists():
+        _REPO_ROOT = parent
+        break
+if _REPO_ROOT is None:
+    # fallback 1：env var
+    env_root = os.getenv("PHA_PROJECT_ROOT")
+    if env_root and (Path(env_root) / "backend").exists():
+        _REPO_ROOT = Path(env_root)
+if _REPO_ROOT is None:
+    # fallback 2：cwd
+    if (Path(os.getcwd()) / "backend").exists():
+        _REPO_ROOT = Path(os.getcwd())
+if _REPO_ROOT is None:
+    raise RuntimeError(f"[mcp_discover] 无法定位仓库根目录（找不到 backend 目录）")
+logger.info(f"[mcp_discover] REPO_ROOT = {_REPO_ROOT}")
 
 
 # Agent 名 -> backend 子目录名
