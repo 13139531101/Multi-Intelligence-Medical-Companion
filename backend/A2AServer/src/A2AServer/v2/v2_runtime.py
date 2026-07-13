@@ -73,11 +73,25 @@ class V2AgentRuntime:
         db_url = os.getenv("PHA_CHECKPOINT_DB_URL") or os.getenv("DATABASE_URL")
         if db_url and AsyncPostgresSaver is not None:
             try:
-                # 生产：PostgresSaver（需先调 setup() 建表）
-                self._checkpointer = AsyncPostgresSaver.from_conn_string(db_url)
-                await self._checkpointer.setup()
-                logger.info("[v2_runtime] Checkpointer = AsyncPostgresSaver")
-                return self._checkpointer
+                # 生产：PostgresSaver（langgraph-checkpoint-postgres 2.x API）
+                # 2.x 的 from_conn_string 返回 AsyncContextManager，需 async with
+                try:
+                    # 尝试 2.x API（async context manager）
+                    cm = AsyncPostgresSaver.from_conn_string(db_url)
+                    saver = await cm.__aenter__()
+                    try:
+                        await saver.setup()
+                    except Exception:
+                        pass  # setup 可能已被调过
+                    self._checkpointer = saver
+                    logger.info("[v2_runtime] Checkpointer = AsyncPostgresSaver (langgraph-checkpoint-postgres 2.x)")
+                    return self._checkpointer
+                except Exception:
+                    # 回退 1.x API
+                    self._checkpointer = AsyncPostgresSaver.from_conn_string(db_url)
+                    await self._checkpointer.setup()
+                    logger.info("[v2_runtime] Checkpointer = AsyncPostgresSaver (1.x)")
+                    return self._checkpointer
             except Exception as e:
                 logger.warning(
                     "[v2_runtime] PostgresSaver 初始化失败，回退 InMemorySaver: %s", e

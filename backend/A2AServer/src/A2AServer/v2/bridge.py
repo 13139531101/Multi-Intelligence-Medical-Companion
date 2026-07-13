@@ -176,11 +176,39 @@ async def v2_process_message(message) -> dict:
 
     # 调 HostGraph
     try:
+        # 阶段30：multi 模式开关（默认 single 向后兼容）
+        # 触发条件：
+        # 1. metadata 里 "v2_mode" = "multi" 或
+        # 2. 环境变量 PHA_V2_MODE = "multi" 或
+        # 3. query 包含 [multi] 前缀（测试用）
+        v2_mode = "single"
+        parallel_agents = None
+        if isinstance(metadata, dict):
+            v2_mode = metadata.get("v2_mode", v2_mode)
+            pa = metadata.get("parallel_agents")
+            if isinstance(pa, list):
+                parallel_agents = pa
+        if os.getenv("PHA_V2_MODE", "").lower() == "multi":
+            v2_mode = "multi"
+        if query.startswith("[multi]"):
+            v2_mode = "multi"
+            query = query[len("[multi]"):].strip()
+        if query.startswith("[multi:"):
+            # 语法: [multi:health_advisor,medication_reminder]
+            import re
+            m = re.match(r"\[multi:([^\]]+)\]", query)
+            if m:
+                v2_mode = "multi"
+                parallel_agents = [x.strip() for x in m.group(1).split(",") if x.strip()]
+                query = query[m.end():].strip()
+
         result = await route_and_invoke(
             query=query,
             conversation_id=conversation_id,
             user_id=str(user_id),
             metadata=dict(metadata),
+            mode=v2_mode,
+            parallel_agents=parallel_agents,
         )
     except Exception as e:
         logger.exception("[v2_bridge] route_and_invoke 失败")

@@ -261,9 +261,9 @@ class V2Agent:
                 pass
 
         try:
-            # LangGraph 1.0：stream() 在 stream_mode="values" 下是同步生成器
-            # 用同步 iter 包一层（不影响异步语义）
-            stream_iter = agent.stream(
+            # LangGraph 1.0：astream 是异步生成器（兼容 AsyncPostgresSaver）
+            # 同步 stream() 不能用 AsyncPostgresSaver（InvalidStateError）
+            stream_iter = agent.astream(
                 {"messages": [{"role": "user", "content": query}]},
                 config=cfg,
                 stream_mode="values",

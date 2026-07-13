@@ -62,6 +62,12 @@ class HostState(TypedDict, total=False):
     - final_response: 汇总后的最终响应
     - error: 错误信息
     - events: 路由事件流
+    - mode: 执行模式（single | multi）阶段30新增
+    - parallel_agents: 阶段30新增，多 agent 并行列表
+    - parallel_responses: 阶段30新增，每个 agent 的响应
+    - parallel_status: 阶段30新增，每个 agent 状态
+    - parallel_started_at: 阶段30新增，每个 agent 开始时间
+    - parallel_finished_at: 阶段30新增，每个 agent 完成时间
     """
     query: str
     conversation_id: str
@@ -73,6 +79,26 @@ class HostState(TypedDict, total=False):
     final_response: dict
     error: str
     events: List[dict]
+    # === 阶段30：多 agent 并行 ===
+    mode: str
+    parallel_agents: List[str]
+    parallel_responses: dict
+    parallel_status: dict
+    parallel_started_at: dict
+    parallel_finished_at: dict
+    # === 阶段30-2：每 agent 独立字段（避免 LangGraph 并行写冲突）===
+    worker_health_advisor_response: dict
+    worker_health_advisor_status: str
+    worker_health_advisor_finished_at: float
+    worker_health_records_response: dict
+    worker_health_records_status: str
+    worker_health_records_finished_at: float
+    worker_medication_reminder_response: dict
+    worker_medication_reminder_status: str
+    worker_medication_reminder_finished_at: float
+    worker_visit_summary_response: dict
+    worker_visit_summary_status: str
+    worker_visit_summary_finished_at: float
 
 
 def _get_query(state) -> str:
@@ -257,9 +283,14 @@ def invoke_agent_node(agent_name: str):
     """
     工厂函数：生成 invoke_<agent_name> 节点
 
-    调用对应 V2Agent.stream()，收集所有 events
+    阶段30：支持 single + multi 模式
+    - single: 写到 agent_response（向后兼容）
+    - multi: 写到 parallel_responses[agent_name]
     """
+    import time as _time
+
     async def node(state: HostState) -> dict:
+        started_at = _time.time()
         try:
             from .sub_agents import (
                 HealthAdvisorV2,
@@ -303,17 +334,55 @@ def invoke_agent_node(agent_name: str):
                         "args": event.get("args"),
                     })
 
-            return {
-                "agent_response": {
-                    "agent": agent_name,
-                    "content": full_content,
-                    "tool_calls": tool_calls,
-                    "events_count": len(events),
-                },
+            finished_at = _time.time()
+            agent_response = {
+                "agent": agent_name,
+                "content": full_content,
+                "tool_calls": tool_calls,
+                "events_count": len(events),
+                "started_at": started_at,
+                "finished_at": finished_at,
+                "elapsed_ms": int((finished_at - started_at) * 1000),
+                "status": "completed",
             }
+
+            mode = state.get("mode", "single")
+            if mode == "multi":
+                # 多 agent 并行模式：每个 node 写到自己的独立字段
+                # LangGraph 1.x 并行 node 不能写同一个 top-level key
+                prefix = f"worker_{agent_name}"
+                return {
+                    f"{prefix}_response": agent_response,
+                    f"{prefix}_status": "completed",
+                    f"{prefix}_finished_at": finished_at,
+                }
+            else:
+                # 单 agent 模式：写到 agent_response
+                return {"agent_response": agent_response}
         except Exception as e:
             logger.exception("[host_graph] invoke_%s failed", agent_name)
-            return {"error": str(e)}
+            finished_at = _time.time()
+            mode = state.get("mode", "single")
+            error_resp = {
+                "agent": agent_name,
+                "content": "",
+                "tool_calls": [],
+                "events_count": 0,
+                "started_at": started_at,
+                "finished_at": finished_at,
+                "elapsed_ms": int((finished_at - started_at) * 1000),
+                "status": "failed",
+                "error": str(e),
+            }
+            if mode == "multi":
+                prefix = f"worker_{agent_name}"
+                return {
+                    f"{prefix}_response": error_resp,
+                    f"{prefix}_status": "failed",
+                    f"{prefix}_finished_at": finished_at,
+                }
+            else:
+                return {"agent_response": error_resp, "error": str(e)}
 
     return node
 
@@ -345,12 +414,102 @@ async def aggregate_node(state: HostState) -> dict:
     }
 
 
+async def aggregate_multi_node(state: HostState) -> dict:
+    """
+    阶段30新增：多 agent 并行汇总节点
+
+    等所有 parallel_agents 都完成后，合并它们的结果。
+    输出：包含每个 agent 的 content + tool_calls + 状态
+    """
+    parallel_agents = state.get("parallel_agents", [])
+
+    # 汇总每个 worker 的输出
+    combined_content = ""
+    all_tool_calls = []
+    worker_summaries = []
+    parallel_responses = {}
+    parallel_status = {}
+
+    for agent_name in parallel_agents:
+        prefix = f"worker_{agent_name}"
+        resp = state.get(f"{prefix}_response", {})
+        status = state.get(f"{prefix}_status", "unknown")
+        content = resp.get("content", "")
+        tool_calls = resp.get("tool_calls", [])
+        elapsed_ms = resp.get("elapsed_ms", 0)
+        error = resp.get("error", "")
+
+        parallel_responses[agent_name] = resp
+        parallel_status[agent_name] = status
+
+        worker_summaries.append({
+            "agent": agent_name,
+            "status": status,
+            "elapsed_ms": elapsed_ms,
+            "tool_calls_count": len(tool_calls),
+            "content_len": len(content),
+            "error": error,
+        })
+        all_tool_calls.extend([{**tc, "agent": agent_name} for tc in tool_calls])
+
+        if content:
+            combined_content += f"\n【{agent_name}】\n{content}\n"
+
+    if not parallel_responses:
+        return {
+            "final_response": {
+                "role": "agent",
+                "content": "没有 worker 返回结果",
+                "agent": None,
+                "error": True,
+            }
+        }
+
+    return {
+        "final_response": {
+            "role": "agent",
+            "content": combined_content.strip(),
+            "agent": None,
+            "tool_calls": all_tool_calls,
+            "routing": {
+                "mode": "multi",
+                "parallel_agents": parallel_agents,
+                "worker_summaries": worker_summaries,
+            },
+            "parallel_responses": parallel_responses,
+            "parallel_status": parallel_status,
+        }
+    }
+
+
+async def fanout_node(state: HostState) -> dict:
+    """
+    阶段30新增：fan-out 节点
+
+    把 parallel_agents 列表里所有 agent 标记为 running，并记录开始时间。
+    真正的并行执行由 LangGraph 通过多条 invoke_X -> aggregate_multi 边实现。
+    """
+    import time as _time
+    parallel_agents = state.get("parallel_agents", [])
+    now = _time.time()
+    return {
+        "parallel_status": {a: "running" for a in parallel_agents},
+        "parallel_started_at": {a: now for a in parallel_agents},
+    }
+
+
 # ============================================================
 # 图构建器
 # ============================================================
-def build_host_graph(*, use_checkpointer: bool = True):
+def build_host_graph(*, use_checkpointer: bool = True, mode: str = "single"):
     """
     构建 PHA HostGraph（LangGraph 1.0 StateGraph）
+
+    Args:
+        use_checkpointer: 是否启用 checkpointer
+        mode: 路由模式
+            - "single"（默认）：classify 后只调一个 agent（向后兼容）
+            - "multi"：classify 后并行调多个 agent（阶段30新增）
 
     Returns:
         CompiledStateGraph（如失败返回 None）
@@ -368,35 +527,62 @@ def build_host_graph(*, use_checkpointer: bool = True):
     g.add_node("invoke_medication", invoke_agent_node("medication_reminder"))
     g.add_node("invoke_summary", invoke_agent_node("visit_summary"))
     g.add_node("aggregate", aggregate_node)
+    # 阶段30新增
+    g.add_node("fanout", fanout_node)
+    g.add_node("aggregate_multi", aggregate_multi_node)
 
     # 边
     g.add_edge(START, "classify")
 
-    def _route_decision(state: HostState) -> str:
-        target = state.get("target_agent", "health_advisor")
-        return {
-            "health_advisor": "invoke_health",
-            "health_records": "invoke_records",
-            "medication_reminder": "invoke_medication",
-            "visit_summary": "invoke_summary",
-        }.get(target, "invoke_health")
+    if mode == "multi":
+        # 阶段30：并行模式
+        # classify 后通过 conditional_edges fan-out 到所有 invoke_X（同时启动）
+        # LangGraph 1.x：path 返回 Sequence[Hashable]，自动并行 fan-out
+        g.add_edge(START, "classify")
 
-    g.add_conditional_edges(
-        "classify",
-        _route_decision,
-        {
-            "invoke_health": "invoke_health",
-            "invoke_records": "invoke_records",
-            "invoke_medication": "invoke_medication",
-            "invoke_summary": "invoke_summary",
-        },
-    )
+        # classify 完后并行启动 4 个 invoke_X
+        # path 返回 list → LangGraph 自动 fan-out
+        def _multi_path(state):
+            return [
+                "invoke_health",
+                "invoke_records",
+                "invoke_medication",
+                "invoke_summary",
+            ]
 
-    for node_name in ["invoke_health", "invoke_records", "invoke_medication", "invoke_summary"]:
-        g.add_edge(node_name, "aggregate")
-    g.add_edge("aggregate", END)
+        g.add_conditional_edges("classify", _multi_path)
 
-    # Checkpointer（默认 None，避免强制要求 thread_id；后续可加 use_checkpointer=True）
+        # 所有 invoke_X 完成 → aggregate_multi（每条边单独声明）
+        for node_name in ["invoke_health", "invoke_records", "invoke_medication", "invoke_summary"]:
+            g.add_edge(node_name, "aggregate_multi")
+        g.add_edge("aggregate_multi", END)
+    else:
+        # 原 single 模式（向后兼容）
+        def _route_decision(state: HostState) -> str:
+            target = state.get("target_agent", "health_advisor")
+            return {
+                "health_advisor": "invoke_health",
+                "health_records": "invoke_records",
+                "medication_reminder": "invoke_medication",
+                "visit_summary": "invoke_summary",
+            }.get(target, "invoke_health")
+
+        g.add_conditional_edges(
+            "classify",
+            _route_decision,
+            {
+                "invoke_health": "invoke_health",
+                "invoke_records": "invoke_records",
+                "invoke_medication": "invoke_medication",
+                "invoke_summary": "invoke_summary",
+            },
+        )
+
+        for node_name in ["invoke_health", "invoke_records", "invoke_medication", "invoke_summary"]:
+            g.add_edge(node_name, "aggregate")
+        g.add_edge("aggregate", END)
+
+    # Checkpointer
     checkpointer = None
     if use_checkpointer:
         try:
@@ -413,12 +599,21 @@ def build_host_graph(*, use_checkpointer: bool = True):
 _host_graph = None
 
 
-def get_host_graph():
-    """获取全局 host_graph 单例（懒加载）"""
-    global _host_graph
+def get_host_graph(mode: str = "single"):
+    """获取全局 host_graph 单例（懒加载，按 mode 缓存）"""
+    global _host_graph, _host_graph_multi
+    if mode == "multi":
+        if _host_graph_multi is None:
+            _host_graph_multi = build_host_graph(use_checkpointer=False, mode="multi")
+        return _host_graph_multi
     if _host_graph is None:
-        _host_graph = build_host_graph(use_checkpointer=False)
+        _host_graph = build_host_graph(use_checkpointer=False, mode="single")
     return _host_graph
+
+
+# 阶段30：多模式单例
+_host_graph = None
+_host_graph_multi = None
 
 
 async def route_and_invoke(
@@ -426,14 +621,24 @@ async def route_and_invoke(
     conversation_id: str,
     user_id: str = "default",
     metadata: Optional[dict] = None,
+    mode: str = "single",
+    parallel_agents: Optional[List[str]] = None,
 ) -> dict:
     """
     一站式：路由 + 调用 + 汇总
 
+    Args:
+        query: 用户原始问题
+        conversation_id: 会话 ID
+        user_id: 用户 ID
+        metadata: 消息元数据
+        mode: "single"（默认）或 "multi"（阶段30新增）
+        parallel_agents: multi 模式下要并行的 agent 列表（None=全部 4 个）
+
     Returns:
         final_response dict
     """
-    graph = get_host_graph()
+    graph = get_host_graph(mode=mode)
     if graph is None:
         return {
             "role": "agent",
@@ -442,12 +647,28 @@ async def route_and_invoke(
         }
 
     cfg = {"configurable": {"thread_id": f"{user_id}:{conversation_id}"}}
+
+    # multi 模式默认 4 个 agent 全并行
+    if mode == "multi" and parallel_agents is None:
+        parallel_agents = [
+            "health_advisor",
+            "health_records",
+            "medication_reminder",
+            "visit_summary",
+        ]
+
     initial_state = HostState(
         query=query,
         conversation_id=conversation_id,
         user_id=user_id,
         metadata=metadata or {},
         events=[],
+        mode=mode,
+        parallel_agents=parallel_agents or [],
+        parallel_responses={},
+        parallel_status={},
+        parallel_started_at={},
+        parallel_finished_at={},
     )
 
     try:
