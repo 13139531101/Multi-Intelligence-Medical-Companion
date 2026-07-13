@@ -149,6 +149,177 @@ async def v2_status():
     }
 
 
+@router.get("/agents/status")
+async def v2_agents_status():
+    """
+    阶段30新增：每个 subagent 的运行状态
+
+    返回每个 agent 的：
+    - 是否已实例化（singleton）
+    - 加载的工具数
+    - 模型
+    - 创建时间 / 最后调用时间
+    - 累计调用次数 / 累计 token 数（如可统计）
+
+    说明：V2Agent._agent_instance_cache 存的 key 是 (V2Agent子类, model)，
+    value 是 create_agent() 返回的 CompiledStateGraph 对象（不是 V2Agent 实例）。
+    要拿到 tools 数、system_prompt 等信息，需要从 SubClass 拿。
+    """
+    from .v2_agent import V2Agent
+    from .sub_agents import (
+        HealthAdvisorV2,
+        HealthRecordsV2,
+        MedicationReminderV2,
+        VisitSummaryV2,
+    )
+
+    # 已注册的 V2Agent 子类映射（agent_name -> class）
+    agent_class_map = {
+        "health_advisor": HealthAdvisorV2,
+        "health_records": HealthRecordsV2,
+        "medication_reminder": MedicationReminderV2,
+        "visit_summary": VisitSummaryV2,
+    }
+
+    agents = {}
+    # 阶段30：cache_key 是 (V2Agent 子类, model)
+    for cache_key in V2Agent._agent_instance_cache.keys():
+        if isinstance(cache_key, tuple) and len(cache_key) == 2:
+            sub_cls, model = cache_key
+        else:
+            sub_cls, model = None, "unknown"
+
+        # 通过类名映射出 agent_name
+        agent_name = None
+        for n, cls in agent_class_map.items():
+            if cls is sub_cls:
+                agent_name = n
+                break
+        if agent_name is None:
+            agent_name = getattr(sub_cls, "__name__", str(cache_key))
+
+        # 创建临时实例拿元数据（触发 _agent 构建拿 tools）
+        try:
+            tmp = sub_cls()
+            tmp_tools_count = len(getattr(tmp, "_tools", []) or [])
+            tmp_prompt_chars = len(getattr(tmp, "system_prompt", "") or "")
+            tmp_system_prompt_preview = (getattr(tmp, "system_prompt", "") or "")[:200]
+
+            # 如果 _tools 还是空，从 mcp_discover 查
+            if tmp_tools_count == 0:
+                try:
+                    from .mcp_discover import discover_mcp_tools_static
+                    discovered = discover_mcp_tools_static(agent_name)
+                    tmp_tools_count = len(discovered)
+                except Exception:
+                    pass
+        except Exception as e:
+            tmp_tools_count = -1
+            tmp_prompt_chars = -1
+            tmp_system_prompt_preview = f"<error: {e}>"
+
+        agents[agent_name] = {
+            "name": agent_name,
+            "model": model,
+            "tools_count": tmp_tools_count,
+            "system_prompt_chars": tmp_prompt_chars,
+            "system_prompt_preview": tmp_system_prompt_preview,
+            "is_loaded": True,
+            "class": getattr(sub_cls, "__name__", "?"),
+            "cached": True,
+        }
+
+    # 从 monitoring.metrics 拿 cumulative 调用数
+    metrics = get_metrics()
+    agent_singleton_metrics = metrics.get("agent_singleton", {})
+
+    return {
+        "agents": agents,
+        "cache_size": len(V2Agent._agent_instance_cache),
+        "metrics": {
+            "agent_singleton_new": agent_singleton_metrics.get("new", 0),
+            "agent_singleton_reuse": agent_singleton_metrics.get("reuse", 0),
+            "agent_singleton_reuse_rate": agent_singleton_metrics.get("reuse_rate", 0),
+        },
+        "ts": time.time(),
+    }
+
+
+@router.get("/agents/{agent_name}/status")
+async def v2_agent_status(agent_name: str):
+    """
+    阶段30新增：单个 subagent 的详细状态
+
+    Args:
+        agent_name: health_advisor / health_records / medication_reminder / visit_summary
+    """
+    from .v2_agent import V2Agent
+    from .sub_agents import (
+        HealthAdvisorV2,
+        HealthRecordsV2,
+        MedicationReminderV2,
+        VisitSummaryV2,
+    )
+
+    agent_class_map = {
+        "health_advisor": HealthAdvisorV2,
+        "health_records": HealthRecordsV2,
+        "medication_reminder": MedicationReminderV2,
+        "visit_summary": VisitSummaryV2,
+    }
+
+    sub_cls = agent_class_map.get(agent_name)
+    if sub_cls is None:
+        return {"agent": agent_name, "error": "unknown agent name"}
+
+    # 找 cache
+    is_loaded = False
+    model = None
+    for cache_key in V2Agent._agent_instance_cache.keys():
+        if isinstance(cache_key, tuple) and len(cache_key) == 2 and cache_key[0] is sub_cls:
+            is_loaded = True
+            model = cache_key[1]
+            break
+
+    # 创建临时实例拿元数据
+    try:
+        tmp = sub_cls()
+        tools_count = len(getattr(tmp, "_tools", []) or [])
+        prompt_chars = len(getattr(tmp, "system_prompt", "") or "")
+        prompt_preview = (getattr(tmp, "system_prompt", "") or "")[:500]
+        tool_names = []
+        try:
+            tmp._ensure_agent()
+            tool_names = [getattr(t, "name", str(t)) for t in (tmp._tools or [])]
+        except Exception:
+            pass
+        # 如果 _tools 仍空，从 mcp_discover 查
+        if tools_count == 0:
+            try:
+                from .mcp_discover import discover_mcp_tools_static
+                discovered = discover_mcp_tools_static(agent_name)
+                tools_count = len(discovered)
+                tool_names = [t.get("name", str(t)) for t in discovered]
+            except Exception:
+                pass
+    except Exception as e:
+        tools_count = -1
+        prompt_chars = -1
+        prompt_preview = f"<error: {e}>"
+        tool_names = []
+
+    return {
+        "agent": agent_name,
+        "is_loaded": is_loaded,
+        "model": model,
+        "tools_count": tools_count,
+        "tool_names": tool_names,
+        "system_prompt_chars": prompt_chars,
+        "system_prompt_preview": prompt_preview,
+        "class": sub_cls.__name__,
+    }
+
+
 @router.get("/metrics/json")
 async def v2_metrics_json():
     """v2 指标 JSON 格式"""

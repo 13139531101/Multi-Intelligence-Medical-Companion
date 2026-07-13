@@ -5,6 +5,7 @@
 2. POST /smart_chat 真提问
 3. 检查容器日志确认 v2 链路全跑通
 """
+import os
 import sys
 import time
 import subprocess
@@ -34,15 +35,15 @@ ENV = {
     'PYTHONPATH': '/app:/app/backend',
     'DB_HOST': 'postgres',
     'DB_USER': 'pha',
-    'DB_PASSWORD': 'zTlQevKV5vzq31QzRqwfcauKX3uQZ64c',
+    'DB_PASSWORD': os.getenv('PHA_DB_PASSWORD', 'zTlQevKV5vzq31QzRqwfcauKX3uQZ64c'),
     'MEMORY_DB_HOST': 'postgres',
     'MEMORY_DB_USER': 'pha',
-    'MEMORY_DB_PASSWORD': 'zTlQevKV5vzq31QzRqwfcauKX3uQZ64c',
+    'MEMORY_DB_PASSWORD': os.getenv('PHA_DB_PASSWORD', 'zTlQevKV5vzq31QzRqwfcauKX3uQZ64c'),
     'MEMORY_DB_NAME': 'personal_health_assistant',
-    'DEEPSEEK_API_KEY': 'sk-5de395dfb19d41a890816f61ae379cdb',
-    'DASHSCOPE_API_KEY': 'sk-2917df2994074695b7b741ffb6382a3b',
-    'QWEN_API_KEY': 'sk-2917df2994074695b7b741ffb6382a3b',
-    'JWT_SECRET_KEY': 'ygRtTIVjkW9vkqswaiLCIRIi231Ovyl4d9TBmx3NMB8AJwE02XxwPARBX_r67A-i',
+    'DEEPSEEK_API_KEY': os.getenv('DEEPSEEK_API_KEY', ''),
+    'DASHSCOPE_API_KEY': os.getenv('DASHSCOPE_API_KEY', ''),
+    'QWEN_API_KEY': os.getenv('QWEN_API_KEY', ''),
+    'JWT_SECRET_KEY': os.getenv('JWT_SECRET_KEY', 'ygRtTIVjkW9vkqswaiLCIRIi231Ovyl4d9TBmx3NMB8AJwE02XxwPARBX_r67A-i'),
     'PHA_USE_V2': 'true',
 }
 ok(f'{len(ENV)} env vars ready')
