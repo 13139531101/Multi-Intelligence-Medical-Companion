@@ -33,3 +33,7 @@ langsmith>=0.4.0
 dashscope>=1.20.0
 psycopg2-binary>=2.9.9
 numpy>=1.26.0
+
+# === 阶段33: ANP (Agent Network Protocol) ===
+# ANP SDK: 把 PHA agent 包装为 ANP 协议兼容
+anp[api]>=0.8.8

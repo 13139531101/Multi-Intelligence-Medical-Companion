@@ -74,6 +74,16 @@ try:
 except Exception as _e:
     import traceback
     print(f"[hostapi] v2 monitoring endpoints mount failed: {_e}")
+
+# 阶段33：集成 ANP 协议（Agent Network Protocol）
+try:
+    from A2AServer.v2.anp_bridge import create_hostapi_anp_app
+    anp_app = create_hostapi_anp_app()
+    app.mount("/anp", anp_app)
+    print("[hostapi] ANP bridge mounted: /anp/agent/{ad.json,interface.json,rpc}, /anp/agents/*")
+except Exception as _e:
+    import traceback
+    print(f"[hostapi] ANP bridge mount failed: {_e}")
     traceback.print_exc()
 
 # 阶段20：集成 OAuth2 端点
