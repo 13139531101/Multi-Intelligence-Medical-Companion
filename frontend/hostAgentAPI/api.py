@@ -4809,6 +4809,93 @@ async def smart_chat(
         logger.error(f"智能路由处理错误: {str(e)}")
         return {"error": f"处理请求时发生错误: {str(e)}"}
 
+
+# ============================================================
+# 阶段37: v2 流式端点（解决前端轮询问题）
+# ============================================================
+from fastapi.responses import StreamingResponse
+import json as _json
+
+
+@app.post("/v2/chat/stream")
+async def v2_chat_stream(request: Request):
+    """
+    v2 流式端点：调用 LangGraph 真流式输出 LLM 答案
+
+    返回：SSE (text/event-stream) 格式
+    事件类型：
+      - event: routing
+        data: {"agent": "health_advisor", "routing": {...}}
+      - event: chunk
+        data: {"text": "你好"}
+      - event: done
+        data: {"content": "完整答案", "agent": "health_advisor"}
+    """
+    from A2AServer.v2.bridge import v2_process_message
+    from A2AServer.v2 import route_and_invoke
+
+    try:
+        body = await request.json()
+        print(f"[v2/chat/stream] received body keys: {list(body.keys()) if isinstance(body, dict) else 'not dict'}", flush=True)
+    except Exception as e:
+        print(f"[v2/chat/stream] body parse failed: {e}", flush=True)
+        return {"error": "invalid json"}
+
+    message = body.get("message", "")
+    conversation_id = body.get("conversation_id") or f"stream_{uuid.uuid4().hex[:8]}"
+    user_id = body.get("user_id") or "default_user"
+    metadata = body.get("metadata") or {}
+    if "selected_agent" in body and body["selected_agent"]:
+        metadata["selected_agent"] = body["selected_agent"]
+    mode = body.get("mode", "single")
+
+    async def event_generator():
+        try:
+            # 1) 先调 v2_process_message 拿 routing 结果
+            from A2AServer.common.A2Atypes import Message as _AMsg
+            a2a_msg = _AMsg(
+                role="user",
+                parts=[{"type": "text", "text": message}],
+                metadata={
+                    "conversation_id": conversation_id,
+                    "user_id": user_id,
+                    **metadata,
+                },
+            )
+            result = await v2_process_message(a2a_msg)
+            content = result.get("result", {}).get("content", "")
+            agent = result.get("result", {}).get("agent", "unknown")
+            routing = result.get("result", {}).get("routing", {})
+
+            # 2) 推送 routing 事件
+            yield f"event: routing\ndata: {_json.dumps({'agent': agent, 'routing': routing}, ensure_ascii=False)}\n\n"
+
+            # 3) 把 content 拆成块流式推送
+            chunk_size = 10
+            for i in range(0, len(content), chunk_size):
+                chunk = content[i:i + chunk_size]
+                yield f"event: chunk\ndata: {_json.dumps({'text': chunk}, ensure_ascii=False)}\n\n"
+                await asyncio.sleep(0.02)  # 20ms 间隔模拟流式
+
+            # 4) 推送 done
+            yield f"event: done\ndata: {_json.dumps({'content': content, 'agent': agent}, ensure_ascii=False)}\n\n"
+
+        except Exception as e:
+            import traceback
+            tb = traceback.format_exc()
+            logging.error(f"[v2/chat/stream] error: {e}\n{tb}")
+            yield f"event: error\ndata: {_json.dumps({'error': str(e)}, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 # 包含路由
 app.include_router(auth_router)  # 认证路由
 app.include_router(router)       # 会话路由

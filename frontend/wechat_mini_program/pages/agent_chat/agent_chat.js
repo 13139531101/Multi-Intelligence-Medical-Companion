@@ -3,6 +3,7 @@ const {
   sendMessage,
   sendMessageV2, // 阶段35: v2 smart_chat
   sendMessageV2Multi, // 阶段35: v2 multi
+  sendMessageV2Stream, // 阶段37: v2 SSE 流式
   getV2AgentsStatus, // 阶段35: sub-agent 状态
   getV2AgentStatus,
   getAnpAgents, // 阶段35: ANP 列出
@@ -102,28 +103,31 @@ Page({
       const probe = await detectBackendVersion();
       if (probe.ok) {
         if (!probe.v2_available) {
-          // 后端是 v1，自动切回 v1
-          this.setData({ useV2: false });
+          console.warn("[v2] 探测显示后端是 v1（无 /v2/agents/status）");
+          // 阶段36: 不要自动切回 v1！保留 v2 路径（_sendWithV2 自己 fallback）
+          // 因为探测可能在某些情况下失败但实际可用
+        } else {
+          console.log("[v2] 探测显示后端是 v2，可用");
         }
+      } else {
+        console.warn("[v2] 探测失败（可能后端未启动）", probe);
       }
       this._updateV2ModeInfo();
 
-      // 2) 拉 v2 agents 状态
-      if (this.data.useV2) {
-        try {
-          const status = await getV2AgentsStatus();
-          const registry = (status && status.registry) || [];
-          this.setData({ v2Agents: registry });
-        } catch (e) {
-          console.warn("[v2] getV2AgentsStatus failed", e);
-        }
-        // 3) 拉 ANP agents
-        try {
-          const anp = await getAnpAgents();
-          this.setData({ anpAgents: (anp && anp.agents) || [] });
-        } catch (e) {
-          console.warn("[v2] getAnpAgents failed", e);
-        }
+      // 2) 拉 v2 agents 状态（不依赖 useV2，因为可能探测假阴性）
+      try {
+        const status = await getV2AgentsStatus();
+        const registry = (status && status.registry) || [];
+        this.setData({ v2Agents: registry });
+      } catch (e) {
+        console.warn("[v2] getV2AgentsStatus failed", e);
+      }
+      // 3) 拉 ANP agents
+      try {
+        const anp = await getAnpAgents();
+        this.setData({ anpAgents: (anp && anp.agents) || [] });
+      } catch (e) {
+        console.warn("[v2] getAnpAgents failed", e);
       }
     } catch (e) {
       console.error("[v2] init failed", e);
@@ -1607,21 +1611,22 @@ Page({
     this.setData({ messages: next });
   },
 
-  // 阶段35: 统一发送入口（v1/v2/single/multi 自动选择）
+  // 阶段35/37: 统一发送入口（v1/v2/single/multi 自动选择）
+  // 阶段37: 改用 v2 SSE 流式（sendMessageV2Stream）
   async _sendWithV2(payload) {
-    const { useV2, v2ExecMode } = this.data;
+    const { useV2, v2ExecMode, conversationId } = this.data;
     if (useV2) {
       try {
         if (v2ExecMode === "multi") {
           this.setData({ v2ModeInfo: "v2 · 4 agent 并行..." });
+          // multi 模式暂用同步接口
           const result = await sendMessageV2Multi(payload);
           this._handleV2Response(result);
           return result;
         } else {
-          this.setData({ v2ModeInfo: "v2 · 单 agent..." });
-          const result = await sendMessageV2(payload);
-          this._handleV2Response(result);
-          return result;
+          this.setData({ v2ModeInfo: "v2 · 单 agent · 流式..." });
+          // 阶段37: 用 SSE 流式，直接显示 LLM 答案
+          return await this._sendWithV2Stream(payload, conversationId);
         }
       } catch (e) {
         console.warn("[v2] sendMessageV2 failed, fallback to v1", e);
@@ -1632,6 +1637,118 @@ Page({
     // v1 fallback
     this.setData({ v2ModeInfo: "v1 · A2A 私有..." });
     return await sendMessage(payload);
+  },
+
+  // 阶段37: v2 SSE 流式发送
+  async _sendWithV2Stream(payload, conversationId) {
+    return new Promise((resolve, reject) => {
+      let pendingAssistantId = null;
+      let fullContent = "";
+      let agent = null;
+      let routing = null;
+
+      const task = sendMessageV2Stream(
+        {
+          ...payload,
+          conversation_id: conversationId,
+          mode: "single",
+        },
+        // onEvent
+        (evt) => {
+          const { event, data } = evt;
+          console.log("[v2 stream]", event, data);
+          if (event === "routing") {
+            agent = data.agent;
+            routing = data.routing;
+            this.setData({ selectedAgent: agent, agentRouting: routing });
+          } else if (event === "chunk") {
+            if (!pendingAssistantId) {
+              // 第一次收到 chunk，创建 assistant 消息
+              pendingAssistantId = `v2-${Date.now()}-${Math.random()}`;
+              const newMsg = {
+                id: pendingAssistantId,
+                role: "assistant",
+                contentParts: [{ type: "text", text: data.text }],
+                rawText: data.text,
+                isLong: false,
+                collapsed: false,
+                timestamp: Date.now() / 1000,
+                timeString: this.formatTime(Date.now() / 1000),
+                isStreaming: true,
+                metadata: {
+                  source: "pha-v2-host-graph",
+                  agent: agent,
+                  v2_routing: routing,
+                },
+              };
+              this.setData({
+                messages: (this.data.messages || []).concat([newMsg]),
+                isSending: false,
+                shouldAutoScroll: true,
+              });
+              this.currentPendingAssistantId = pendingAssistantId;
+            } else {
+              // 后续 chunk 累加
+              const messages = (this.data.messages || []).map((m) => {
+                if (m.id === pendingAssistantId) {
+                  const newText = (m.rawText || "") + data.text;
+                  return Object.assign({}, m, {
+                    rawText: newText,
+                    contentParts: [{ type: "text", text: newText }],
+                    isStreaming: true,
+                  });
+                }
+                return m;
+              });
+              this.setData({ messages });
+            }
+            fullContent += data.text;
+            this.scheduleScrollToBottom(true);
+          } else if (event === "done") {
+            // 流结束，标记消息完成
+            if (pendingAssistantId) {
+              const messages = (this.data.messages || []).map((m) => {
+                if (m.id === pendingAssistantId) {
+                  return Object.assign({}, m, {
+                    rawText: data.content || fullContent,
+                    contentParts: [
+                      { type: "text", text: data.content || fullContent },
+                    ],
+                    isStreaming: false,
+                  });
+                }
+                return m;
+              });
+              this.setData({ messages, isSending: false });
+              this.currentPendingAssistantId = null;
+            }
+            this._updateV2ModeInfo();
+            resolve({
+              success: true,
+              message: data.content || fullContent,
+              selected_agent: data.agent,
+              routing: routing,
+            });
+          } else if (event === "error") {
+            console.error("[v2 stream error]", data);
+            reject(new Error(data.error || "v2 stream error"));
+          }
+        },
+        // onError
+        (err) => {
+          console.error("[v2 stream failed]", err);
+          if (pendingAssistantId) {
+            const messages = (this.data.messages || []).filter(
+              (m) => m.id !== pendingAssistantId,
+            );
+            this.setData({ messages, isSending: false });
+            this.currentPendingAssistantId = null;
+          }
+          reject(err);
+        },
+      );
+      this.requestTask = task;
+    });
   },
 
   // 阶段35: 处理 v2 响应
@@ -2234,6 +2351,18 @@ Page({
       const messages = await listMessages(this.data.conversationId);
 
       if (messages && messages.length > 0) {
+        // 阶段36: debug log
+        console.log(
+          "[pollMessages] got",
+          messages.length,
+          "messages:",
+          messages.map((m) => ({
+            role: m.role,
+            text: (m.parts?.[0]?.text || "").slice(0, 50),
+            source: m.metadata?.source,
+            v2: !!m.metadata?.v2_routing,
+          })),
+        );
         // 转换消息格式
         const formattedMessages = messages.map((m) => {
           const id =
@@ -2253,6 +2382,8 @@ Page({
             rawText,
             isLong,
             collapsed: isLong,
+            // 阶段36: 保留 metadata，让 isV2Msg 能识别 v2 注入
+            metadata: m.metadata,
             timestamp: this.parseTimestampSeconds(m.created_at || m.createdAt),
             timeString: this.formatTime(
               this.parseTimestampSeconds(m.created_at || m.createdAt),
@@ -2266,8 +2397,53 @@ Page({
         const newMessages = formattedMessages.filter(
           (m) => !currentIds.has(m.id),
         );
+        // 阶段36: 更详细的 debug
+        console.log(
+          "[pollMessages] formatted:",
+          formattedMessages.map((m) => ({
+            id: m.id,
+            role: m.role,
+            textLen: m.rawText?.length || 0,
+            hasV2Meta: !!(
+              m.metadata &&
+              (m.metadata.source || m.metadata.v2_routing)
+            ),
+          })),
+        );
 
         if (newMessages.length > 0) {
+          // 阶段36: v2 注入消息早期显示（绕过 pending 过滤）
+          const isV2Msg = (m) =>
+            m &&
+            m.metadata &&
+            (m.metadata.source === "pha-v2-host-graph" ||
+              m.metadata.v2_routing);
+          const v2NewMessages = newMessages.filter(isV2Msg);
+          if (v2NewMessages.length > 0) {
+            console.log(
+              "[v2] 早期显示 v2 注入消息:",
+              v2NewMessages.map((m) => m.rawText?.slice(0, 50)),
+            );
+            // 删除 pending
+            let baseMessages = baseMessagesSnapshot.filter(
+              (m) => m.id !== this.currentPendingAssistantId,
+            );
+            const combined = this.mergeThinkingMessages(
+              baseMessages.concat(v2NewMessages),
+            );
+            this.setData(
+              {
+                messages: combined,
+                isSending: false,
+              },
+              () => this.scheduleScrollToBottom(false, v2NewMessages.length),
+            );
+            this.currentPendingAssistantId = null;
+            // 阶段36: v2 完整 LLM 答案已显示，停止轮询（v2 不会再来更多）
+            this.stopPolling();
+            return; // 跳过下面的 pending 过滤逻辑和 setTimeout
+          }
+
           let baseMessages = baseMessagesSnapshot;
 
           const pendingId = this.currentPendingAssistantId;
@@ -2296,14 +2472,35 @@ Page({
             const assistantNew = newMessages.filter(
               (m) => m && m.role === "assistant" && m.rawText,
             );
+            // 阶段36: 检测 v2 注入消息（有 source=pha-v2-host-graph 标记）
+            const isV2Msg = (m) =>
+              m &&
+              m.metadata &&
+              (m.metadata.source === "pha-v2-host-graph" ||
+                m.metadata.v2_routing);
             const finalCandidates = assistantNew.filter(isFinalAssistantReply);
+            const v2Msgs = assistantNew.filter(isV2Msg);
+
             if (finalCandidates.length) {
+              // v1 完整 final 答案
               baseMessages = baseMessages.filter(
                 (m) => m && m.id !== pendingId,
               );
               effectiveNewMessages = newMessages.filter(
                 (m) => m.role !== "assistant" || finalCandidates.includes(m),
               );
+              hasAssistantReply = true;
+            } else if (v2Msgs.length) {
+              // 阶段36: v2 注入的消息（v2 manager 完整 LLM 答案）
+              // 直接显示，不再等 isFinalAssistantReply 条件
+              console.log(
+                "[v2] 检测到 v2 注入消息，显示:",
+                v2Msgs.map((m) => m.rawText?.slice(0, 50)),
+              );
+              baseMessages = baseMessages.filter(
+                (m) => m && m.id !== pendingId,
+              );
+              effectiveNewMessages = newMessages;
               hasAssistantReply = true;
             } else {
               effectiveNewMessages = newMessages.filter(
@@ -2318,6 +2515,15 @@ Page({
           );
           const patch = { messages: combined };
           if (hasAssistantReply) patch.isSending = false;
+          // 阶段36: 详细 debug
+          console.log("[pollMessages] setting patch:", {
+            hasAssistantReply,
+            effectiveNewCount: effectiveNewMessages.length,
+            combinedLen: combined.length,
+            effectiveRoles: effectiveNewMessages.map(
+              (m) => m.role + ":" + (m.rawText?.length || 0),
+            ),
+          });
           this.setData(patch, () =>
             this.scheduleScrollToBottom(false, effectiveNewMessages.length),
           );

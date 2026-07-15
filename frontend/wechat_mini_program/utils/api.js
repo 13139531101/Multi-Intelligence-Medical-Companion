@@ -1,6 +1,9 @@
-const DEFAULT_SERVER_URL = "http://8.155.166.136:13002";
-// const DEFAULT_SERVER_URL = "http://127.0.0.1:13002";
-// const DEFAULT_SERVER_URL = "http://www.duozhiyiban.icu";
+// 阶段35: 默认连本地 docker (hostapi stage35fix1 容器，端口 13002)
+// 微信开发者工具调试时需要：详情 → 本地设置 → 勾选"不校验合法域名"
+// 也可以在 wx.setStorageSync("SERVER_URL", "http://你的IP:13002") 运行时切换
+const DEFAULT_SERVER_URL = "http://127.0.0.1:13002";
+// const DEFAULT_SERVER_URL = "http://8.155.166.136:13002";   // 公网（已废弃）
+// const DEFAULT_SERVER_URL = "http://www.duozhiyiban.icu";     // 域名（旧）
 
 const normalizeBaseUrl = (raw) => {
   let s = String(raw || "")
@@ -63,6 +66,35 @@ const getServerUrlFromRuntime = () => {
 };
 
 const SERVER_URL = getServerUrlFromRuntime();
+
+// 阶段35: 调试日志（启动时打印当前 SERVER_URL 来源）
+try {
+  const stored =
+    wx.getStorageSync("SERVER_URL") ||
+    wx.getStorageSync("serverUrl") ||
+    wx.getStorageSync("server_url") ||
+    "";
+  let source = "DEFAULT";
+  if (stored && normalizeBaseUrl(stored)) {
+    source = "storage";
+  } else {
+    const ext = wx.getExtConfigSync ? wx.getExtConfigSync() : null;
+    const extUrl = ext && (ext.SERVER_URL || ext.serverUrl || ext.server_url);
+    if (extUrl && normalizeBaseUrl(extUrl)) source = "ext";
+  }
+  console.log("[PHA] SERVER_URL =", SERVER_URL, "(来源:", source + ")");
+  if (source === "storage" && SERVER_URL !== "http://127.0.0.1:13002") {
+    console.warn(
+      "[PHA] ⚠️  Storage 里的 SERVER_URL 覆盖了默认值！\n" +
+        "        当前连: " +
+        SERVER_URL +
+        "\n" +
+        "        如需切换到本地 docker，请执行：\n" +
+        "        wx.setStorageSync('SERVER_URL', 'http://127.0.0.1:13002')\n" +
+        "        然后清除缓存或重新编译。",
+    );
+  }
+} catch (e) {}
 
 const ensureHttpsUrl = (url) => {
   const s = String(url || "").trim();
@@ -866,6 +898,97 @@ const sendTaskStreaming = (
   return requestTask;
 };
 
+// 阶段37: v2 SSE 流式端点
+const sendMessageV2Stream = (message, onEvent, onError, onComplete) => {
+  const requestBody = {
+    message: message.message || message.text,
+    conversation_id: message.conversation_id,
+    role: message.role,
+    mode: message.mode || "single",
+    metadata: message.metadata || {},
+  };
+  if (message.metadata && message.metadata.selected_agent) {
+    requestBody.metadata.selected_agent = message.metadata.selected_agent;
+    requestBody.selected_agent = message.metadata.selected_agent;
+  }
+  const userInfo = wx.getStorageSync("userInfo");
+  const token = userInfo ? userInfo.token : "";
+  const requestTask = wx.request({
+    url: `${SERVER_URL}/v2/chat/stream`,
+    method: "POST",
+    data: requestBody,
+    enableChunked: true,
+    timeout: 300000,
+    header: token
+      ? { "Content-Type": "application/json", Authorization: `Bearer ${token}` }
+      : { "Content-Type": "application/json" },
+    fail: (err) => {
+      if (onError) onError(err);
+    },
+  });
+
+  let pendingText = "";
+  requestTask.onChunkReceived((response) => {
+    const arrayBuffer = response.data;
+    let uint8Array = new Uint8Array(arrayBuffer);
+    if (requestTask._pendingBuffer) {
+      const nb = new Uint8Array(
+        requestTask._pendingBuffer.length + uint8Array.length,
+      );
+      nb.set(requestTask._pendingBuffer, 0);
+      nb.set(uint8Array, requestTask._pendingBuffer.length);
+      uint8Array = nb;
+      requestTask._pendingBuffer = null;
+    }
+    // UTF-8 safe trim
+    let safeEnd = uint8Array.length;
+    for (let k = 1; k <= 3 && safeEnd - k >= 0; k--) {
+      const b = uint8Array[safeEnd - k];
+      if ((b & 0xc0) === 0x80) continue;
+      let seqLen = 0;
+      if ((b & 0xe0) === 0xc0) seqLen = 2;
+      else if ((b & 0xf0) === 0xe0) seqLen = 3;
+      else if ((b & 0xf8) === 0xf0) seqLen = 4;
+      if (seqLen > 0 && k < seqLen) {
+        safeEnd -= k;
+        requestTask._pendingBuffer = uint8Array.slice(safeEnd);
+      }
+      break;
+    }
+    const valid = uint8Array.slice(0, safeEnd);
+    let text = "";
+    try {
+      text = new TextDecoder("utf-8").decode(valid);
+    } catch (e) {
+      text = String.fromCharCode.apply(null, valid);
+    }
+    const fullText = (requestTask._pendingText || "") + text;
+    const lines = fullText.split("\n");
+    if (fullText.length > 0 && !fullText.endsWith("\n") && lines.length > 0) {
+      requestTask._pendingText = lines.pop();
+    } else {
+      requestTask._pendingText = "";
+    }
+    for (const line of lines) {
+      if (line.startsWith("event: ")) {
+        pendingText = line.substring(7).trim();
+      } else if (line.startsWith("data: ")) {
+        const jsonStr = line.substring(6).trim();
+        try {
+          const data = JSON.parse(jsonStr);
+          if (onEvent) onEvent({ event: pendingText || "message", data });
+        } catch (e) {
+          // ignore
+        }
+        pendingText = "";
+      } else if (line === "") {
+        pendingText = "";
+      }
+    }
+  });
+  return requestTask;
+};
+
 // 发送任务（流式）- 统一走 HostAPI，由 HostAPI 转发到目标智能体
 const sendTaskStreamingViaHost = (
   targetAgentName,
@@ -1263,6 +1386,7 @@ module.exports = {
   // 阶段35新增的 v2 接口
   sendMessageV2, // v2 smart_chat（默认 single 模式）
   sendMessageV2Multi, // v2 multi 模式（4 agent 并行）
+  sendMessageV2Stream, // 阶段37: v2 SSE 流式（真流式输出 LLM 答案）
   getV2AgentsStatus, // 列出所有 sub-agent 状态
   getV2AgentStatus, // 单 agent 详情
   getV2Models, // 多模型列表
