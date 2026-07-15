@@ -1665,10 +1665,15 @@ Page({
             if (!pendingAssistantId) {
               // 第一次收到 chunk，创建 assistant 消息
               pendingAssistantId = `v2-${Date.now()}-${Math.random()}`;
+              // 阶段37: 替换原来的 pending_ai_xxx 消息（显示 "AI 思考中..."）
+              const oldPendingId = this.currentPendingAssistantId;
               const newMsg = {
                 id: pendingAssistantId,
                 role: "assistant",
-                contentParts: [{ type: "text", text: data.text }],
+                // 阶段37: 修复 - WXML 用 part.content（不是 part.text）
+                contentParts: [
+                  { type: "text", content: data.text, text: data.text },
+                ],
                 rawText: data.text,
                 isLong: false,
                 collapsed: false,
@@ -1682,7 +1687,9 @@ Page({
                 },
               };
               this.setData({
-                messages: (this.data.messages || []).concat([newMsg]),
+                messages: (this.data.messages || [])
+                  .filter((m) => m.id !== oldPendingId)
+                  .concat([newMsg]),
                 isSending: false,
                 shouldAutoScroll: true,
               });
@@ -1694,7 +1701,9 @@ Page({
                   const newText = (m.rawText || "") + data.text;
                   return Object.assign({}, m, {
                     rawText: newText,
-                    contentParts: [{ type: "text", text: newText }],
+                    contentParts: [
+                      { type: "text", content: newText, text: newText },
+                    ],
                     isStreaming: true,
                   });
                 }
@@ -1712,7 +1721,11 @@ Page({
                   return Object.assign({}, m, {
                     rawText: data.content || fullContent,
                     contentParts: [
-                      { type: "text", text: data.content || fullContent },
+                      {
+                        type: "text",
+                        content: data.content || fullContent,
+                        text: data.content || fullContent,
+                      },
                     ],
                     isStreaming: false,
                   });
@@ -2250,8 +2263,11 @@ Page({
             : { message_id: userMessage.id },
         });
 
-        // 3. 开始轮询回复
-        this.startPolling();
+        // 3. 阶段37: 只在 v1 模式或异常时轮询
+        // v2 流式模式下 _sendWithV2Stream 自己处理显示，不需要轮询
+        if (!this.data.useV2) {
+          this.startPolling();
+        }
       }
     } catch (error) {
       console.error("Send message failed:", error);
