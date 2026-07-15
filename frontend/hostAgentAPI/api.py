@@ -4847,6 +4847,9 @@ async def v2_chat_stream(request: Request):
     metadata = body.get("metadata") or {}
     if "selected_agent" in body and body["selected_agent"]:
         metadata["selected_agent"] = body["selected_agent"]
+    # 阶段38-2: multi_model 路由选项
+    task_type = body.get("task_type", "chat")
+    prefer_provider = body.get("prefer_provider", "")
     mode = body.get("mode", "single")
 
     async def event_generator():
@@ -4885,6 +4888,83 @@ async def v2_chat_stream(request: Request):
             tb = traceback.format_exc()
             logging.error(f"[v2/chat/stream] error: {e}\n{tb}")
             yield f"event: error\ndata: {_json.dumps({'error': str(e)}, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+# 阶段38-2: 多 LLM provider 路由 SSE 端点
+@app.post("/v2/models/stream")
+async def v2_models_stream(request: Request):
+    """
+    阶段38-2: 多模型 SSE 流式端点
+
+    - task_type: chat / code / analysis / summary / translation / creative
+    - prefer_provider: deepseek / qwen / claude / local
+    - 自动 fallback (deepseek → qwen → claude → local)
+    - 限流: 60 次/分钟/provider
+
+    事件: routing → chunk × N → done
+    """
+    from A2AServer.v2 import multi_model
+    from A2AServer.v2.multi_model import ChatMessage
+
+    try:
+        body = await request.json()
+        print(f"[v2/models/stream] body keys: {list(body.keys())}", flush=True)
+    except Exception as e:
+        print(f"[v2/models/stream] parse failed: {e}", flush=True)
+        return {"error": "invalid json"}
+
+    messages = body.get("messages", [])
+    if not messages:
+        return {"error": "messages required"}
+    task_type = body.get("task_type", "chat")
+    prefer_provider = body.get("prefer_provider", "") or None
+    max_tokens = body.get("max_tokens", 2048)
+    temperature = body.get("temperature", 0.7)
+
+    async def event_generator():
+        try:
+            # 1. routing
+            chosen = prefer_provider or multi_model.TASK_ROUTING.get(task_type, "deepseek")
+            yield f"event: routing\ndata: {__import__('json').dumps({'provider': chosen, 'task_type': task_type, 'fallback_chain': multi_model.FALLBACK_CHAIN}, ensure_ascii=False)}\n\n"
+
+            # 2. 转 ChatMessage
+            chat_msgs = [ChatMessage(role=m["role"], content=m["content"]) for m in messages]
+
+            # 3. 调 router
+            router = multi_model.get_router()
+            result = await router.chat(
+                messages=chat_msgs,
+                task_type=task_type,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                prefer_provider=prefer_provider,
+            )
+
+            # 4. 流式 chunk
+            content = result.text or ""
+            chunk_size = 10
+            for i in range(0, len(content), chunk_size):
+                chunk = content[i:i + chunk_size]
+                yield f"event: chunk\ndata: {__import__('json').dumps({'text': chunk}, ensure_ascii=False)}\n\n"
+                await asyncio.sleep(0.02)
+
+            # 5. done
+            yield f"event: done\ndata: {__import__('json').dumps({'content': content, 'provider': result.provider, 'model': result.model, 'latency_ms': result.latency_ms, 'fallback_used': result.fallback_used, 'prompt_tokens': result.prompt_tokens, 'completion_tokens': result.completion_tokens}, ensure_ascii=False)}\n\n"
+
+        except Exception as e:
+            import traceback
+            tb = traceback.format_exc()
+            print(f"[v2/models/stream] error: {e}\n{tb}", flush=True)
+            yield f"event: error\ndata: {__import__('json').dumps({'error': str(e)}, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(
         event_generator(),

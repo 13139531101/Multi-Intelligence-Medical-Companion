@@ -1289,6 +1289,88 @@ const crawlAnpAgents = (params = {}) => {
   });
 };
 
+// 阶段38-2: 多模型 SSE 流式（task_type + prefer_provider + fallback）
+const sendMessageV2ModelsStream = (params, onEvent, onError) => {
+  const requestBody = {
+    messages: params.messages || [
+      { role: "user", content: params.message || "" },
+    ],
+    task_type: params.task_type || "chat",
+    prefer_provider: params.prefer_provider || "",
+    max_tokens: params.max_tokens || 2048,
+    temperature: params.temperature || 0.7,
+  };
+  const userInfo = wx.getStorageSync("userInfo");
+  const token = userInfo ? userInfo.token : "";
+  const requestTask = wx.request({
+    url: `${SERVER_URL}/v2/models/stream`,
+    method: "POST",
+    data: requestBody,
+    enableChunked: true,
+    timeout: 300000,
+    header: token
+      ? { "Content-Type": "application/json", Authorization: `Bearer ${token}` }
+      : { "Content-Type": "application/json" },
+    fail: (err) => {
+      if (onError) onError(err);
+    },
+  });
+  let pendingText = "";
+  requestTask.onChunkReceived((response) => {
+    const arrayBuffer = response.data;
+    let uint8Array = new Uint8Array(arrayBuffer);
+    if (requestTask._pendingBuffer) {
+      const nb = new Uint8Array(
+        requestTask._pendingBuffer.length + uint8Array.length,
+      );
+      nb.set(requestTask._pendingBuffer, 0);
+      nb.set(uint8Array, requestTask._pendingBuffer.length);
+      uint8Array = nb;
+      requestTask._pendingBuffer = null;
+    }
+    let safeEnd = uint8Array.length;
+    for (let k = 1; k <= 3 && safeEnd - k >= 0; k--) {
+      const b = uint8Array[safeEnd - k];
+      if ((b & 0xc0) === 0x80) continue;
+      let seqLen = 0;
+      if ((b & 0xe0) === 0xc0) seqLen = 2;
+      else if ((b & 0xf0) === 0xe0) seqLen = 3;
+      else if ((b & 0xf8) === 0xf0) seqLen = 4;
+      if (seqLen > 0 && k < seqLen) {
+        safeEnd -= k;
+        requestTask._pendingBuffer = uint8Array.slice(safeEnd);
+      }
+      break;
+    }
+    const valid = uint8Array.slice(0, safeEnd);
+    let text = "";
+    try {
+      text = new TextDecoder("utf-8").decode(valid);
+    } catch (e) {
+      text = String.fromCharCode.apply(null, valid);
+    }
+    const fullText = (requestTask._pendingText || "") + text;
+    const lines = fullText.split("\n");
+    if (fullText.length > 0 && !fullText.endsWith("\n") && lines.length > 0) {
+      requestTask._pendingText = lines.pop();
+    } else {
+      requestTask._pendingText = "";
+    }
+    for (const line of lines) {
+      if (line.startsWith("event: ")) pendingText = line.substring(7).trim();
+      else if (line.startsWith("data: ")) {
+        const jsonStr = line.substring(6).trim();
+        try {
+          const data = JSON.parse(jsonStr);
+          if (onEvent) onEvent({ event: pendingText || "message", data });
+        } catch (e) {}
+        pendingText = "";
+      } else if (line === "") pendingText = "";
+    }
+  });
+  return requestTask;
+};
+
 // 阶段38-1: ANP crawler 缓存状态
 const getAnpCrawlerCache = () => {
   return request("/anp/agents/crawl/cache", { method: "GET" });
@@ -1427,6 +1509,8 @@ module.exports = {
   getAnpCrawlerCache, // 缓存状态
   clearAnpCrawlerCache, // 清缓存
   didResolve, // DID:WBA → URL
+  // 阶段38-2: 多 LLM provider SSE 流式
+  sendMessageV2ModelsStream,
   callAnpRpc, // ANP JSON-RPC 2.0 调用
   // 阶段35新增：版本探测
   detectBackendVersion, // 自动探测后端是 v1 还是 v2
