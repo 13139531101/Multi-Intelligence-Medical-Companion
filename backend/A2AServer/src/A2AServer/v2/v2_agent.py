@@ -269,7 +269,8 @@ class V2Agent:
                 stream_mode="values",
             )
 
-            for chunk in stream_iter:
+            # 阶段35 修复: astream() 是 async_generator，必须用 async for
+            async for chunk in stream_iter:
                 messages = chunk.get("messages", []) if isinstance(chunk, dict) else []
                 for msg in messages:
                     msg_type = getattr(msg, "type", "ai")
