@@ -27,6 +27,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
 from typing import Any, Dict
 
 import httpx
@@ -250,7 +251,7 @@ def create_hostapi_anp_app():
 
     @app.get("/agents/discover")
     async def discover_external():
-        """ANP 爬虫：主动发现所有外部 ANP agent"""
+        """ANP 爬虫：主动发现所有外部 ANP agent（简单版，向后兼容）"""
         urls = get_default_agent_urls()
         agents = await discover_all_anp_agents(urls)
         return {
@@ -258,6 +259,74 @@ def create_hostapi_anp_app():
             "candidates": urls,
             "agents": agents,
         }
+
+    @app.get("/agents/crawl")
+    async def crawl_external(
+        max_depth: int = 2,
+        max_nodes: int = 50,
+        force_refresh: bool = False,
+    ):
+        """
+        阶段38-1: ANP 递归爬虫（增强版）
+        - 从种子 URL 开始 BFS
+        - 拉 /agent/ad.json
+        - 解析 relatedAgents / sameAs / seeAlso
+        - 递归爬 (max_depth)
+        - 按 DID 去重
+        - 5 分钟缓存
+        """
+        from .anp_crawler import crawl_with_cache
+        urls = get_default_agent_urls()
+        result = await crawl_with_cache(
+            seed_urls=urls,
+            cache_key="external_crawl",
+            force_refresh=force_refresh,
+            max_depth=max_depth,
+            max_nodes=max_nodes,
+        )
+        return {
+            "started_at": result.started_at,
+            "finished_at": result.finished_at,
+            "duration_ms": result.duration_ms,
+            "seed_count": result.seed_count,
+            "discovered_count": result.discovered_count,
+            "reachable_count": result.reachable_count,
+            "failed_count": len(result.failed_urls),
+            "failed_urls": result.failed_urls,
+            "nodes": [n.to_dict() for n in result.nodes],
+            "graph": result.graph,
+        }
+
+    @app.get("/agents/crawl/cache")
+    async def crawl_cache_status():
+        """查看 ANP crawler 缓存状态"""
+        from .anp_crawler import get_cached_crawl
+        cached = get_cached_crawl("external_crawl")
+        if not cached:
+            return {"cached": False}
+        return {
+            "cached": True,
+            "finished_at": cached.finished_at,
+            "age_seconds": time.time() - cached.finished_at,
+            "discovered_count": cached.discovered_count,
+            "reachable_count": cached.reachable_count,
+        }
+
+    @app.get("/agents/crawl/clear")
+    async def crawl_cache_clear():
+        """清 ANP crawler 缓存"""
+        from .anp_crawler import clear_crawl_cache
+        clear_crawl_cache()
+        return {"cleared": True}
+
+    @app.get("/did/resolve/{did}")
+    async def did_resolve(did: str):
+        """阶段38-1: DID 解析（DID:WBA → URL）"""
+        from .anp_crawler import resolve_did_to_url
+        url = resolve_did_to_url(did)
+        if not url:
+            return {"did": did, "resolved": False}
+        return {"did": did, "resolved": True, "url": url}
 
     @app.get("/health")
     async def health():

@@ -1281,6 +1281,31 @@ const discoverAnpAgents = (params = {}) => {
   });
 };
 
+// 阶段38-1: ANP 递归爬虫（增强版：BFS + DID 去重 + 缓存）
+const crawlAnpAgents = (params = {}) => {
+  return request("/anp/agents/crawl", {
+    method: "GET",
+    data: params, // max_depth, max_nodes, force_refresh
+  });
+};
+
+// 阶段38-1: ANP crawler 缓存状态
+const getAnpCrawlerCache = () => {
+  return request("/anp/agents/crawl/cache", { method: "GET" });
+};
+
+// 阶段38-1: 清 ANP crawler 缓存
+const clearAnpCrawlerCache = () => {
+  return request("/anp/agents/crawl/clear", { method: "GET" });
+};
+
+// 阶段38-1: DID 解析（DID:WBA → URL）
+const didResolve = (did) => {
+  return request(`/anp/did/resolve/${encodeURIComponent(did)}`, {
+    method: "GET",
+  });
+};
+
 // ANP JSON-RPC 2.0 调用（hostapi 的 /anp/agent/rpc）
 const callAnpRpc = (method, params = {}, id = null) => {
   const requestBody = {
@@ -1397,6 +1422,11 @@ module.exports = {
   getAnpAgentInterface, // ANP OpenRPC
   getAnpAgents, // 列出所有 PHA agent (带 DID:WBA)
   discoverAnpAgents, // ANP crawler 主动发现
+  // 阶段38-1: ANP 递归爬虫（增强版）
+  crawlAnpAgents, // GET /anp/agents/crawl
+  getAnpCrawlerCache, // 缓存状态
+  clearAnpCrawlerCache, // 清缓存
+  didResolve, // DID:WBA → URL
   callAnpRpc, // ANP JSON-RPC 2.0 调用
   // 阶段35新增：版本探测
   detectBackendVersion, // 自动探测后端是 v1 还是 v2
