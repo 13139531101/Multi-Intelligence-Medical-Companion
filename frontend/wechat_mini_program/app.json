@@ -9,7 +9,8 @@
     "pages/agent_chat/agent_chat",
     "pages/consultation/consultation",
     "pages/medication/medication",
-    "pages/visit-summary/visit-summary"
+    "pages/visit-summary/visit-summary",
+    "pages/agents_status/agents_status"
   ],
   "tabBar": {
     "color": "#7A7E83",

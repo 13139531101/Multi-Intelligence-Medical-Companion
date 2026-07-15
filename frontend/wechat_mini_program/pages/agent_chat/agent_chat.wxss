@@ -472,3 +472,70 @@
   color: var(--text-sub);
   padding: 4rpx 8rpx;
 }
+
+/* === 阶段35: v2 模式切换栏样式 === */
+.v2-mode-bar {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 16rpx;
+  padding: 16rpx 24rpx;
+  background-color: rgba(0, 0, 0, 0.02);
+  border-top: 1rpx solid rgba(0, 0, 0, 0.05);
+  border-bottom: 1rpx solid rgba(0, 0, 0, 0.05);
+}
+.v2-mode-group {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8rpx;
+}
+.v2-mode-label {
+  font-size: 22rpx;
+  color: #666;
+}
+.v2-mode-pill {
+  padding: 8rpx 20rpx;
+  border-radius: 24rpx;
+  background-color: #f0f0f0;
+  color: #333;
+  font-size: 24rpx;
+  border: 1rpx solid transparent;
+}
+.v2-mode-pill.active {
+  background-color: #1890ff;
+  color: #fff;
+  border-color: #1890ff;
+}
+.v2-mode-info {
+  font-size: 22rpx;
+  color: #999;
+  margin-left: auto;
+}
+
+/* 阶段35: agent 路由指示器 */
+.agent-routing-indicator {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8rpx;
+  padding: 8rpx 16rpx;
+  margin: 8rpx 24rpx;
+  background-color: rgba(24, 144, 255, 0.08);
+  border-left: 4rpx solid #1890ff;
+  border-radius: 8rpx;
+  font-size: 22rpx;
+  color: #1890ff;
+}
+.agent-routing-dot {
+  width: 12rpx;
+  height: 12rpx;
+  border-radius: 50%;
+  background-color: #1890ff;
+  animation: pulse 1.5s infinite;
+}
+@keyframes pulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1.0; }
+}

@@ -1055,6 +1055,169 @@ const deleteConsultation = (consultationId, user_id = null) => {
   });
 };
 
+// === 阶段35: v2 LangGraph 入口 + ANP 协议 实现 ===
+
+// v2 smart_chat（默认 single 模式）
+// 实际端点：POST /smart_chat（顶层，无 /api/v2 前缀）
+const sendMessageV2 = (message) => {
+  const options = {
+    method: "POST",
+    data: {
+      message: message.message,
+      conversation_id: message.conversation_id,
+      role: message.role,
+      mode: "single",
+      metadata: {
+        ...(message.metadata || {}),
+        selected_agent:
+          message.metadata && message.metadata.selected_agent
+            ? message.metadata.selected_agent
+            : undefined,
+      },
+    },
+    headers: {},
+    timeout: 120000,
+  };
+  if (message.metadata && message.metadata.selected_agent) {
+    options.headers["X-Target-Agent"] = encodeURIComponent(
+      message.metadata.selected_agent,
+    );
+  }
+  return request("/smart_chat", options);
+};
+
+// v2 multi 模式（4 agent 并行）
+const sendMessageV2Multi = (message) => {
+  const options = {
+    method: "POST",
+    data: {
+      message: message.message,
+      conversation_id: message.conversation_id,
+      role: message.role,
+      mode: "multi",
+      metadata: message.metadata || {},
+    },
+    headers: {},
+    timeout: 180000,
+  };
+  return request("/smart_chat", options);
+};
+
+// 列出所有 sub-agent 状态
+const getV2AgentsStatus = () => {
+  return request("/v2/agents/status", { method: "GET" });
+};
+
+// 单 agent 详情
+const getV2AgentStatus = (agentName) => {
+  return request(`/v2/agents/${encodeURIComponent(agentName)}/status`, {
+    method: "GET",
+  });
+};
+
+// 多模型列表
+const getV2Models = () => {
+  return request("/v2/models", { method: "GET" });
+};
+
+// 4 个 LLM provider
+const getV2ModelProviders = () => {
+  return request("/v2/models/providers", { method: "GET" });
+};
+
+// === ANP 协议接口 ===
+
+// ANP 健康检查
+const getAnpHealth = () => {
+  return request("/anp/health", { method: "GET" });
+};
+
+// ANP Agent Description（hostapi 自己的）
+const getAnpAgentDescription = () => {
+  return request("/anp/agent/ad.json", { method: "GET" });
+};
+
+// ANP OpenRPC
+const getAnpAgentInterface = () => {
+  return request("/anp/agent/interface.json", { method: "GET" });
+};
+
+// 列出所有 PHA agent (带 DID:WBA)
+const getAnpAgents = () => {
+  return request("/anp/agents", { method: "GET" });
+};
+
+// ANP crawler 主动发现
+const discoverAnpAgents = (params = {}) => {
+  return request("/anp/agents/discover", {
+    method: "POST",
+    data: params,
+    headers: {
+      "Content-Type": "application/json",
+    },
+  });
+};
+
+// ANP JSON-RPC 2.0 调用（hostapi 的 /anp/agent/rpc）
+const callAnpRpc = (method, params = {}, id = null) => {
+  const requestBody = {
+    jsonrpc: "2.0",
+    method: method,
+    params: params,
+    id: id || `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+  };
+  return request(`/anp/agent/rpc`, {
+    method: "POST",
+    data: requestBody,
+    headers: {
+      "Content-Type": "application/json",
+    },
+  });
+};
+
+// 自动探测后端是 v1 还是 v2（用 /health 探测 + /v2/agents/status 看 404/200）
+const detectBackendVersion = () => {
+  return new Promise((resolve) => {
+    // 先 GET /health
+    wx.request({
+      url: `${SERVER_URL}/health`,
+      method: "GET",
+      success: (res) => {
+        if (res.statusCode >= 200 && res.statusCode < 300) {
+          // v1 和 v2 都有 /health，再探测 /v2/agents/status
+          wx.request({
+            url: `${SERVER_URL}/v2/agents/status`,
+            method: "GET",
+            success: (res2) => {
+              const isV2 = res2.statusCode === 200;
+              resolve({
+                ok: true,
+                version: isV2 ? "v2" : "v1",
+                v2_available: isV2,
+                health: res.data,
+                v2_agents: isV2 ? res2.data : null,
+              });
+            },
+            fail: () => {
+              resolve({
+                ok: true,
+                version: "v1",
+                v2_available: false,
+                health: res.data,
+              });
+            },
+          });
+        } else {
+          resolve({ ok: false, version: "unknown" });
+        }
+      },
+      fail: (err) => {
+        resolve({ ok: false, version: "unknown", error: err });
+      },
+    });
+  });
+};
+
 module.exports = {
   request,
   checkApiStatus,
@@ -1096,4 +1259,21 @@ module.exports = {
   resolveAgentUrl,
   resolveFileUrl,
   SERVER_URL,
+  // === 阶段35: v2 LangGraph 入口 + ANP 协议 ===
+  // 阶段35新增的 v2 接口
+  sendMessageV2, // v2 smart_chat（默认 single 模式）
+  sendMessageV2Multi, // v2 multi 模式（4 agent 并行）
+  getV2AgentsStatus, // 列出所有 sub-agent 状态
+  getV2AgentStatus, // 单 agent 详情
+  getV2Models, // 多模型列表
+  getV2ModelProviders, // 4 个 LLM provider
+  // 阶段35新增的 ANP 接口
+  getAnpHealth,
+  getAnpAgentDescription, // ANP Agent Description
+  getAnpAgentInterface, // ANP OpenRPC
+  getAnpAgents, // 列出所有 PHA agent (带 DID:WBA)
+  discoverAnpAgents, // ANP crawler 主动发现
+  callAnpRpc, // ANP JSON-RPC 2.0 调用
+  // 阶段35新增：版本探测
+  detectBackendVersion, // 自动探测后端是 v1 还是 v2
 };

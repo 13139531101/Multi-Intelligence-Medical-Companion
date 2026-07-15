@@ -90,14 +90,42 @@
     <text>回到底部</text>
     <text wx:if="{{unreadCount > 0}}">({{unreadCount}})</text>
   </view>
-  
+
+  <!-- 阶段35: v2 路由指示器（用户可见） -->
+  <view wx:if="{{agentRouting && useV2}}" class="agent-routing-indicator">
+    <view class="agent-routing-dot"></view>
+    <text>AI 路由: layer {{agentRouting.layer}} → {{agentRouting.target || selectedAgent}}</text>
+    <text wx:if="{{v2ExecMode === 'multi'}}" style="margin-left: 12rpx;">(4 并行)</text>
+  </view>
+
+  <!-- 阶段35: 当前选中的 agent badge -->
+  <view wx:if="{{selectedAgent && useV2}}" class="agent-routing-indicator" style="background-color: rgba(82, 196, 26, 0.08); border-left-color: #52c41a; color: #52c41a;">
+    <text>✓ 由 {{selectedAgent}} 回答</text>
+  </view>
+
   <!-- 输入区域 -->
   <view class="chat-input-area">
+    <!-- 阶段35: v2 模式切换栏（v1/v2/single/multi） -->
+    <view class="v2-mode-bar" wx:if="{{showV2Bar}}">
+      <view class="v2-mode-group">
+        <text class="v2-mode-label">后端:</text>
+        <view class="v2-mode-pill {{useV2 ? 'active' : ''}}" bindtap="setV2Mode" data-mode="v2">v2 LangGraph</view>
+        <view class="v2-mode-pill {{!useV2 ? 'active' : ''}}" bindtap="setV2Mode" data-mode="v1">v1 A2A</view>
+      </view>
+      <view class="v2-mode-group" wx:if="{{useV2}}">
+        <text class="v2-mode-label">执行:</text>
+        <view class="v2-mode-pill {{v2ExecMode === 'single' ? 'active' : ''}}" bindtap="setV2ExecMode" data-mode="single">单 agent</view>
+        <view class="v2-mode-pill {{v2ExecMode === 'multi' ? 'active' : ''}}" bindtap="setV2ExecMode" data-mode="multi">4 并行</view>
+      </view>
+      <view class="v2-mode-group">
+        <text class="v2-mode-info">{{v2ModeInfo}}</text>
+      </view>
+    </view>
     <view class="input-container">
-      <textarea 
-        class="chat-input" 
-        placeholder="有什么健康问题问我..." 
-        value="{{inputText}}" 
+      <textarea
+        class="chat-input"
+        placeholder="有什么健康问题问我..."
+        value="{{inputText}}"
         bindinput="handleInput"
         auto-height
         maxlength="500"

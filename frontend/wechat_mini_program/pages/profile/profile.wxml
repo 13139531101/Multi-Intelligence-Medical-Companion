@@ -19,6 +19,10 @@
       <view class="menu-title">咨询历史</view>
       <view class="menu-arrow">></view>
     </view>
+    <view class="menu-item" bindtap="goToAgentsStatus">
+      <view class="menu-title">🤖 Agent 状态监控</view>
+      <view class="menu-arrow">></view>
+    </view>
     <view class="menu-item">
       <view class="menu-title">设置</view>
       <view class="menu-arrow">></view>

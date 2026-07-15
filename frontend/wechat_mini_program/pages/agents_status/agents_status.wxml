@@ -1,0 +1,118 @@
+<!-- pages/agents_status/agents_status.wxml -->
+<!-- 阶段35: agent 状态监控页 -->
+<view class="page">
+  <view class="header">
+    <view class="title">🤖 PHA Agent 状态监控</view>
+    <view class="subtitle">v2 LangGraph + ANP (DID:WBA)</view>
+    <view class="meta">
+      <text class="badge {{v2Available ? 'ok' : 'err'}}">v2: {{v2Available ? '✓' : '✗'}}</text>
+      <text class="badge {{anpAvailable ? 'ok' : 'err'}}">ANP: {{anpAvailable ? '✓' : '✗'}}</text>
+      <text class="badge {{v2Available ? 'ok' : 'err'}}">后端: {{backendVersion}}</text>
+    </view>
+  </view>
+
+  <view class="refresh-bar">
+    <button class="btn-refresh" bindtap="refreshAll" disabled="{{loading}}">
+      {{loading ? '刷新中...' : '↻ 刷新'}}
+    </button>
+    <button class="btn-anp-test" bindtap="testAnpRpc">
+      ⚡ ANP RPC 测试
+    </button>
+  </view>
+
+  <view wx:if="{{errorMsg}}" class="error-bar">
+    ⚠ {{errorMsg}}
+  </view>
+
+  <!-- v2 agents -->
+  <view class="section">
+    <view class="section-title">📊 v2 Sub-Agents ({{registry.length}})</view>
+    <view class="agent-list">
+      <view wx:for="{{registry}}" wx:key="name" class="agent-card" bindtap="onAgentTap" data-name="{{item.name}}">
+        <view class="agent-card-header">
+          <text class="agent-name">{{item.name}}</text>
+          <text class="agent-loaded {{item.is_loaded ? 'yes' : 'no'}}">
+            {{item.is_loaded ? '已加载' : '未加载'}}
+          </text>
+        </view>
+        <view class="agent-desc">{{item.description}}</view>
+        <view class="agent-meta">
+          <text class="agent-class">{{item.class}}</text>
+          <text class="agent-tools" wx:if="{{v2Agents[item.name]}}">
+            {{v2Agents[item.name].tools_count || 0}} tools · {{v2Agents[item.name].model || '?'}}
+          </text>
+        </view>
+      </view>
+    </view>
+  </view>
+
+  <!-- ANP agents -->
+  <view class="section">
+    <view class="section-title">🌐 ANP Agents (DID:WBA) ({{anpAgents.length}})</view>
+    <view class="anp-list">
+      <view wx:for="{{anpAgents}}" wx:key="name" class="anp-card">
+        <view class="anp-name">{{item.name}}</view>
+        <view class="anp-desc">{{item.description}}</view>
+        <view class="anp-did" bindtap="copyDid" data-did="{{item.did}}">
+          <text class="did-text">{{item.did}}</text>
+          <text class="did-copy">📋</text>
+        </view>
+      </view>
+    </view>
+  </view>
+
+  <!-- 详情弹层 -->
+  <view wx:if="{{selectedAgent}}" class="detail-mask" bindtap="closeDetail">
+    <view class="detail-card" catchtap="">
+      <view class="detail-header">
+        <text class="detail-title">📋 {{selectedAgent}}</text>
+        <text class="detail-close" bindtap="closeDetail">✕</text>
+      </view>
+      <view wx:if="{{selectedDetail}}" class="detail-body">
+        <view wx:if="{{selectedDetail.error}}" class="detail-error">
+          {{selectedDetail.error}}
+        </view>
+        <view wx:else>
+          <view class="detail-row">
+            <text class="label">Model:</text>
+            <text class="value">{{selectedDetail.model || '?'}}</text>
+          </view>
+          <view class="detail-row">
+            <text class="label">Tools:</text>
+            <text class="value">{{selectedDetail.tools_count || 0}}</text>
+          </view>
+          <view class="detail-row" wx:if="{{selectedDetail.tool_names}}">
+            <text class="label">Tool names:</text>
+            <text class="value tool-names">{{selectedDetail.tool_names}}</text>
+          </view>
+          <view class="detail-row">
+            <text class="label">Class:</text>
+            <text class="value">{{selectedDetail.class || '?'}}</text>
+          </view>
+          <view class="detail-row" wx:if="{{selectedDetail.description}}">
+            <text class="label">Desc:</text>
+            <text class="value">{{selectedDetail.description}}</text>
+          </view>
+          <view class="detail-row" wx:if="{{selectedDetail.system_prompt_chars}}">
+            <text class="label">Prompt chars:</text>
+            <text class="value">{{selectedDetail.system_prompt_chars}}</text>
+          </view>
+        </view>
+      </view>
+    </view>
+  </view>
+
+  <!-- models -->
+  <view class="section" wx:if="{{modelProviders.length > 0}}">
+    <view class="section-title">🧠 LLM Providers ({{modelProviders.length}})</view>
+    <view class="model-list">
+      <view wx:for="{{modelProviders}}" wx:key="name" class="model-card">
+        <text class="model-name">{{item.name || item}}</text>
+      </view>
+    </view>
+  </view>
+
+  <view class="footer">
+    <text>PHA v2.0-stage35 · {{backendVersion}}</text>
+  </view>
+</view>

@@ -34,6 +34,13 @@ Page({
         title: '功能开发中',
         icon: 'none'
       });
+   },
+
+  // 阶段35: 跳转到 Agent 状态监控页
+  goToAgentsStatus() {
+    wx.navigateTo({
+      url: '/pages/agents_status/agents_status',
+    });
   },
 
   logout() {

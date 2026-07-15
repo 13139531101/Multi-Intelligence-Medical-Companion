@@ -1,6 +1,13 @@
 // pages/agent_chat/agent_chat.js
 const {
   sendMessage,
+  sendMessageV2, // 阶段35: v2 smart_chat
+  sendMessageV2Multi, // 阶段35: v2 multi
+  getV2AgentsStatus, // 阶段35: sub-agent 状态
+  getV2AgentStatus,
+  getAnpAgents, // 阶段35: ANP 列出
+  getAnpHealth,
+  detectBackendVersion, // 阶段35: 版本探测
   uploadFile,
   createConversation,
   listMessages,
@@ -45,6 +52,82 @@ Page({
     hasRequestedSubscribe: false,
     pendingAttachments: [],
     isRecording: false,
+    // === 阶段35: v2 LangGraph 选项 ===
+    useV2: true, // 默认开 v2（PHA_USE_V2=true 是 backend 默认）
+    v2ExecMode: "single", // "single" | "multi"
+    showV2Bar: true, // 显示 v2 模式切换栏
+    v2ModeInfo: "", // 副信息（如后端版本 / agent 路由）
+    v2Agents: [], // 缓存的 4 个 sub-agent 状态
+    selectedAgent: null, // 当前选中的 agent（路由结果）
+    agentRouting: null, // 路由详情 {layer, target}
+    anpAgents: [], // 缓存 ANP agents（带 DID）
+  },
+
+  // 阶段35: 切换 v1/v2
+  setV2Mode(e) {
+    const mode = (e.currentTarget.dataset.mode || "").toLowerCase();
+    const useV2 = mode === "v2";
+    this.setData({ useV2 });
+    this._updateV2ModeInfo();
+    wx.showToast({ title: useV2 ? "v2 LangGraph" : "v1 A2A", icon: "none" });
+  },
+
+  // 阶段35: 切换 single/multi
+  setV2ExecMode(e) {
+    const mode = (e.currentTarget.dataset.mode || "single").toLowerCase();
+    this.setData({ v2ExecMode: mode });
+    this._updateV2ModeInfo();
+    wx.showToast({
+      title: mode === "multi" ? "4 agent 并行" : "单 agent",
+      icon: "none",
+    });
+  },
+
+  // 阶段35: 刷新副信息
+  async _updateV2ModeInfo() {
+    const { useV2, v2ExecMode } = this.data;
+    let info = "";
+    if (useV2) {
+      info = v2ExecMode === "multi" ? "v2 · 4 agent 并行" : "v2 · 单 agent";
+    } else {
+      info = "v1 · A2A 私有";
+    }
+    this.setData({ v2ModeInfo: info });
+  },
+
+  // 阶段35: 启动时探测后端 + 拉 agent 列表
+  async onLoadStage35Init() {
+    try {
+      // 1) 探测后端
+      const probe = await detectBackendVersion();
+      if (probe.ok) {
+        if (!probe.v2_available) {
+          // 后端是 v1，自动切回 v1
+          this.setData({ useV2: false });
+        }
+      }
+      this._updateV2ModeInfo();
+
+      // 2) 拉 v2 agents 状态
+      if (this.data.useV2) {
+        try {
+          const status = await getV2AgentsStatus();
+          const registry = (status && status.registry) || [];
+          this.setData({ v2Agents: registry });
+        } catch (e) {
+          console.warn("[v2] getV2AgentsStatus failed", e);
+        }
+        // 3) 拉 ANP agents
+        try {
+          const anp = await getAnpAgents();
+          this.setData({ anpAgents: (anp && anp.agents) || [] });
+        } catch (e) {
+          console.warn("[v2] getAnpAgents failed", e);
+        }
+      }
+    } catch (e) {
+      console.error("[v2] init failed", e);
+    }
   },
 
   // 在页面实例上维护已处理的事件ID集合
@@ -1278,6 +1361,11 @@ Page({
   /**
    * Lifecycle function--Called when page show
    */
+  // 阶段35: onLoad 启动时探测后端
+  onLoad() {
+    this.onLoadStage35Init();
+  },
+
   onShow() {
     if (
       this.data.conversationId &&
@@ -1517,6 +1605,47 @@ Page({
       return Object.assign({}, m, { showThinking: !m.showThinking });
     });
     this.setData({ messages: next });
+  },
+
+  // 阶段35: 统一发送入口（v1/v2/single/multi 自动选择）
+  async _sendWithV2(payload) {
+    const { useV2, v2ExecMode } = this.data;
+    if (useV2) {
+      try {
+        if (v2ExecMode === "multi") {
+          this.setData({ v2ModeInfo: "v2 · 4 agent 并行..." });
+          const result = await sendMessageV2Multi(payload);
+          this._handleV2Response(result);
+          return result;
+        } else {
+          this.setData({ v2ModeInfo: "v2 · 单 agent..." });
+          const result = await sendMessageV2(payload);
+          this._handleV2Response(result);
+          return result;
+        }
+      } catch (e) {
+        console.warn("[v2] sendMessageV2 failed, fallback to v1", e);
+        this.setData({ useV2: false, v2ModeInfo: "v1 · A2A 私有" });
+        // fallthrough to v1
+      }
+    }
+    // v1 fallback
+    this.setData({ v2ModeInfo: "v1 · A2A 私有..." });
+    return await sendMessage(payload);
+  },
+
+  // 阶段35: 处理 v2 响应
+  _handleV2Response(result) {
+    if (!result) return;
+    // v2 返回字段：{ success, message, conversation_id, message_id, selected_agent, routing }
+    if (result.selected_agent) {
+      this.setData({ selectedAgent: result.selected_agent });
+    }
+    if (result.routing) {
+      this.setData({ agentRouting: result.routing });
+    }
+    // 收到响应后副信息切回 idle
+    this._updateV2ModeInfo();
   },
 
   async sendMessage() {
@@ -1995,7 +2124,7 @@ Page({
           this.scheduleScrollToBottom(true);
         }
 
-        const sendResult = await sendMessage({
+        const sendResult = await this._sendWithV2({
           conversation_id: convId,
           role: "user",
           message: text,
