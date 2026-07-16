@@ -69,6 +69,35 @@ async def stats():
     return multi_model.get_router().stats()
 
 
+# ============================================================
+# 阶段39-3: LLM 语义缓存 HTTP 端点
+# ============================================================
+
+@mm_router.get("/cache/stats")
+async def cache_stats():
+    """阶段39-3: 缓存统计"""
+    from .semantic_cache import get_cache
+    return get_cache().stats()
+
+
+@mm_router.get("/cache/entries")
+async def cache_entries(limit: int = 20):
+    """列出缓存条目（调试用）"""
+    from .semantic_cache import get_cache
+    return {
+        "entries": get_cache().list_entries(limit=limit),
+        "stats": get_cache().stats(),
+    }
+
+
+@mm_router.post("/cache/clear")
+async def cache_clear():
+    """清空缓存"""
+    from .semantic_cache import get_cache
+    get_cache().clear()
+    return {"cleared": True, "stats": get_cache().stats()}
+
+
 @mm_router.post("/test-fallback")
 async def test_fallback():
     """测 fallback 链：用空 prompt 触发所有 provider 失败，确认 fallback 走完"""

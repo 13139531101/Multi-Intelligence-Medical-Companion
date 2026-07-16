@@ -1424,6 +1424,22 @@ const getAgentRegistry = () => {
   return request("/v2/agents/registry", { method: "GET" });
 };
 
+// 阶段39-3: LLM 语义缓存
+const getLLMCacheStats = () => {
+  return request("/v2/models/cache/stats", { method: "GET" });
+};
+
+const getLLMCacheEntries = (limit = 20) => {
+  return request("/v2/models/cache/entries", {
+    method: "GET",
+    data: { limit },
+  });
+};
+
+const clearLLMCache = () => {
+  return request("/v2/models/cache/clear", { method: "POST" });
+};
+
 const enableAgent = (name) => {
   return request(`/v2/agents/registry/${encodeURIComponent(name)}/enable`, {
     method: "POST",
@@ -1577,6 +1593,10 @@ module.exports = {
   enableAgent,
   disableAgent,
   resolveAgentByAlias,
+  // 阶段39-3: LLM 语义缓存
+  getLLMCacheStats,
+  getLLMCacheEntries,
+  clearLLMCache,
   callAnpRpc, // ANP JSON-RPC 2.0 调用
   // 阶段35新增：版本探测
   detectBackendVersion, // 自动探测后端是 v1 还是 v2
