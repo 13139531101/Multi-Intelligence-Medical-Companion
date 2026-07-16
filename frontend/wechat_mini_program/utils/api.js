@@ -1419,6 +1419,29 @@ const removeAlertRule = (name) => {
   });
 };
 
+// 阶段39-1: AgentRegistry HTTP 端点
+const getAgentRegistry = () => {
+  return request("/v2/agents/registry", { method: "GET" });
+};
+
+const enableAgent = (name) => {
+  return request(`/v2/agents/registry/${encodeURIComponent(name)}/enable`, {
+    method: "POST",
+  });
+};
+
+const disableAgent = (name) => {
+  return request(`/v2/agents/registry/${encodeURIComponent(name)}/disable`, {
+    method: "POST",
+  });
+};
+
+const resolveAgentByAlias = (alias) => {
+  return request(`/v2/agents/registry/alias/${encodeURIComponent(alias)}`, {
+    method: "GET",
+  });
+};
+
 // ANP JSON-RPC 2.0 调用（hostapi 的 /anp/agent/rpc）
 const callAnpRpc = (method, params = {}, id = null) => {
   const requestBody = {
@@ -1549,6 +1572,11 @@ module.exports = {
   evaluateAlerts,
   addAlertRule,
   removeAlertRule,
+  // 阶段39-1: AgentRegistry
+  getAgentRegistry,
+  enableAgent,
+  disableAgent,
+  resolveAgentByAlias,
   callAnpRpc, // ANP JSON-RPC 2.0 调用
   // 阶段35新增：版本探测
   detectBackendVersion, // 自动探测后端是 v1 还是 v2

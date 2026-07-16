@@ -25,6 +25,7 @@ PHA v2 ANP Bridge - 把 hostapi + 4 个 MCP agent 包装为 ANP
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
 import os
 import time
@@ -327,6 +328,79 @@ def create_hostapi_anp_app():
         if not url:
             return {"did": did, "resolved": False}
         return {"did": did, "resolved": True, "url": url}
+
+    # ============================================================
+    # 阶段39-2: DID WBA 签名/验证 HTTP 端点
+    # ============================================================
+    from .did_wba import get_keystore as _get_keystore, verify_request
+
+    @app.get("/did/list")
+    async def did_list():
+        """阶段39-2: 列出所有已注册的 DID"""
+        ks = _get_keystore()
+        return {
+            "dids": [
+                {
+                    "did": did,
+                    "doc": ks.get_document(did).to_dict() if ks.get_document(did) else None,
+                }
+                for did in ks.list_dids()
+            ]
+        }
+
+    @app.get("/did/document/{did}")
+    async def did_document(did: str):
+        """阶段39-2: 获取 DID 文档（含公钥）"""
+        ks = _get_keystore()
+        doc = ks.get_document(did)
+        if not doc:
+            return {"resolved": False, "did": did}
+        return {"resolved": True, "did": did, "document": doc.to_dict()}
+
+    @app.post("/did/verify")
+    async def did_verify(request: Request):
+        """阶段39-2: 验证签名
+
+        body: {did, signature, method, path, body, timestamp}
+        """
+        body = await request.json()
+        did = body.get("did")
+        signature = body.get("signature")
+        method = body.get("method", "GET")
+        path = body.get("path", "/")
+        req_body = body.get("body", "")
+        timestamp = body.get("timestamp")
+
+        ks = _get_keystore()
+        doc = ks.get_document(did)
+        if not doc:
+            return {"valid": False, "error": "unknown did"}
+
+        public_key = base64.b64decode(doc.public_key)
+        valid, err = verify_request(public_key, signature, method, path, req_body, timestamp)
+        return {"valid": valid, "error": err, "did": did}
+
+    @app.post("/did/sign")
+    async def did_sign(request: Request):
+        """阶段39-2: 用某 DID 私钥签名（仅测试用，生产应禁用）"""
+        from .did_wba import sign_request
+        body = await request.json()
+        did = body.get("did")
+        method = body.get("method", "GET")
+        path = body.get("path", "/")
+        req_body = body.get("body", "")
+
+        ks = _get_keystore()
+        private_key = ks.get_private_key(did)
+        if not private_key:
+            return {"error": "no private key for did"}
+
+        signature = sign_request(private_key, method, path, req_body)
+        return {
+            "did": did,
+            "signature": signature,
+            "timestamp": time.time(),
+        }
 
     @app.get("/health")
     async def health():

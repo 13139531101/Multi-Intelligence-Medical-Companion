@@ -455,3 +455,65 @@ async def v2_alerts_remove_rule(name: str):
     mgr = get_alert_manager()
     mgr.remove_rule(name)
     return {"status": "removed", "rule": name}
+
+
+# ============================================================
+# 阶段39-1: AgentRegistry HTTP 端点
+# ============================================================
+
+@router.get("/agents/registry")
+async def v2_agents_registry():
+    """阶段39-1: 列出 AgentRegistry 中所有 agent（带 spec 详情）"""
+    from .agent_registry import AgentRegistry, discover_agents
+    # 强制 import sub_agents 触发装饰器
+    discover_agents(force=True)
+    return {
+        "agents": [
+            {
+                "name": s.name,
+                "description": s.description,
+                "keywords": s.keywords,
+                "tools_module": s.tools_module,
+                "aliases": s.aliases,
+                "enabled": s.enabled,
+                "class_name": s.class_name,
+                "node_name": s.node_name,
+            }
+            for s in AgentRegistry.list(enabled_only=False)
+        ],
+        "stats": AgentRegistry.stats(),
+    }
+
+
+@router.post("/agents/registry/{name}/enable")
+async def v2_agents_registry_enable(name: str):
+    """阶段39-1: 启用一个 agent"""
+    from .agent_registry import AgentRegistry
+    AgentRegistry.enable(name, True)
+    return {"status": "enabled", "agent": name}
+
+
+@router.post("/agents/registry/{name}/disable")
+async def v2_agents_registry_disable(name: str):
+    """阶段39-1: 禁用一个 agent（用于灰度）"""
+    from .agent_registry import AgentRegistry
+    AgentRegistry.enable(name, False)
+    return {"status": "disabled", "agent": name}
+
+
+@router.get("/agents/registry/alias/{alias}")
+async def v2_agents_resolve_alias(alias: str):
+    """阶段39-1: 按 alias 解析 agent"""
+    from .agent_registry import AgentRegistry
+    spec = AgentRegistry.by_alias(alias)
+    if not spec:
+        return {"resolved": False, "alias": alias}
+    return {
+        "resolved": True,
+        "alias": alias,
+        "agent": {
+            "name": spec.name,
+            "description": spec.description,
+            "enabled": spec.enabled,
+        },
+    }
