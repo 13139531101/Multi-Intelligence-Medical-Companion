@@ -1,173 +1,210 @@
-// 阶段44-1: 现代化 Dashboard（深湖蓝+薄荷绿 + 大量留白 + 卡片 + 动效）
-import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import {
-  Box, Container, Grid, Card, CardContent, Typography, Button, Avatar, Chip,
-  Stack, IconButton, LinearProgress, Paper, Divider, Tooltip, Badge,
-} from '@mui/material';
+  Box,
+  Container,
+  Grid,
+  Card,
+  CardContent,
+  Typography,
+  Button,
+  Chip,
+  Stack,
+  IconButton,
+  LinearProgress,
+  Paper,
+  Tooltip,
+  Divider,
+  Avatar,
+} from "@mui/material";
 import {
-  FavoriteOutlined, MedicationOutlined, ChatOutlined, DescriptionOutlined,
-  TrendingUp, TrendingDown, NotificationsNoneOutlined, AddOutlined,
-  CloudUploadOutlined, EditNoteOutlined, InsightsOutlined, AccessTimeOutlined,
-  SmartToyOutlined, HealthAndSafetyOutlined, FolderOpenOutlined,
-  EventNoteOutlined, PsychologyOutlined, AssignmentOutlined, SpeedOutlined,
-  ArrowForwardIos,
-} from '@mui/icons-material';
-import { getHealthData, getMedicationReminders, getConsultationHistory } from '../api/healthApi';
-import { useAuth } from '../contexts/AuthContext';
-import Header from '../components/HealthHeader';
+  FavoriteBorder,
+  Medication,
+  Description,
+  Assignment,
+  CloudUpload,
+  EditNote,
+  Insights,
+  AccessTime,
+  LocalHospital,
+  Science,
+  Warning,
+  NotificationsNone,
+  Person,
+} from "@mui/icons-material";
+import {
+  getMedicationReminders,
+  getConsultationHistory,
+} from "../api/healthApi";
+import { useAuth } from "../contexts/AuthContext";
+import Header from "../components/HealthHeader";
 
-// 4 个 AI 智能体配置
-const AGENTS = [
-  { name: '健康顾问', icon: '💬', color: '#2D7A8C', desc: '健康问答', path: '/test-chat', bg: 'linear-gradient(135deg, #2D7A8C 0%, #5BA4B5 100%)' },
-  { name: '档案管理', icon: '📋', color: '#5EC5B8', desc: '病历 OCR', path: '/health-records', bg: 'linear-gradient(135deg, #5EC5B8 0%, #8DD9CE 100%)' },
-  { name: '用药提醒', icon: '💊', color: '#F4A261', desc: '智能提醒', path: '/medication', bg: 'linear-gradient(135deg, #F4A261 0%, #F8C088 100%)' },
-  { name: '就诊小结', icon: '📝', color: '#9B6DD7', desc: 'AI 生成', path: '/summary', bg: 'linear-gradient(135deg, #9B6DD7 0%, #B894E0 100%)' },
+const SECTIONS = [
+  { name: "健康档案", path: "/health-records", desc: "病历与检查报告" },
+  { name: "用药管理", path: "/medication", desc: "每日提醒与记录" },
+  { name: "问医生", path: "/test-chat", desc: "在线咨询" },
+  { name: "就诊小结", path: "/summary", desc: "病史与建议" },
 ];
 
 export default function Dashboard() {
   const navigate = useNavigate();
   const { user } = useAuth();
   const [loading, setLoading] = useState(true);
-  const [healthScore, setHealthScore] = useState(60);
-  const [medToday, setMedToday] = useState({ taken: 3, total: 5, next: '20:00' });
-  const [records, setRecords] = useState({ total: 12, reports: 5, allergies: 3, exams: 8 });
-  const [conversations, setConversations] = useState([]);
-  const [trends] = useState([
-    { day: '周一', score: 58 }, { day: '周二', score: 62 }, { day: '周三', score: 60 },
-    { day: '周四', score: 65 }, { day: '周五', score: 68 }, { day: '周六', score: 72 },
-    { day: '今日', score: 60 },
-  ]);
-  const [tips] = useState([
-    { icon: '💧', text: '您昨天饮水偏少，建议每天 1500-2000ml' },
-    { icon: '🛌', text: '本周平均睡眠 6.5 小时，建议 7-8 小时' },
-    { icon: '🚶', text: '您的本周步数低于平均，多多走动吧' },
+  const [med, setMed] = useState({
+    taken: 2,
+    total: 5,
+    next: "20:00 硝苯地平 30mg",
+  });
+  const [records, setRecords] = useState({
+    total: 12,
+    reports: 5,
+    allergies: 3,
+    exams: 8,
+  });
+  const [weekScore] = useState([
+    { day: "周一", value: 58 },
+    { day: "周二", value: 62 },
+    { day: "周三", value: 60 },
+    { day: "周四", value: 65 },
+    { day: "周五", value: 68 },
+    { day: "周六", value: 72 },
+    { day: "今日", value: 60 },
   ]);
 
   useEffect(() => {
     (async () => {
       try {
-        const [med, convs] = await Promise.all([
-          getMedicationReminders({ today: true }).catch(() => null),
-          getConsultationHistory({ limit: 3 }).catch(() => []),
-        ]);
-        if (med) setMedToday(med);
-        if (convs) setConversations(convs);
-      } catch (e) { /* 静默 */ }
+        const m = await getMedicationReminders({ today: true }).catch(
+          () => null,
+        );
+        if (m) setMed(m);
+      } catch (e) {
+        /* 静默 */
+      }
       setLoading(false);
     })();
   }, []);
 
-  const maxScore = Math.max(...trends.map(t => t.score));
-
   return (
-    <Box sx={{ minHeight: '100vh', bgcolor: 'background.default' }}>
+    <Box sx={{ minHeight: "100vh", bgcolor: "background.default" }}>
       <Header />
 
-      <Container maxWidth="xl" sx={{ py: 4 }}>
-        {loading && <LinearProgress sx={{ mb: 2, borderRadius: 1 }} />}
+      <Container maxWidth="lg" sx={{ py: 4 }}>
+        {loading && <LinearProgress sx={{ mb: 2 }} />}
 
-        {/* 欢迎 + 时间 */}
-        <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 3 }}>
+        <Stack
+          direction="row"
+          alignItems="center"
+          justifyContent="space-between"
+          sx={{ mb: 4 }}
+        >
           <Box>
-            <Typography variant="h3" sx={{ fontWeight: 700, mb: 0.5 }}>
-              你好，{user?.username || '朋友'} 👋
+            <Typography variant="h4" sx={{ fontWeight: 600, mb: 0.5 }}>
+              你好，{user?.username || "朋友"}
             </Typography>
-            <Typography variant="body1" color="text.secondary">
-              今天感觉怎么样？让我们一起管理健康
+            <Typography variant="body2" color="text.secondary">
+              7月16日 周三 · 记录健康，管理用药
             </Typography>
           </Box>
           <Tooltip title="通知">
-            <IconButton><Badge badgeContent={3} color="error"><NotificationsNoneOutlined /></Badge></IconButton>
+            <IconButton>
+              <NotificationsNone />
+            </IconButton>
           </Tooltip>
         </Stack>
 
-        {/* 健康数据卡片 (2 大卡) */}
-        <Grid container spacing={3} sx={{ mb: 3 }}>
-          {/* 健康评分 */}
+        <Grid container spacing={2} sx={{ mb: 3 }}>
           <Grid item xs={12} md={6}>
-            <Card sx={{ background: 'linear-gradient(135deg, #2D7A8C 0%, #5BA4B5 100%)', color: 'white', height: '100%' }}>
-              <CardContent sx={{ p: 3 }}>
-                <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 2 }}>
-                  <Stack direction="row" alignItems="center" spacing={1}>
-                    <FavoriteOutlined />
-                    <Typography variant="body2" sx={{ opacity: 0.9 }}>健康评分</Typography>
-                  </Stack>
-                  <Chip
-                    icon={<TrendingUp sx={{ fontSize: 14 }} />}
-                    label="较昨日 +2"
-                    size="small"
-                    sx={{ bgcolor: 'rgba(255,255,255,0.2)', color: 'white' }}
-                  />
+            <Card>
+              <CardContent>
+                <Stack
+                  direction="row"
+                  alignItems="center"
+                  spacing={1}
+                  sx={{ mb: 1.5, color: "text.secondary" }}
+                >
+                  <FavoriteBorder sx={{ fontSize: 18 }} />
+                  <Typography variant="body2">健康评分</Typography>
                 </Stack>
-                <Stack direction="row" alignItems="baseline" spacing={1} sx={{ mb: 2 }}>
-                  <Typography variant="h1" sx={{ fontWeight: 800, fontSize: '4rem' }}>{healthScore}</Typography>
-                  <Typography variant="h6" sx={{ opacity: 0.8 }}>/ 100</Typography>
+                <Stack
+                  direction="row"
+                  alignItems="baseline"
+                  spacing={1}
+                  sx={{ mb: 2 }}
+                >
+                  <Typography
+                    variant="h2"
+                    sx={{ fontWeight: 700, color: "primary.main" }}
+                  >
+                    60
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    / 100
+                  </Typography>
                 </Stack>
-                <Box sx={{ position: 'relative', height: 80 }}>
-                  <svg viewBox="0 0 300 80" style={{ width: '100%', height: '100%' }} preserveAspectRatio="none">
-                    <defs>
-                      <linearGradient id="trendGrad" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stopColor="rgba(255,255,255,0.6)" />
-                        <stop offset="100%" stopColor="rgba(255,255,255,0)" />
-                      </linearGradient>
-                    </defs>
+                <Box sx={{ height: 50 }}>
+                  <svg
+                    viewBox="0 0 300 50"
+                    style={{ width: "100%", height: "100%" }}
+                    preserveAspectRatio="none"
+                  >
                     <polyline
-                      points={trends.map((t, i) => `${i * 50 + 10},${80 - (t.score / 100) * 70}`).join(' ')}
+                      points={weekScore
+                        .map(
+                          (t, i) =>
+                            `${i * 50 + 10},${50 - (t.value / 100) * 40}`,
+                        )
+                        .join(" ")}
                       fill="none"
-                      stroke="white"
-                      strokeWidth="2.5"
-                    />
-                    <polygon
-                      points={`10,80 ${trends.map((t, i) => `${i * 50 + 10},${80 - (t.score / 100) * 70}`).join(' ')} 260,80`}
-                      fill="url(#trendGrad)"
+                      stroke="#1565C0"
+                      strokeWidth="2"
                     />
                   </svg>
                 </Box>
-                <Typography variant="caption" sx={{ opacity: 0.7 }}>过去 7 天趋势</Typography>
+                <Typography variant="caption" color="text.secondary">
+                  过去 7 天
+                </Typography>
               </CardContent>
             </Card>
           </Grid>
 
-          {/* 今日用药 */}
           <Grid item xs={12} md={6}>
-            <Card sx={{ background: 'linear-gradient(135deg, #F4A261 0%, #F8C088 100%)', color: 'white', height: '100%' }}>
-              <CardContent sx={{ p: 3 }}>
-                <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 2 }}>
-                  <Stack direction="row" alignItems="center" spacing={1}>
-                    <MedicationOutlined />
-                    <Typography variant="body2" sx={{ opacity: 0.9 }}>今日用药</Typography>
-                  </Stack>
-                  <Button
-                    size="small"
-                    variant="contained"
-                    sx={{ bgcolor: 'rgba(255,255,255,0.2)', '&:hover': { bgcolor: 'rgba(255,255,255,0.3)' } }}
-                    onClick={() => navigate('/medication')}
-                  >
-                    详情
-                  </Button>
+            <Card>
+              <CardContent>
+                <Stack
+                  direction="row"
+                  alignItems="center"
+                  spacing={1}
+                  sx={{ mb: 1.5, color: "text.secondary" }}
+                >
+                  <Medication sx={{ fontSize: 18 }} />
+                  <Typography variant="body2">今日用药</Typography>
                 </Stack>
-                <Stack direction="row" alignItems="baseline" spacing={1} sx={{ mb: 2 }}>
-                  <Typography variant="h1" sx={{ fontWeight: 800, fontSize: '4rem' }}>
-                    {medToday.taken}
+                <Stack
+                  direction="row"
+                  alignItems="baseline"
+                  spacing={1}
+                  sx={{ mb: 2 }}
+                >
+                  <Typography
+                    variant="h2"
+                    sx={{ fontWeight: 700, color: "secondary.main" }}
+                  >
+                    {med.taken}
                   </Typography>
-                  <Typography variant="h6" sx={{ opacity: 0.8 }}>/ {medToday.total} 已服</Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    / {med.total} 已服
+                  </Typography>
                 </Stack>
                 <LinearProgress
                   variant="determinate"
-                  value={(medToday.taken / medToday.total) * 100}
-                  sx={{
-                    height: 8,
-                    borderRadius: 4,
-                    bgcolor: 'rgba(255,255,255,0.2)',
-                    mb: 1.5,
-                    '& .MuiLinearProgress-bar': { bgcolor: 'white' },
-                  }}
+                  value={(med.taken / med.total) * 100}
+                  sx={{ mb: 1.5 }}
                 />
                 <Stack direction="row" alignItems="center" spacing={1}>
-                  <AccessTimeOutlined sx={{ fontSize: 18 }} />
-                  <Typography variant="body2" sx={{ opacity: 0.9 }}>
-                    下次用药：<strong>{medToday.next}</strong>（硝苯地平 30mg）
+                  <AccessTime sx={{ fontSize: 14, color: "text.secondary" }} />
+                  <Typography variant="caption" color="text.secondary">
+                    下次：{med.next}
                   </Typography>
                 </Stack>
               </CardContent>
@@ -175,199 +212,143 @@ export default function Dashboard() {
           </Grid>
         </Grid>
 
-        {/* AI 智能体 */}
-        <Paper sx={{ p: 3, mb: 3, borderRadius: 4 }}>
-          <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 2 }}>
-            <Stack direction="row" alignItems="center" spacing={1.5}>
-              <SmartToyOutlined sx={{ color: 'primary.main', fontSize: 28 }} />
-              <Box>
-                <Typography variant="h5" sx={{ fontWeight: 600 }}>AI 智能体</Typography>
-                <Typography variant="caption" color="text.secondary">
-                  4 个专业助手 · 5 个工具 · 6 个技能 · SSE 实时响应
-                </Typography>
-              </Box>
-            </Stack>
-            <Button endIcon={<ArrowForwardIos sx={{ fontSize: 14 }} />} size="small">
-              全部
-            </Button>
-          </Stack>
-          <Grid container spacing={2}>
-            {AGENTS.map((agent) => (
-              <Grid item xs={6} md={3} key={agent.name}>
-                <Card
-                  onClick={() => navigate(agent.path)}
+        <Paper sx={{ p: 2.5, mb: 3 }}>
+          <Typography variant="h6" sx={{ fontWeight: 600, mb: 2 }}>
+            快捷入口
+          </Typography>
+          <Grid container spacing={1.5}>
+            {SECTIONS.map((s) => (
+              <Grid item xs={6} md={3} key={s.name}>
+                <Paper
+                  onClick={() => navigate(s.path)}
+                  variant="outlined"
                   sx={{
-                    cursor: 'pointer',
-                    background: agent.bg,
-                    color: 'white',
-                    height: 130,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    flexDirection: 'column',
-                    '&:hover': { transform: 'translateY(-4px) scale(1.02)' },
+                    p: 2,
+                    cursor: "pointer",
+                    textAlign: "center",
+                    transition: "all 0.15s",
+                    "&:hover": {
+                      borderColor: "primary.main",
+                      bgcolor: "rgba(21, 101, 192, 0.04)",
+                    },
                   }}
                 >
-                  <Typography sx={{ fontSize: '2.5rem', mb: 1 }}>{agent.icon}</Typography>
-                  <Typography variant="h6" sx={{ fontWeight: 600, color: 'white' }}>{agent.name}</Typography>
-                  <Typography variant="caption" sx={{ opacity: 0.9 }}>{agent.desc}</Typography>
-                </Card>
+                  <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
+                    {s.name}
+                  </Typography>
+                  <Typography
+                    variant="caption"
+                    color="text.secondary"
+                    sx={{ display: "block", mt: 0.5 }}
+                  >
+                    {s.desc}
+                  </Typography>
+                </Paper>
               </Grid>
             ))}
           </Grid>
         </Paper>
 
-        {/* 快速操作 + 健康档案概览 */}
-        <Grid container spacing={3} sx={{ mb: 3 }}>
-          {/* 快速操作 */}
-          <Grid item xs={12} md={6}>
-            <Paper sx={{ p: 3, borderRadius: 4, height: '100%' }}>
+        <Grid container spacing={2}>
+          <Grid item xs={12} md={7}>
+            <Paper sx={{ p: 2.5 }}>
               <Typography variant="h6" sx={{ fontWeight: 600, mb: 2 }}>
-                <SpeedOutlined sx={{ verticalAlign: 'middle', mr: 1, color: 'primary.main' }} />
-                快速操作
+                健康档案
               </Typography>
               <Grid container spacing={1.5}>
                 {[
-                  { icon: <CloudUploadOutlined />, label: '上传病历', color: '#2D7A8C', path: '/health-records' },
-                  { icon: <ChatOutlined />, label: '问 AI', color: '#5EC5B8', path: '/test-chat' },
-                  { icon: <EditNoteOutlined />, label: '记录症状', color: '#F4A261', path: '/test-chat' },
-                  { icon: <InsightsOutlined />, label: '健康趋势', color: '#9B6DD7', path: '/dashboard' },
-                ].map((act) => (
-                  <Grid item xs={6} key={act.label}>
-                    <Button
-                      fullWidth
-                      startIcon={act.icon}
-                      onClick={() => navigate(act.path)}
-                      sx={{
-                        bgcolor: `${act.color}10`,
-                        color: act.color,
-                        py: 1.5,
-                        '&:hover': { bgcolor: `${act.color}20` },
-                      }}
-                    >
-                      {act.label}
-                    </Button>
-                  </Grid>
-                ))}
-              </Grid>
-            </Paper>
-          </Grid>
-
-          {/* 档案统计 */}
-          <Grid item xs={12} md={6}>
-            <Paper sx={{ p: 3, borderRadius: 4, height: '100%' }}>
-              <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 2 }}>
-                <Typography variant="h6" sx={{ fontWeight: 600 }}>
-                  <FolderOpenOutlined sx={{ verticalAlign: 'middle', mr: 1, color: 'primary.main' }} />
-                  健康档案
-                </Typography>
-                <Button size="small" onClick={() => navigate('/health-records')}>
-                  查看全部
-                </Button>
-              </Stack>
-              <Grid container spacing={2}>
-                {[
-                  { label: '病历', value: records.total, color: '#2D7A8C', icon: '📋' },
-                  { label: '检查报告', value: records.reports, color: '#5EC5B8', icon: '🩸' },
-                  { label: '过敏记录', value: records.allergies, color: '#E76F51', icon: '⚠️' },
-                  { label: '检查项目', value: records.exams, color: '#9B6DD7', icon: '🔬' },
+                  { label: "病历", value: records.total, icon: <Assignment /> },
+                  {
+                    label: "检查报告",
+                    value: records.reports,
+                    icon: <Description />,
+                  },
+                  {
+                    label: "过敏记录",
+                    value: records.allergies,
+                    icon: <Warning />,
+                  },
+                  {
+                    label: "检查项目",
+                    value: records.exams,
+                    icon: <Science />,
+                  },
                 ].map((stat) => (
-                  <Grid item xs={6} key={stat.label}>
-                    <Box
+                  <Grid item xs={6} md={3} key={stat.label}>
+                    <Paper
+                      variant="outlined"
+                      onClick={() => navigate("/health-records")}
                       sx={{
-                        p: 2,
-                        borderRadius: 2,
-                        bgcolor: `${stat.color}08`,
-                        border: `1px solid ${stat.color}20`,
+                        p: 1.5,
+                        textAlign: "center",
+                        cursor: "pointer",
+                        "&:hover": { borderColor: "primary.main" },
                       }}
                     >
-                      <Typography variant="caption" color="text.secondary">{stat.label}</Typography>
-                      <Stack direction="row" alignItems="baseline" justifyContent="space-between">
-                        <Typography variant="h4" sx={{ fontWeight: 700, color: stat.color }}>
-                          {stat.value}
-                        </Typography>
-                        <Typography sx={{ fontSize: '1.5rem' }}>{stat.icon}</Typography>
-                      </Stack>
-                    </Box>
+                      <Avatar
+                        sx={{
+                          mx: "auto",
+                          mb: 1,
+                          width: 32,
+                          height: 32,
+                          bgcolor: "primary.main",
+                        }}
+                      >
+                        {stat.icon}
+                      </Avatar>
+                      <Typography variant="h5" sx={{ fontWeight: 600 }}>
+                        {stat.value}
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        {stat.label}
+                      </Typography>
+                    </Paper>
                   </Grid>
                 ))}
               </Grid>
-            </Paper>
-          </Grid>
-        </Grid>
-
-        {/* AI 智能建议 + 最近对话 */}
-        <Grid container spacing={3}>
-          <Grid item xs={12} md={7}>
-            <Paper sx={{ p: 3, borderRadius: 4, height: '100%' }}>
-              <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 2 }}>
-                <Typography variant="h6" sx={{ fontWeight: 600 }}>
-                  <PsychologyOutlined sx={{ verticalAlign: 'middle', mr: 1, color: 'secondary.main' }} />
-                  AI 智能建议
-                </Typography>
-                <Chip label="每天更新" size="small" color="secondary" variant="outlined" />
-              </Stack>
-              <Stack spacing={2}>
-                {tips.map((tip, i) => (
-                  <Box
-                    key={i}
-                    sx={{
-                      p: 2,
-                      borderRadius: 2,
-                      bgcolor: 'background.default',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 2,
-                    }}
-                  >
-                    <Typography sx={{ fontSize: '1.8rem' }}>{tip.icon}</Typography>
-                    <Typography variant="body2" sx={{ flex: 1 }}>{tip.text}</Typography>
-                  </Box>
-                ))}
-              </Stack>
             </Paper>
           </Grid>
 
           <Grid item xs={12} md={5}>
-            <Paper sx={{ p: 3, borderRadius: 4, height: '100%' }}>
-              <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 2 }}>
+            <Paper sx={{ p: 2.5 }}>
+              <Stack
+                direction="row"
+                alignItems="center"
+                justifyContent="space-between"
+                sx={{ mb: 2 }}
+              >
                 <Typography variant="h6" sx={{ fontWeight: 600 }}>
-                  <ChatOutlined sx={{ verticalAlign: 'middle', mr: 1, color: 'primary.main' }} />
-                  最近对话
+                  本周服药
                 </Typography>
-                <Button size="small" onClick={() => navigate('/conversations')}>
-                  历史
-                </Button>
+                <Typography variant="caption" color="text.secondary">
+                  92%
+                </Typography>
               </Stack>
-              {conversations.length === 0 ? (
-                <Box sx={{ textAlign: 'center', py: 4 }}>
-                  <ChatOutlined sx={{ fontSize: 48, color: 'text.disabled', mb: 1 }} />
-                  <Typography variant="body2" color="text.secondary">还没有对话</Typography>
-                  <Button variant="contained" sx={{ mt: 2 }} onClick={() => navigate('/test-chat')}>
-                    开始第一次对话
-                  </Button>
-                </Box>
-              ) : (
-                <Stack spacing={1}>
-                  {conversations.slice(0, 3).map((c) => (
-                    <Box
-                      key={c.id || c.conversation_id}
-                      onClick={() => navigate('/conversations/' + (c.id || c.conversation_id))}
-                      sx={{
-                        p: 1.5,
-                        borderRadius: 2,
-                        cursor: 'pointer',
-                        '&:hover': { bgcolor: 'background.default' },
-                      }}
+              <Stack spacing={1}>
+                {weekScore.slice(0, 7).map((d) => (
+                  <Stack
+                    key={d.day}
+                    direction="row"
+                    alignItems="center"
+                    spacing={1.5}
+                  >
+                    <Typography variant="caption" sx={{ width: 40 }}>
+                      {d.day}
+                    </Typography>
+                    <LinearProgress
+                      variant="determinate"
+                      value={d.value}
+                      sx={{ flex: 1 }}
+                    />
+                    <Typography
+                      variant="caption"
+                      sx={{ width: 32, textAlign: "right" }}
                     >
-                      <Typography variant="body2" sx={{ fontWeight: 500 }}>{c.title || '新对话'}</Typography>
-                      <Typography variant="caption" color="text.secondary">
-                        {new Date(c.updated_at || c.created_at).toLocaleString()}
-                      </Typography>
-                    </Box>
-                  ))}
-                </Stack>
-              )}
+                      {d.value}%
+                    </Typography>
+                  </Stack>
+                ))}
+              </Stack>
             </Paper>
           </Grid>
         </Grid>
