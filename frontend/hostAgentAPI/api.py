@@ -130,6 +130,30 @@ try:
     print("[hostapi] v2 multi-model endpoints mounted: /v2/models/*")
 except Exception as _e:
     import traceback
+
+# 阶段41-1: Skills + Tools
+try:
+    from A2AServer.v2.skills_endpoints import router as skills_router
+    app.include_router(skills_router)
+    print("[hostapi] v2 skills/tools mounted: /v2/skills, /v2/tools")
+except Exception as _e:
+    print(f"[hostapi] skills mount failed: {_e}")
+
+# 阶段41-2: MCP loader + 可视化
+try:
+    from A2AServer.v2.mcp_endpoints import router as mcp_router
+    app.include_router(mcp_router)
+    print("[hostapi] v2 mcp mounted: /v2/mcp/* (含 SSE 可视化)")
+except Exception as _e:
+    print(f"[hostapi] mcp mount failed: {_e}")
+
+# 阶段41-3: Skill/MCP 注册表管理（增删改）
+try:
+    from A2AServer.v2.registry_endpoints import router as registry_router
+    app.include_router(registry_router)
+    print("[hostapi] v2 registry mounted: /v2/registry/* (skill/mcp 管理)")
+except Exception as _e:
+    print(f"[hostapi] registry mount failed: {_e}")
     print(f"[hostapi] v2 multi-model endpoints mount failed: {_e}")
     traceback.print_exc()
 

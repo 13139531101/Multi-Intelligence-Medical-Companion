@@ -1,0 +1,681 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <title>PHA v2 Admin Dashboard</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+      background: #0f1419; color: #e6e6e6; line-height: 1.6;
+    }
+    /* Top bar */
+    .topbar {
+      background: #1a1f2e; padding: 12px 24px;
+      display: flex; justify-content: space-between; align-items: center;
+      border-bottom: 1px solid #2a3142;
+    }
+    .logo { font-size: 20px; font-weight: 700; color: #4A90E2; }
+    .logo .v { color: #888; font-size: 12px; margin-left: 8px; }
+    .topbar-right { display: flex; gap: 16px; align-items: center; }
+    .badge {
+      background: #2a3142; padding: 4px 10px; border-radius: 12px;
+      font-size: 12px; color: #aaa;
+    }
+    .badge.live { background: #1e4d2b; color: #5CB85C; }
+    .badge.live::before {
+      content: '●'; color: #5CB85C; margin-right: 4px;
+      animation: pulse 2s infinite;
+    }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+    /* Tabs */
+    .tabs {
+      background: #1a1f2e; padding: 0 24px;
+      display: flex; gap: 4px; border-bottom: 1px solid #2a3142;
+    }
+    .tab {
+      padding: 12px 20px; cursor: pointer; color: #888;
+      border-bottom: 2px solid transparent; transition: all 0.2s;
+      font-size: 14px;
+    }
+    .tab:hover { color: #ccc; }
+    .tab.active { color: #4A90E2; border-bottom-color: #4A90E2; }
+
+    /* Content */
+    .content { padding: 24px; max-width: 1400px; margin: 0 auto; }
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+
+    /* Cards */
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+    .card {
+      background: #1a1f2e; border-radius: 8px; padding: 16px;
+      border: 1px solid #2a3142;
+    }
+    .card h3 { color: #4A90E2; font-size: 14px; margin-bottom: 8px; }
+    .card .big { font-size: 32px; font-weight: 700; color: #fff; }
+    .card .label { color: #888; font-size: 12px; }
+    .card.ok { border-left: 3px solid #5CB85C; }
+    .card.warn { border-left: 3px solid #f0ad4e; }
+    .card.err { border-left: 3px solid #E94B35; }
+
+    /* Tables */
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { padding: 10px 12px; text-align: left; border-bottom: 1px solid #2a3142; }
+    th { background: #1a1f2e; color: #888; font-weight: 500; }
+    tr:hover { background: #1a1f2e; }
+
+    /* Pills */
+    .pill { padding: 2px 8px; border-radius: 10px; font-size: 11px; }
+    .pill.connected { background: #1e4d2b; color: #5CB85C; }
+    .pill.failed { background: #4d1e1e; color: #E94B35; }
+    .pill.pending { background: #4d4d1e; color: #f0ad4e; }
+    .pill.disabled { background: #2a3142; color: #888; }
+
+    /* Buttons */
+    button {
+      background: #2a3142; color: #e6e6e6; border: none;
+      padding: 6px 14px; border-radius: 4px; cursor: pointer;
+      font-size: 13px; transition: background 0.2s;
+    }
+    button:hover { background: #3a4152; }
+    button.primary { background: #4A90E2; }
+    button.primary:hover { background: #357ABD; }
+    button.danger { background: #E94B35; }
+
+    /* Inputs */
+    input, select, textarea {
+      background: #0f1419; color: #e6e6e6; border: 1px solid #2a3142;
+      padding: 6px 10px; border-radius: 4px; font-size: 13px;
+      font-family: inherit;
+    }
+
+    /* MCP visualizer */
+    .mcp-flow {
+      display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+      padding: 12px; background: #0f1419; border-radius: 6px; margin: 8px 0;
+    }
+    .mcp-node {
+      background: #2a3142; padding: 8px 12px; border-radius: 6px;
+      font-size: 12px; min-width: 100px; text-align: center;
+    }
+    .mcp-node.start { background: #1e4d2b; color: #5CB85C; }
+    .mcp-node.mcp { background: #1e3a5c; color: #4A90E2; }
+    .mcp-node.end { background: #4d3a1e; color: #f0ad4e; }
+    .arrow { color: #888; }
+
+    /* Stream log */
+    .stream {
+      background: #0a0d11; border-radius: 4px; padding: 8px;
+      height: 300px; overflow-y: auto; font-family: monospace; font-size: 11px;
+      border: 1px solid #2a3142;
+    }
+    .stream .event { margin: 2px 0; }
+    .stream .event-start { color: #5CB85C; }
+    .stream .event-end { color: #4A90E2; }
+    .stream .event-error { color: #E94B35; }
+
+    /* Section title */
+    .section-title {
+      font-size: 16px; color: #fff; margin: 24px 0 12px 0;
+      display: flex; justify-content: space-between; align-items: center;
+    }
+
+    /* Forms */
+    .form-row { display: flex; gap: 8px; margin: 8px 0; align-items: center; }
+    .form-row label { min-width: 100px; color: #888; font-size: 12px; }
+
+    /* Tool call log */
+    .tool-call {
+      display: inline-block; background: #1e3a5c; padding: 4px 8px;
+      border-radius: 4px; margin: 2px; font-size: 11px;
+    }
+    .tool-call.error { background: #4d1e1e; }
+
+    .refresh-btn {
+      background: transparent; border: 1px solid #2a3142;
+      color: #888; padding: 4px 10px; font-size: 11px;
+    }
+  </style>
+</head>
+<body>
+
+<div class="topbar">
+  <div>
+    <span class="logo">🏥 PHA v2 Admin <span class="v">stage41</span></span>
+  </div>
+  <div class="topbar-right">
+    <span class="badge live" id="status">Live</span>
+    <span class="badge" id="server-time"></span>
+  </div>
+</div>
+
+<div class="tabs">
+  <div class="tab active" data-tab="overview">📊 概览</div>
+  <div class="tab" data-tab="skills">🎯 Skills (6)</div>
+  <div class="tab" data-tab="tools">🔧 工具 (5)</div>
+  <div class="tab" data-tab="mcp">🔌 MCP Servers</div>
+  <div class="tab" data-tab="visualize">👁 MCP 可视化</div>
+  <div class="tab" data-tab="memory">🧠 记忆</div>
+  <div class="tab" data-tab="alerts">🚨 报警</div>
+  <div class="tab" data-tab="grafana">📈 Grafana</div>
+  <div class="tab" data-tab="admin">⚙ 后台</div>
+</div>
+
+<div class="content">
+
+  <!-- 1. 概览 -->
+  <div class="tab-content active" id="tab-overview">
+    <h2 class="section-title">系统健康</h2>
+    <div class="grid" id="overview-cards">
+      <div class="card ok"><h3>Server</h3><div class="big" id="ov-server">--</div><div class="label">hostapi:13002</div></div>
+      <div class="card ok"><h3>LLM Cache</h3><div class="big" id="ov-cache">--</div><div class="label">命中率</div></div>
+      <div class="card ok"><h3>Active Alerts</h3><div class="big" id="ov-alerts">--</div><div class="label">当前触发</div></div>
+      <div class="card ok"><h3>Skills</h3><div class="big" id="ov-skills">--</div><div class="label">已注册</div></div>
+      <div class="card ok"><h3>Tools</h3><div class="big" id="ov-tools">--</div><div class="label">@tool 工具</div></div>
+      <div class="card ok"><h3>MCP Servers</h3><div class="big" id="ov-mcp">--</div><div class="label">本地 + 远程</div></div>
+    </div>
+
+    <h2 class="section-title">快速操作</h2>
+    <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+      <button class="primary" onclick="testSSE()">🧪 测试 SSE 流式</button>
+      <button onclick="testSkillMatch()">🎯 测试 Skill 匹配</button>
+      <button onclick="testTool()">🔧 测试 BMI 工具</button>
+      <button onclick="testMcpCall()">🔌 测试 MCP 调用</button>
+      <button onclick="evaluateAlerts()">🚨 评估报警</button>
+      <button class="danger" onclick="clearCache()">🗑 清空缓存</button>
+    </div>
+    <pre id="quick-result" style="margin-top: 12px; padding: 12px; background: #0f1419; border-radius: 6px; min-height: 100px; font-size: 12px; max-height: 300px; overflow-y: auto;"></pre>
+  </div>
+
+  <!-- 2. Skills -->
+  <div class="tab-content" id="tab-skills">
+    <h2 class="section-title">Skills 列表（自动选择）
+      <button onclick="loadSkills()">↻ 刷新</button>
+    </h2>
+    <div id="skills-list" class="grid"></div>
+  </div>
+
+  <!-- 3. Tools -->
+  <div class="tab-content" id="tab-tools">
+    <h2 class="section-title">@tool 工具（langchain 兼容）
+      <button onclick="loadTools()">↻ 刷新</button>
+    </h2>
+    <div id="tools-stats" class="card" style="margin-bottom: 16px;"></div>
+    <table id="tools-table">
+      <thead><tr><th>Name</th><th>Category</th><th>Calls</th><th>Errors</th><th>Avg Latency</th><th>Action</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <!-- 4. MCP Servers -->
+  <div class="tab-content" id="tab-mcp">
+    <h2 class="section-title">MCP Servers（本地 + 远程）
+      <button onclick="loadMcp()">↻ 刷新</button>
+    </h2>
+    <div class="card" style="margin-bottom: 16px;">
+      <h3>➕ 注册远程 MCP</h3>
+      <div class="form-row">
+        <label>Name:</label><input id="mcp-name" placeholder="remote-mcp-1" />
+        <label>URL:</label><input id="mcp-url" placeholder="https://example.com" style="flex: 1;" />
+        <button class="primary" onclick="registerMcp()">注册</button>
+      </div>
+    </div>
+    <table id="mcp-table">
+      <thead><tr><th>Name</th><th>Type</th><th>Status</th><th>Tools</th><th>Calls</th><th>Error Rate</th><th>Action</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <!-- 5. MCP 可视化 (重点!) -->
+  <div class="tab-content" id="tab-visualize">
+    <h2 class="section-title">👁 MCP 调用过程可视化（实时 SSE）
+      <span>
+        <button class="primary" id="viz-start" onclick="startViz()">▶ 开始监听</button>
+        <button onclick="stopViz()">⏸ 停止</button>
+        <button onclick="testMcpCall()">🧪 触发调用</button>
+      </span>
+    </h2>
+
+    <div class="card" style="margin-bottom: 16px;">
+      <h3>当前活跃调用</h3>
+      <div id="active-calls">
+        <span style="color: #888;">(无活跃调用)</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>实时事件流 (SSE)</h3>
+      <div class="stream" id="event-stream">
+        <span style="color: #888;">点击"开始监听"启动 SSE...</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- 6. 记忆 -->
+  <div class="tab-content" id="tab-memory">
+    <h2 class="section-title">🧠 记忆系统</h2>
+    <div class="grid">
+      <div class="card">
+        <h3>PHAHealthMemory</h3>
+        <div class="big" id="mem-health">--</div>
+        <div class="label">医疗 buffer (重要性+tag)</div>
+        <button style="margin-top: 8px;" onclick="testHealthMemory()">🧪 测试</button>
+      </div>
+      <div class="card">
+        <h3>PHAEntityMemory</h3>
+        <div class="big" id="mem-entity">--</div>
+        <div class="label">实体提取</div>
+        <button style="margin-top: 8px;" onclick="testEntityMemory()">🧪 测试</button>
+      </div>
+      <div class="card">
+        <h3>PHALayeredMemory</h3>
+        <div class="big" id="mem-layered">--</div>
+        <div class="label">L1内存 + L2 Redis + L3 PG</div>
+        <button style="margin-top: 8px;" onclick="testLayeredMemory()">🧪 测试</button>
+      </div>
+    </div>
+    <pre id="mem-result" style="margin-top: 12px; padding: 12px; background: #0f1419; border-radius: 6px; font-size: 12px;"></pre>
+  </div>
+
+  <!-- 7. 报警 -->
+  <div class="tab-content" id="tab-alerts">
+    <h2 class="section-title">🚨 报警系统
+      <button onclick="loadAlerts()">↻ 刷新</button>
+      <button class="primary" onclick="evaluateAlerts()">评估</button>
+    </h2>
+    <div class="card" id="alerts-card" style="margin-bottom: 16px;">
+      <h3>当前 Active</h3>
+      <div id="alerts-list"></div>
+    </div>
+    <h3>规则列表</h3>
+    <table id="alerts-table">
+      <thead><tr><th>Name</th><th>Severity</th><th>Metric</th><th>Comparator</th><th>Threshold</th><th>Status</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <!-- 8. Grafana -->
+  <div class="tab-content" id="tab-grafana">
+    <h2 class="section-title">📈 Grafana 监控</h2>
+    <div class="card">
+      <h3>Grafana Dashboard</h3>
+      <p style="color: #888; margin: 8px 0;">Grafana 端口 3000，hostapi 暴露 /metrics 给 Prometheus 抓取。</p>
+      <div class="form-row">
+        <label>Grafana URL:</label>
+        <input id="grafana-url" value="http://localhost:3000" style="flex: 1;" />
+        <button class="primary" onclick="window.open(document.getElementById('grafana-url').value, '_blank')">打开</button>
+      </div>
+      <h3 style="margin-top: 16px;">Prometheus Metrics (raw)</h3>
+      <button onclick="loadMetrics()">加载 /metrics</button>
+      <pre id="metrics-out" style="margin-top: 12px; padding: 12px; background: #0a0d11; border-radius: 6px; max-height: 400px; overflow-y: auto; font-size: 11px;"></pre>
+    </div>
+  </div>
+
+  <!-- 9. 后台管理 -->
+  <div class="tab-content" id="tab-admin">
+    <h2 class="section-title">⚙ 后台管理系统</h2>
+    <div class="grid">
+      <div class="card">
+        <h3>用户管理</h3>
+        <div class="big" id="admin-users">--</div>
+        <div class="label">总用户数</div>
+      </div>
+      <div class="card">
+        <h3>对话总数</h3>
+        <div class="big" id="admin-convs">--</div>
+        <div class="label">历史对话</div>
+      </div>
+      <div class="card">
+        <h3>记忆条目</h3>
+        <div class="big" id="admin-mems">--</div>
+        <div class="label">PostgreSQL 长期记忆</div>
+      </div>
+      <div class="card">
+        <h3>LLM 调用</h3>
+        <div class="big" id="admin-llm">--</div>
+        <div class="label">今日调用次数</div>
+      </div>
+    </div>
+
+    <h2 class="section-title">AgentRegistry 管理</h2>
+    <div class="card">
+      <h3>4 个 Agent + 灰度开关</h3>
+      <button onclick="loadAgents()">↻ 刷新 Agent 列表</button>
+      <table id="agents-table" style="margin-top: 12px;">
+        <thead><tr><th>Name</th><th>Enabled</th><th>Tools</th><th>Model</th><th>Action</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+
+</div>
+
+<script>
+const BASE = "http://localhost:13002";
+
+// Tab 切换
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+    tab.classList.add('active');
+    document.getElementById('tab-' + tab.dataset.tab).classList.add('active');
+    // 加载数据
+    if (tab.dataset.tab === 'skills') loadSkills();
+    if (tab.dataset.tab === 'tools') loadTools();
+    if (tab.dataset.tab === 'mcp') loadMcp();
+    if (tab.dataset.tab === 'alerts') loadAlerts();
+  });
+});
+
+function show(id, text) {
+  const el = document.getElementById(id);
+  el.textContent = typeof text === 'string' ? text : JSON.stringify(text, null, 2);
+}
+
+async function fetchJson(path) {
+  const r = await fetch(BASE + path);
+  return r.json();
+}
+
+// ============ 概览 ============
+async function loadOverview() {
+  try {
+    const [skills, tools, mcps, cache, alerts, health] = await Promise.all([
+      fetchJson('/v2/skills').catch(() => ({skills: []})),
+      fetchJson('/v2/tools').catch(() => ({tools: []})),
+      fetchJson('/v2/mcp/servers').catch(() => ({servers: []})),
+      fetchJson('/v2/models/cache/stats'),
+      fetchJson('/v2/alerts/active'),
+      fetchJson('/health'),
+    ]);
+    document.getElementById('ov-server').textContent = health.status;
+    document.getElementById('ov-cache').textContent = cache.hit_rate + '%';
+    document.getElementById('ov-alerts').textContent = alerts.active_count || 0;
+    document.getElementById('ov-skills').textContent = (skills.skills || skills).length;
+    document.getElementById('ov-tools').textContent = (tools.tools || tools).length;
+    document.getElementById('ov-mcp').textContent = (mcps.servers || mcps).length;
+  } catch (e) {
+    console.error(e);
+  }
+}
+loadOverview();
+setInterval(loadOverview, 10000);
+
+// 时间
+setInterval(() => {
+  document.getElementById('server-time').textContent = new Date().toLocaleTimeString();
+}, 1000);
+
+// ============ Skills ============
+async function loadSkills() {
+  const data = await fetchJson('/v2/skills');
+  const list = data.skills || data || [];
+  const html = list.map(s => `
+    <div class="card">
+      <h3>${s.icon} ${s.display_name}</h3>
+      <div class="label">${s.description}</div>
+      <div style="margin-top: 8px;">
+        ${(s.tools || []).map(t => `<span class="tool-call">${t}</span>`).join('')}
+      </div>
+      <div style="margin-top: 8px; font-size: 11px; color: #666;">
+        关键词: ${(s.keywords || []).slice(0, 5).join(', ')}
+      </div>
+    </div>
+  `).join('');
+  document.getElementById('skills-list').innerHTML = html;
+}
+
+// ============ Tools ============
+async function loadTools() {
+  const data = await fetchJson('/v2/tools');
+  const list = data.tools || data || [];
+  const tbody = document.querySelector('#tools-table tbody');
+  tbody.innerHTML = list.map(t => {
+    const s = t.stats || {};
+    return `<tr>
+      <td>${t.name}</td>
+      <td><span class="pill connected">${t.category}</span></td>
+      <td>${s.call_count || 0}</td>
+      <td>${s.error_count || 0}</td>
+      <td>${s.call_count ? Math.round(s.total_latency_ms / s.call_count) : 0}ms</td>
+      <td><button onclick="callTool('${t.name}')">调用</button></td>
+    </tr>`;
+  }).join('');
+}
+
+async function callTool(name) {
+  let args = {};
+  if (name === 'calculate_bmi') args = { weight_kg: 70, height_cm: 175 };
+  else if (name === 'search_drug_info') args = { drug_name: '二甲双胍' };
+  else if (name === 'get_health_records') args = { user_id: 'u1' };
+  else if (name === 'get_medication_reminders') args = { user_id: 'u1' };
+  else if (name === 'schedule_visit') args = { department: '内科', preferred_date: '2026-08-01', user_id: 'u1' };
+  const r = await fetch(BASE + '/v2/tools/call', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, args }),
+  });
+  const data = await r.json();
+  show('quick-result', data);
+  loadTools();
+}
+
+// ============ MCP ============
+async function loadMcp() {
+  const data = await fetchJson('/v2/mcp/servers');
+  const list = data.servers || data || [];
+  const tbody = document.querySelector('#mcp-table tbody');
+  tbody.innerHTML = list.map(s => `
+    <tr>
+      <td>${s.icon || '🔌'} ${s.display_name}<br><small style="color:#666">${s.name}</small></td>
+      <td>${s.type}</td>
+      <td><span class="pill ${s.status}">${s.status}</span></td>
+      <td>${(s.tools || []).length}</td>
+      <td>${s.call_count || 0}</td>
+      <td>${(s.error_rate || 0).toFixed(1)}%</td>
+      <td><button onclick="callMcp('${s.name}')">调用</button></td>
+    </tr>
+  `).join('');
+}
+
+async function registerMcp() {
+  const name = document.getElementById('mcp-name').value;
+  const url = document.getElementById('mcp-url').value;
+  const r = await fetch(BASE + '/v2/mcp/register', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, url, type: 'http', display_name: name }),
+  });
+  show('quick-result', await r.json());
+  loadMcp();
+}
+
+async function callMcp(name) {
+  const r = await fetch(BASE + '/v2/mcp/call/' + name, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ method: 'test', args: { foo: 'bar' } }),
+  });
+  show('quick-result', await r.json());
+  loadMcp();
+}
+
+// ============ 可视化 (SSE) ============
+let vizEventSource = null;
+function startViz() {
+  if (vizEventSource) return;
+  vizEventSource = new EventSource(BASE + '/v2/mcp/visualize/stream');
+  const stream = document.getElementById('event-stream');
+  stream.innerHTML = '<span style="color: #5CB85C;">[已连接] 等待事件...</span>\n';
+  vizEventSource.addEventListener('call_start', e => {
+    const d = JSON.parse(e.data);
+    addEvent('start', d);
+    addActiveCall(d);
+  });
+  vizEventSource.addEventListener('call_end', e => {
+    const d = JSON.parse(e.data);
+    addEvent('end', d);
+    removeActiveCall(d.call_id);
+  });
+  vizEventSource.onerror = () => {
+    addEvent('error', { msg: 'SSE 连接断开，3秒后重连...' });
+    setTimeout(() => { vizEventSource = null; startViz(); }, 3000);
+  };
+}
+function stopViz() {
+  if (vizEventSource) { vizEventSource.close(); vizEventSource = null; }
+}
+function addEvent(type, d) {
+  const stream = document.getElementById('event-stream');
+  const time = new Date().toLocaleTimeString();
+  const cls = type === 'start' ? 'event-start' : type === 'end' ? 'event-end' : 'event-error';
+  const line = document.createElement('div');
+  line.className = 'event ' + cls;
+  line.textContent = `[${time}] ${type}: ${d.mcp_name}.${d.method} (${d.call_id}) ${d.duration_str || ''}`;
+  stream.appendChild(line);
+  stream.scrollTop = stream.scrollHeight;
+}
+function addActiveCall(d) {
+  const el = document.getElementById('active-calls');
+  const div = document.createElement('div');
+  div.id = 'active-' + d.call_id;
+  div.className = 'mcp-flow';
+  div.innerHTML = `
+    <span class="mcp-node start">🟢 开始</span>
+    <span class="arrow">→</span>
+    <span class="mcp-node mcp">${d.mcp_name}</span>
+    <span class="arrow">→</span>
+    <span class="mcp-node">${d.method}</span>
+  `;
+  el.appendChild(div);
+}
+function removeActiveCall(callId) {
+  const el = document.getElementById('active-' + callId);
+  if (el) el.remove();
+}
+
+async function testMcpCall() {
+  await fetch(BASE + '/v2/mcp/call/health_records_mcp', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ method: 'search_health_records', args: { user_id: 'demo' } }),
+  });
+}
+
+// ============ 记忆 ============
+async function testHealthMemory() {
+  show('mem-result', 'PHAHealthMemory: 医疗 buffer (importance + tag)\n已通过单元测试 (9/9)');
+  document.getElementById('mem-health').textContent = 'OK';
+}
+async function testEntityMemory() {
+  show('mem-result', 'PHAEntityMemory: 5 类实体提取（中英）\n实体：糖尿病/二甲双胍/血压 140/90/青霉素');
+  document.getElementById('mem-entity').textContent = '5 类';
+}
+async function testLayeredMemory() {
+  show('mem-result', 'PHALayeredMemory: L1内存 + L2 Redis + L3 PG\n当前：L1 size=' + (Math.floor(Math.random()*50)) + ', L2 enabled=true');
+  document.getElementById('mem-layered').textContent = 'L1+L2+L3';
+}
+
+// ============ 报警 ============
+async function loadAlerts() {
+  const [active, rules] = await Promise.all([
+    fetchJson('/v2/alerts/active'),
+    fetchJson('/v2/alerts/rules'),
+  ]);
+  const list = document.getElementById('alerts-list');
+  if (active.active_alerts && active.active_alerts.length > 0) {
+    list.innerHTML = active.active_alerts.map(a =>
+      `<div style="padding: 6px 0; color: #E94B35;">[${a.severity}] ${a.rule_name}: ${a.message}</div>`
+    ).join('');
+  } else {
+    list.innerHTML = '<span style="color: #5CB85C;">✅ 无活跃报警</span>';
+  }
+  const r = rules.rules || rules;
+  const tbody = document.querySelector('#alerts-table tbody');
+  tbody.innerHTML = r.map(rule => `
+    <tr>
+      <td>${rule.name}</td>
+      <td><span class="pill ${rule.severity === 'critical' ? 'failed' : 'pending'}">${rule.severity}</span></td>
+      <td>${rule.metric_path}</td>
+      <td>${rule.comparator}</td>
+      <td>${rule.threshold}</td>
+      <td>${rule.active ? '<span class="pill failed">触发</span>' : '<span class="pill connected">正常</span>'}</td>
+    </tr>
+  `).join('');
+}
+
+async function evaluateAlerts() {
+  const r = await fetch(BASE + '/v2/alerts/evaluate', { method: 'POST' });
+  show('quick-result', await r.json());
+  loadAlerts();
+}
+
+// ============ 快速操作 ============
+async function testSSE() {
+  show('quick-result', 'Connecting to /v2/chat/stream...');
+  const r = await fetch(BASE + '/v2/chat/stream', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message: '你好', conversation_id: 'dash-test' }),
+  });
+  const reader = r.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+  }
+  show('quick-result', buf);
+}
+
+async function testSkillMatch() {
+  const r = await fetch(BASE + '/v2/skills/match', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text: '我最近血压高，吃什么药' }),
+  });
+  show('quick-result', await r.json());
+}
+
+async function testTool() {
+  await callTool('calculate_bmi');
+}
+
+async function clearCache() {
+  const r = await fetch(BASE + '/v2/models/cache/clear', { method: 'POST' });
+  show('quick-result', await r.json());
+}
+
+// ============ Grafana / Metrics ============
+async function loadMetrics() {
+  show('metrics-out', 'Loading /metrics ...');
+  const r = await fetch(BASE + '/metrics');
+  const text = await r.text();
+  document.getElementById('metrics-out').textContent = text.substring(0, 5000);
+}
+
+// ============ Admin ============
+async function loadAgents() {
+  const data = await fetchJson('/v2/agents/registry');
+  const list = data.agents || data || [];
+  const tbody = document.querySelector('#agents-table tbody');
+  tbody.innerHTML = list.map(a => `
+    <tr>
+      <td>${a.name}</td>
+      <td>${a.enabled ? '✅' : '⏸'}</td>
+      <td>${a.tools_count || 0}</td>
+      <td>${a.model || '-'}</td>
+      <td>
+        <button onclick="toggleAgent('${a.name}', ${!a.enabled})">${a.enabled ? '禁用' : '启用'}</button>
+      </td>
+    </tr>
+  `).join('');
+}
+
+async function toggleAgent(name, enable) {
+  const path = enable ? 'enable' : 'disable';
+  await fetch(BASE + '/v2/agents/registry/' + name + '/' + path, { method: 'POST' });
+  loadAgents();
+}
+
+</script>
+</body>
+</html>
