@@ -1388,6 +1388,37 @@ const didResolve = (did) => {
   });
 };
 
+// 阶段38-3: 性能监控 + 报警
+const getAlertsActive = () => {
+  return request("/v2/alerts/active", { method: "GET" });
+};
+
+const getAlertsHistory = (limit = 50) => {
+  return request("/v2/alerts/history", { method: "GET", data: { limit } });
+};
+
+const getAlertRules = () => {
+  return request("/v2/alerts/rules", { method: "GET" });
+};
+
+const evaluateAlerts = () => {
+  return request("/v2/alerts/evaluate", { method: "POST" });
+};
+
+const addAlertRule = (rule) => {
+  return request("/v2/alerts/rule/add", {
+    method: "POST",
+    data: rule,
+    headers: { "Content-Type": "application/json" },
+  });
+};
+
+const removeAlertRule = (name) => {
+  return request(`/v2/alerts/rule/${encodeURIComponent(name)}`, {
+    method: "DELETE",
+  });
+};
+
 // ANP JSON-RPC 2.0 调用（hostapi 的 /anp/agent/rpc）
 const callAnpRpc = (method, params = {}, id = null) => {
   const requestBody = {
@@ -1511,6 +1542,13 @@ module.exports = {
   didResolve, // DID:WBA → URL
   // 阶段38-2: 多 LLM provider SSE 流式
   sendMessageV2ModelsStream,
+  // 阶段38-3: 性能监控 + 报警
+  getAlertsActive,
+  getAlertsHistory,
+  getAlertRules,
+  evaluateAlerts,
+  addAlertRule,
+  removeAlertRule,
   callAnpRpc, // ANP JSON-RPC 2.0 调用
   // 阶段35新增：版本探测
   detectBackendVersion, // 自动探测后端是 v1 还是 v2

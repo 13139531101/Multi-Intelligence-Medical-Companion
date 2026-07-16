@@ -161,25 +161,14 @@ async def v2_agents_status():
     - 创建时间 / 最后调用时间
     - 累计调用次数 / 累计 token 数（如可统计）
 
-    说明：V2Agent._agent_instance_cache 存的 key 是 (V2Agent子类, model)，
-    value 是 create_agent() 返回的 CompiledStateGraph 对象（不是 V2Agent 实例）。
-    要拿到 tools 数、system_prompt 等信息，需要从 SubClass 拿。
+    阶段31：自动从 AgentRegistry 发现所有 agent（无需 hardcode）
     """
     from .v2_agent import V2Agent
-    from .sub_agents import (
-        HealthAdvisorV2,
-        HealthRecordsV2,
-        MedicationReminderV2,
-        VisitSummaryV2,
-    )
+    from .agent_registry import discover_agents
 
-    # 已注册的 V2Agent 子类映射（agent_name -> class）
-    agent_class_map = {
-        "health_advisor": HealthAdvisorV2,
-        "health_records": HealthRecordsV2,
-        "medication_reminder": MedicationReminderV2,
-        "visit_summary": VisitSummaryV2,
-    }
+    # 阶段31：从 registry 自动获取所有 agent（不 hardcode 4 个 class）
+    specs = discover_agents()
+    agent_class_map = {spec.name: spec.cls for spec in specs}
 
     agents = {}
     # 阶段30：cache_key 是 (V2Agent 子类, model)
@@ -189,7 +178,7 @@ async def v2_agents_status():
         else:
             sub_cls, model = None, "unknown"
 
-        # 通过类名映射出 agent_name
+        # 通过类名映射出 agent_name（阶段31 改为查 registry）
         agent_name = None
         for n, cls in agent_class_map.items():
             if cls is sub_cls:
@@ -233,8 +222,30 @@ async def v2_agents_status():
     metrics = get_metrics()
     agent_singleton_metrics = metrics.get("agent_singleton", {})
 
+    # 阶段31：增加 registry 状态（哪些已注册但未加载）
+    registry_specs = [
+        {
+            "name": s.name,
+            "description": s.description,
+            "keywords": s.keywords,
+            "tools_module": s.tools_module,
+            "aliases": s.aliases,
+            "enabled": s.enabled,
+            "node_name": s.node_name,
+            "class": s.class_name,
+            "is_loaded": s.name in agents,
+        }
+        for s in specs
+    ]
+
     return {
         "agents": agents,
+        "registry": registry_specs,
+        "registry_stats": {
+            "total": len(specs),
+            "loaded": len(agents),
+            "unloaded": len(specs) - len(agents),
+        },
         "cache_size": len(V2Agent._agent_instance_cache),
         "metrics": {
             "agent_singleton_new": agent_singleton_metrics.get("new", 0),
@@ -251,26 +262,21 @@ async def v2_agent_status(agent_name: str):
     阶段30新增：单个 subagent 的详细状态
 
     Args:
-        agent_name: health_advisor / health_records / medication_reminder / visit_summary
+        agent_name: agent_name（health_advisor / health_records / medication_reminder / visit_summary 等）
+
+    阶段31：自动从 AgentRegistry 发现
     """
     from .v2_agent import V2Agent
-    from .sub_agents import (
-        HealthAdvisorV2,
-        HealthRecordsV2,
-        MedicationReminderV2,
-        VisitSummaryV2,
-    )
+    from .agent_registry import AgentRegistry
 
-    agent_class_map = {
-        "health_advisor": HealthAdvisorV2,
-        "health_records": HealthRecordsV2,
-        "medication_reminder": MedicationReminderV2,
-        "visit_summary": VisitSummaryV2,
-    }
-
-    sub_cls = agent_class_map.get(agent_name)
-    if sub_cls is None:
-        return {"agent": agent_name, "error": "unknown agent name"}
+    spec = AgentRegistry.get(agent_name)
+    if spec is None:
+        return {
+            "agent": agent_name,
+            "error": "unknown agent name",
+            "known_agents": AgentRegistry.names(),
+        }
+    sub_cls = spec.cls
 
     # 找 cache
     is_loaded = False
@@ -310,6 +316,10 @@ async def v2_agent_status(agent_name: str):
 
     return {
         "agent": agent_name,
+        "description": spec.description,
+        "keywords": spec.keywords,
+        "aliases": spec.aliases,
+        "tools_module": spec.tools_module,
         "is_loaded": is_loaded,
         "model": model,
         "tools_count": tools_count,
@@ -368,3 +378,80 @@ async def v2_metrics_reset():
     from .monitoring import reset_metrics
     reset_metrics()
     return {"status": "reset", "metrics": get_metrics()}
+
+
+# ============================================================
+# 阶段38-3: Alert 端点
+# ============================================================
+
+@router.get("/alerts/active")
+async def v2_alerts_active():
+    """当前触发的报警"""
+    from .alerting import get_alert_manager
+    mgr = get_alert_manager()
+    return {
+        "active": mgr.get_active_alerts(),
+        "stats": mgr.get_stats(),
+    }
+
+
+@router.get("/alerts/history")
+async def v2_alerts_history(limit: int = 50):
+    """报警历史"""
+    from .alerting import get_alert_manager
+    mgr = get_alert_manager()
+    return {
+        "history": mgr.get_history(limit=limit),
+        "stats": mgr.get_stats(),
+    }
+
+
+@router.get("/alerts/rules")
+async def v2_alerts_rules():
+    """所有报警规则 + 状态"""
+    from .alerting import get_alert_manager
+    mgr = get_alert_manager()
+    return {
+        "rules": mgr.list_rules(),
+    }
+
+
+@router.post("/alerts/evaluate")
+async def v2_alerts_evaluate():
+    """手动触发一次评估（基于当前指标）"""
+    from .alerting import get_alert_manager
+    mgr = get_alert_manager()
+    metrics = get_metrics()
+    await mgr.evaluate(metrics)
+    return {
+        "evaluated": True,
+        "active_after": mgr.get_active_alerts(),
+        "stats": mgr.get_stats(),
+    }
+
+
+@router.post("/alerts/rule/add")
+async def v2_alerts_add_rule(rule: dict):
+    """添加自定义报警规则"""
+    from .alerting import get_alert_manager, AlertRule, Severity
+    mgr = get_alert_manager()
+    new_rule = AlertRule(
+        name=rule["name"],
+        metric_path=rule["metric_path"],
+        comparator=rule["comparator"],
+        threshold=float(rule["threshold"]),
+        severity=Severity(rule.get("severity", "warning")),
+        description=rule.get("description", ""),
+        enabled=rule.get("enabled", True),
+    )
+    mgr.add_rule(new_rule)
+    return {"status": "added", "rule": new_rule.name}
+
+
+@router.delete("/alerts/rule/{name}")
+async def v2_alerts_remove_rule(name: str):
+    """删除报警规则"""
+    from .alerting import get_alert_manager
+    mgr = get_alert_manager()
+    mgr.remove_rule(name)
+    return {"status": "removed", "rule": name}
