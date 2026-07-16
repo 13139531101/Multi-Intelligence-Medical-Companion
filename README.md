@@ -1,23 +1,70 @@
 # 个人智能健康助手 (Personal Health Assistant)
 
-## 🚀 v2.0 当前状态 (2026-07-11)
+> 🤖 基于 **LangChain 1.x + LangGraph 1.x + A2A + MCP + ANP** 五协议生态
+> 📊 4 个 sub-agent + 36 工具 + PostgresSaver + AgentRegistry 装饰器
+> 🌐 支持 A2A (企业内) + MCP (工具) + ANP (跨组织 agent 互联网)
 
-**最新**：v2.0-stage24（多模型协同 + RAG + CI/CD + OAuth2 鉴权 + 写操作审计 + a2a 修复）
+## 🚀 v2.0 当前状态 (2026-07-15)
 
-- ✅ **OAuth2 鉴权**（GitHub 授权码 + JWT 双 token + 轮转 + 限流）
-- ✅ **RAG 索引/检索/反馈**（PGVector + DashScope embedding-v3 + 1024 维）
-- ✅ **写操作安全审计**（5 端点）
-- ✅ **多模型协同**（DeepSeek + Qwen + Claude + Local，4 provider + 路由 + fallback + 限流）
-- ✅ **CI/CD**（GitHub Actions：test + lint + build + release 4 工作流）
-- ✅ **build 路径修复**（5 Dockerfile 全验证）
+**最新**：v2.0-stage33（**33 个 tag 全部完成 + 已推送**）
 
-**HTTP 端点**：`/v2/oauth/*` (7) + `/v2/rag/*` (5) + `/v2/models/*` (4) + `/v2/audit/*` (4) + `/health` + `/metrics`
+### ✅ 核心能力
 
-**4 阶段总验收**：37 + 45 + 38 + 58 = **178/178 全过** ✅
+| 能力 | 阶段 | 说明 |
+|------|------|------|
+| **A2A + MCP + ANP 三协议** | 33 | agent 跨组织/跨云互联 |
+| **多 agent 并行编排** | 30 | 4 agent 同时跑 + worker 状态查询 |
+| **AgentRegistry 装饰器** | 31 | 加 agent = 1 个 class，其他全自动 |
+| **PostgresSaver 持久化** | 30 | state 写入 PostgreSQL，崩溃恢复 |
+| **LangGraph StateGraph** | 28-29 | LangChain 1.x + LangGraph 1.x |
+| **OAuth2 + JWT** | 24 | GitHub OAuth + JWT 双 token + 轮转 + 限流 |
+| **RAG** | 24 | PGVector + DashScope embedding-v3 + 1024 维 |
+| **多模型协同** | 24 | DeepSeek + Qwen + Claude + Local（路由 + fallback） |
+| **CI/CD** | 24 | GitHub Actions：test + lint + build + release |
+| **写操作审计** | 24 | 5 端点 |
+| **3 层限流** | 24 | 全局 + user + agent |
 
-**Tag 历史**：v2.0-stage1 → v2.0-stage24（24 个 tag 全部推送）
+### 📊 HTTP 端点（共 30+）
 
-详见 [CHANGELOG.md](CHANGELOG.md) 和 [docs/V2_STAGE21_24_REPORT.md](docs/V2_STAGE21_24_REPORT.md)
+- `/smart_chat` - 主入口（v2 LangGraph 编排）
+- `/v2/agents/status` - 所有 sub-agent 状态（阶段30）
+- `/v2/agents/{name}/status` - 单 agent 详情（阶段30）
+- `/v2/models/{chat,providers,stats,test-fallback}` - 多模型（阶段24）
+- `/v2/rag/*` (5) - RAG 索引/检索/反馈
+- `/v2/oauth/*` (7) - OAuth2 + JWT
+- `/v2/audit/*` (4) - 写操作审计
+- `/anp/agent/{ad.json,interface.json,rpc}` - ANP 协议（阶段33）
+- `/anp/agents` - 列出所有 PHA agent（带 DID:WBA）
+- `/health` + `/metrics` + `/health/deep` - 监控
+
+### 🏷️ Tag 历史
+
+```
+v2.0-stage33-anp                ← 最新 ANP 协议集成
+v2.0-stage30-orchestration      ← 多 agent 并行 + PostgresSaver
+v2.0-stage29-flow
+v2.0-stage28-e2e
+v2.0-stage28-langgraph
+v2.0-stage24
+... 共 33 个 v2.0 tag 全部推送
+```
+
+### 📈 距完整产品差距
+
+详见 [PHASE_STATUS_PRODUCT.md](PHASE_STATUS_PRODUCT.md)
+
+| 维度 | 得分 | 关键缺口 |
+|------|------|----------|
+| 后端技术 | 95/100 | 几乎完成 |
+| 前端 - 用户端 | 30/100 | **缺 Web 聊天界面** |
+| 文档完整度 | 60/100 | 11+ 文档待更新 |
+| 监控/日志 | 50/100 | 缺 Grafana + Loki |
+| 商业化 | 20/100 | 无付费/会员 |
+| **综合** | **65/100** | **技术就绪，产品待补** |
+
+**最快可演示**：1 周（补 Web UI + 文档）
+**可上线内测**：2 周（+ 监控/告警/ANP 签名）
+**可商业化**：4-6 周（+ 压测/安全/付费/多租户）
 
 ---
 

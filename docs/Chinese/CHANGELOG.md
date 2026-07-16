@@ -2,7 +2,91 @@
 
 > 所有 v2 阶段变更记录。版本按 git tag 排序。
 >
-> **当前版本**：v2.0（17 阶段全完成）
+> **当前版本**：v2.0-stage33（33 阶段全完成）
+
+---
+
+## [v2.0-stage33] - 2026-07-14 - ANP 协议集成
+
+### 新增
+- **ANP (Agent Network Protocol) 协议集成** - 让 PHA 完整支持 A2A + MCP + ANP 三协议
+- 装 `anp[api]>=0.8.8` SDK（实际装 0.8.9）
+- hostapi 挂载 ANP sub-app（`/anp` 前缀）：
+  - `GET  /anp/health`  健康检查
+  - `GET  /anp/agent/ad.json`  Agent Description（含 DID:WBA）
+  - `GET  /anp/agent/interface.json`  OpenRPC 接口定义
+  - `POST /anp/agent/rpc`  JSON-RPC 2.0 调用
+  - `GET  /anp/agents`  列出 4 个 PHA agent
+  - `GET  /anp/agents/discover`  ANP 爬虫主动发现外部
+- ANP RPC 方法：
+  - `route_query(user_id, query)` 路由到合适 sub-agent
+  - `parallel_query(user_id, query)` 4 agent 并行
+  - `list_agents()` 列出所有 PHA agent
+- 4 个 PHA agent 自动获得 DID：`did:wba:pha.local:{health_advisor, health_records, medication_reminder, visit_summary}`
+
+### 三协议对比
+| 协议 | 端点 | 适用场景 |
+|------|------|---------|
+| A2A | `/a2a/*` (v1) | 企业内 task 协作 |
+| MCP | 各 MCP agent | LLM 调工具 |
+| ANP | `/anp/*` | 跨组织/跨云 agent 互联网 |
+
+### 验证
+- `ad.json` / `interface.json` / `list_agents` RPC 全部 200
+- LLM 路由正常（route_query 路由到 health_advisor）
+- 6 files changed, 616 insertions
+
+---
+
+## [v2.0-stage31] - 2026-07-14 - AgentRegistry 自动注册
+
+### 新增
+- **`agent_registry.py`**（~180 行）：AgentSpec / AgentRegistry / @register_agent 装饰器
+- 改造 `sub_agents.py`：4 个 class 改用 `@register_agent` 装饰器
+- 改造 `host_graph.py`：build_host_graph 用 `discover_agents()` 自动构建
+- 改造 `monitoring_endpoints.py`：用 `discover_agents()` 替代 hardcode
+
+### 收益
+- **新增 agent 只改 1 个 class**（装饰器绑定），其他全自动
+- 之前要改 9 个地方（host_graph 5 处 + monitoring 1 处 + 4 个 import + 路由表）
+- 现在只改 1 处
+
+### 装饰器 vs 硬编码
+| 维度 | 之前（v1） | 阶段31 |
+|------|-----------|--------|
+| 加 agent 改的地方 | 5+ 处 | 1 处 |
+| 配置分散度 | 散在 5 个 dict | 集中装饰器 |
+| 类型安全 | ❌ string-key | ✅ Python class |
+
+---
+
+## [v2.0-stage30] - 2026-07-13 - 多 agent 编排
+
+### 新增
+- **host_graph multi 模式**：4 个 invoke_X 并行 fan-out
+  - 每个 node 写独立字段（避免 LangGraph 并行写冲突）
+  - `aggregate_multi_node` 汇总 4 worker
+  - `worker_summaries` 含 status/elapsed_ms/tool_calls_count
+- **`/v2/agents/status` 端点**：
+  - `GET /v2/agents/status` 列出 4 sub-agent
+  - `GET /v2/agents/{name}/status` 单 agent 详情（18 tool names + system_prompt）
+- **PostgresSaver 持久化**：
+  - 装 `langgraph-checkpoint-postgres>=2.0.0` + `psycopg[binary,pool]`
+  - 适配 2.x async context manager API
+  - `v2_agent.py` `agent.stream()` 改 `astream()`（兼容 AsyncPostgresSaver）
+  - 设 `PHA_CHECKPOINT_DB_URL` 即启用
+  - state 写入 PostgreSQL，支持长时间任务 + 崩溃恢复
+
+### 收益
+- **hostagent 能 query 每个 worker 状态**（之前只能看聚合 metrics）
+- **多 worker 并行**（4 个 agent 同时跑）
+- **长时间任务 + 崩溃恢复**（PostgresSaver）
+
+### 验证
+- multi mode 4 agent 并行（tool_calls: 48/77/107/164）
+- PostgresSaver Checkpointer OK
+- `/v2/agents/health_advisor/status` 返回 18 tool names
+- 9 files changed, 572 insertions
 
 ---
 

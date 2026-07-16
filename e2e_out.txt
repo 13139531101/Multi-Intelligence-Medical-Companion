@@ -1,0 +1,57 @@
+======================================================================
+PHA v2 E2E 测试 - hostapi HTTP 端到端 + 真实提问
+======================================================================
+
+[1. 启动 hostapi 容器 (PHA_USE_V2=true 默认)]
+  Starting hostapi...
+  [OK]   Container started: 042193d0771d
+
+[2. 等 hostapi 启动 (最多 60s)]
+  [OK]   hostapi ready after 74s
+
+[3. 真实提问 - 健康咨询]
+  提问: "我最近总是头疼，可能是什么原因？"
+  HTTP status: 200
+  Response (前 500 字符): {"success":true,"message":"已将您的请求转发给健康顾问","conversation_id":"4db75676-a20a-47bc-9dc4-008282895974","message_id":"8c075e58-1443-4f1b-87df-123e81524a22","selected_agent":"健康顾问"}
+  [FAIL] v2 返回内容不像健康咨询: {"success":true,"message":"已将您的请求转发给健康顾问","conversation_id":"4db75676-a20a-47bc-9dc4-008282895974","message_id":"8c075e58-1443-4f1b-87df-123e81524a22","selected_agent":"健康顾问"}
+
+[4. 真实提问 - 用药提醒]
+  提问: "提醒我晚上 9 点吃高血压药"
+  HTTP status: 200
+  Response (前 500 字符): {"success":true,"message":"已将您的请求转发给用药提醒助手","conversation_id":"354057d2-364a-445a-87bf-459695c0fe24","message_id":"68ad52f7-759b-48f8-a72a-fc90d00d7893","selected_agent":"用药提醒助手"}
+  [OK]   用药提醒路径工作
+
+[5. 容器日志确认 v2 路径]
+  PHA v2 日志次数: 8
+  routing to v2 次数: 0
+  PHA v2 success 次数: 0
+  PHA v2 error 次数: 0
+  fallback to v1 次数: 0
+  [FAIL] v2 路由次数 0 太少
+
+[6. 关键日志片段 (v2 相关)]
+  > 开始获取http://health_advisor:10011的agent card
+  > 无法获取http://health_advisor:10011的agent card: HTTPConnectionPool(host='health_advisor', port=10011): Max retries exceeded with url: /.well-known/agent.j
+  > 无法注册代理 http://health_advisor:10011: 获取agent card失败
+  > 开始获取http://medication_reminder:10012的agent card
+  > 无法获取http://medication_reminder:10012的agent card: HTTPConnectionPool(host='medication_reminder', port=10012): Max retries exceeded with url: /.well-kno
+  > 无法注册代理 http://medication_reminder:10012: 获取agent card失败
+  > [smart_chat][PHA v2] EXC: IndexError: 5
+  > [smart_chat][PHA v2] TB:
+  > [smart_chat][PHA v2] TRACEBACK:
+  > [smart_chat][PHA v2] EXC: IndexError: 5
+  > [smart_chat][PHA v2] TB:
+  > [smart_chat][PHA v2] TRACEBACK:
+  > INFO:root:尝试注册代理 http://health_advisor:10011 (第1/12次)
+  > INFO:root:代理注册成功: http://health_advisor:10011
+  > INFO:root:尝试注册代理 http://medication_reminder:10012 (第1/12次)
+  > INFO:root:代理注册成功: http://medication_reminder:10012
+  > ERROR:root:[smart_chat][PHA v2] setup failed: IndexError: 5
+  > ERROR:root:[smart_chat][PHA v2] setup failed: IndexError: 5
+
+[6. 清理]
+  [OK]   Container removed
+
+======================================================================
+E2E 真实测试完成
+======================================================================

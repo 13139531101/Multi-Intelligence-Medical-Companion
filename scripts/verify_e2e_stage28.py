@@ -43,7 +43,7 @@ ENV = {
     'DEEPSEEK_API_KEY': os.getenv('DEEPSEEK_API_KEY', ''),
     'DASHSCOPE_API_KEY': os.getenv('DASHSCOPE_API_KEY', ''),
     'QWEN_API_KEY': os.getenv('QWEN_API_KEY', ''),
-    'JWT_SECRET_KEY': os.getenv('JWT_SECRET_KEY', 'ygRtTIVjkW9vkqswaiLCIRIi231Ovyl4d9TBmx3NMB8AJwE02XxwPARBX_r67A-i'),
+    'JWT_SECRET_KEY': os.getenv('JWT_SECRET_KEY', ''),
     'PHA_USE_V2': 'true',
 }
 ok(f'{len(ENV)} env vars ready')

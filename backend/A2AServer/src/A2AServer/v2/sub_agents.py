@@ -18,6 +18,7 @@ from typing import List
 
 from .v2_agent import V2Agent
 from .mcp_tool_adapter import load_mcp_tools
+from .agent_registry import register_agent
 
 
 def _load_prompt(filename: str, default: str = "") -> str:
@@ -40,6 +41,16 @@ def _load_prompt(filename: str, default: str = "") -> str:
 # ============================================================
 # 1. 健康顾问（Health Advisor）
 # ============================================================
+@register_agent(
+    name="health_advisor",
+    description="AI 问诊、健康教育、症状分析",
+    keywords=[
+        "头疼", "发烧", "痛", "病", "医生", "建议", "咨询", "症状",
+        "不舒服", "难受", "health", "symptom", "咳嗽", "感冒", "头晕", "头痛",
+    ],
+    tools_module="health_advisor",
+    aliases=["健康顾问"],
+)
 class HealthAdvisorV2(V2Agent):
     """健康顾问 - AI 问诊、健康教育、症状分析"""
 
@@ -60,6 +71,13 @@ class HealthAdvisorV2(V2Agent):
 # ============================================================
 # 2. 健康档案管理（Health Records Manager）
 # ============================================================
+@register_agent(
+    name="health_records",
+    description="检查报告 OCR、存储、检索",
+    keywords=["档案", "记录", "体检", "报告", "record", "检查单"],
+    tools_module="health_records",
+    aliases=["健康档案管理员", "健康档案管理", "健康档案", "档案管理员"],
+)
 class HealthRecordsV2(V2Agent):
     """健康档案 - 检查报告 OCR、存储、检索"""
 
@@ -79,6 +97,13 @@ class HealthRecordsV2(V2Agent):
 # ============================================================
 # 3. 用药提醒（Medication Reminder）
 # ============================================================
+@register_agent(
+    name="medication_reminder",
+    description="药品安全、用药计划、提醒通知",
+    keywords=["药", "吃药", "提醒", "medication", "服药", "用药", "剂量"],
+    tools_module="medication_reminder",
+    aliases=["用药提醒助手", "用药提醒"],
+)
 class MedicationReminderV2(V2Agent):
     """用药提醒 - 药品安全、用药计划、提醒通知"""
 
@@ -98,6 +123,13 @@ class MedicationReminderV2(V2Agent):
 # ============================================================
 # 4. 就诊摘要生成（Visit Summary Generator）
 # ============================================================
+@register_agent(
+    name="visit_summary",
+    description="就诊记录整理、报告生成",
+    keywords=["摘要", "总结", "就诊", "summary"],
+    tools_module="visit_summary",
+    aliases=["就诊摘要生成器", "就诊摘要生成", "就诊摘要", "就诊摘要助手"],
+)
 class VisitSummaryV2(V2Agent):
     """就诊摘要 - 就诊记录整理、报告生成"""
 
@@ -112,3 +144,24 @@ class VisitSummaryV2(V2Agent):
             return load_mcp_tools("visit_summary")
         except Exception:
             return []
+
+
+# ============================================================
+# 阶段31 演示：动态添加新 agent 只需要再加一个 @register_agent class
+# ============================================================
+# @register_agent(
+#     name="nutrition_advisor",
+#     description="营养建议、饮食分析",
+#     keywords=["营养", "饮食", "食物", "nutrition", "diet"],
+#     tools_module="nutrition_advisor",
+#     aliases=["营养师"],
+# )
+# class NutritionAdvisorV2(V2Agent):
+#     name = "nutrition_advisor"
+#     system_prompt = "你是 PHA 营养顾问..."
+#
+#     def get_tools(self):
+#         try:
+#             return load_mcp_tools("nutrition_advisor")
+#         except Exception:
+#             return []

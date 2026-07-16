@@ -16,6 +16,90 @@
 | `GET /.well-known/agent-card.json` | 10020 | a2a-sdk              | 服务发现             |
 | `POST /`                           | 10020 | a2a-sdk JSON-RPC 2.0 | a2a-sdk 标准入口     |
 
+### 阶段30-33 新增端点（v2.0-stage30+）
+
+| 端点 | 端口 | 协议 | 阶段 | 说明 |
+|------|------|------|------|------|
+| `GET /v2/agents/status` | 13002 | HTTP | 30 | 列出所有 sub-agent 状态 |
+| `GET /v2/agents/{name}/status` | 13002 | HTTP | 30 | 单 agent 详情（18 tool names）|
+| `GET /anp/health` | 13002 | ANP | 33 | ANP 健康检查 |
+| `GET /anp/agent/ad.json` | 13002 | ANP | 33 | Agent Description (含 DID:WBA) |
+| `GET /anp/agent/interface.json` | 13002 | ANP | 33 | OpenRPC 接口定义 |
+| `POST /anp/agent/rpc` | 13002 | ANP JSON-RPC 2.0 | 33 | ANP RPC 调用 |
+| `GET /anp/agents` | 13002 | ANP | 33 | 列出所有 PHA agent（带 DID）|
+| `GET /anp/agents/discover` | 13002 | ANP | 33 | ANP crawler 主动发现 |
+
+### 阶段30 新增：`/v2/agents/status`
+
+```bash
+curl http://localhost:13002/v2/agents/status
+```
+
+**响应**：
+```json
+{
+  "agents": {
+    "health_advisor": {
+      "name": "health_advisor",
+      "model": "deepseek-chat",
+      "tools_count": 18,
+      "system_prompt_chars": 5373,
+      "system_prompt_preview": "# 记忆增强型...",
+      "is_loaded": true,
+      "class": "HealthAdvisorV2",
+      "cached": true
+    }
+  },
+  "registry": [...],
+  "registry_stats": {"total": 4, "loaded": 1, "unloaded": 3},
+  "cache_size": 1,
+  "metrics": {...},
+  "ts": 1752...
+}
+```
+
+### 阶段33 新增：`/anp/agent/ad.json`
+
+```bash
+curl http://localhost:13002/anp/agent/ad.json
+```
+
+**响应**（ANP 标准）：
+```json
+{
+  "protocolType": "ANP",
+  "protocolVersion": "1.0.0",
+  "type": "Product",
+  "identifier": "did:wba:pha.local:hostapi",
+  "name": "HostAPI",
+  "description": "PHA Host API - 多 agent 编排器",
+  "security": {"didwba": {"scheme": "didwba", "in": "header", "name": "Authorization"}},
+  "interfaces": [{
+    "type": "StructuredInterface",
+    "protocol": "openrpc",
+    "url": "http://localhost:13002/agent/interface.json"
+  }]
+}
+```
+
+### 阶段33 新增：`/anp/agent/rpc`（JSON-RPC 2.0）
+
+```bash
+curl -X POST http://localhost:13002/anp/agent/rpc \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "method": "route_query",
+    "params": {"user_id": "user_123", "query": "我头疼"},
+    "id": 1
+  }'
+```
+
+**支持的方法**：
+- `route_query(user_id, query)` - 路由到合适 sub-agent
+- `parallel_query(user_id, query)` - 4 agent 并行
+- `list_agents()` - 列出所有 PHA agent
+
 ---
 
 ## 2. 主入口（hostAgentAPI :10010）

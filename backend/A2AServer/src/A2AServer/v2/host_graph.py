@@ -134,7 +134,8 @@ AGENT_ALIAS = {
     "visit_summary": "visit_summary",
 }
 
-# 关键词 → Agent 映射（顺序敏感：更具体的 Agent 排前面）
+# 关键词 → Agent 映射（阶段31 改为动态从 AgentRegistry 拼）
+# 保留 HEURISTIC_KEYWORDS 仅为向后兼容
 HEURISTIC_KEYWORDS = {
     "visit_summary": ["摘要", "总结", "就诊", "summary"],
     "medication_reminder": ["药", "吃药", "提醒", "medication", "服药", "用药", "剂量"],
@@ -146,35 +147,72 @@ HEURISTIC_KEYWORDS = {
 }
 
 
+def _build_heuristic_keywords():
+    """阶段31：从 AgentRegistry 动态拼关键词表"""
+    try:
+        from .agent_registry import discover_agents
+        specs = discover_agents()
+        return {s.name: list(s.keywords) for s in specs if s.keywords}
+    except Exception as e:
+        logger.warning("[host_graph] _build_heuristic_keywords failed: %s, fallback to static", e)
+        return HEURISTIC_KEYWORDS
+
+
 # ============================================================
 # 路由函数（替代 if/else）
 # ============================================================
 def _layer1_metadata(state: HostState) -> str:
-    """第 1 层：检查 metadata.selected_agent"""
+    """第 1 层：检查 metadata.selected_agent（阶段31 支持 registry alias 自动映射）"""
     metadata = state.get("metadata") or {}
     selected = metadata.get("selected_agent")
     if isinstance(selected, str) and selected.strip():
         name = selected.strip()
-        # 映射中文/英文别名
+        # 阶段31：先查静态 AGENT_ALIAS，再查 AgentRegistry.by_alias
         canonical = AGENT_ALIAS.get(name, name)
-        if canonical in {"health_advisor", "health_records", "medication_reminder", "visit_summary"}:
-            state["target_agent"] = canonical
-            state["routing_layer"] = 1
-            state.setdefault("events", []).append({
-                "type": "route",
-                "layer": 1,
-                "reason": f"metadata.selected_agent={selected}",
-                "target": canonical,
-            })
-            logger.info("[host_graph] layer1 metadata: %s -> %s", selected, canonical)
-            return canonical
+        # 阶段31：如果 AGENT_ALIAS 没命中，尝试通过 alias 找
+        if canonical == name:
+            try:
+                from .agent_registry import AgentRegistry
+                spec = AgentRegistry.by_alias(name)
+                if spec is not None:
+                    canonical = spec.name
+            except Exception:
+                pass
+        # 校验是否是注册过的 agent
+        try:
+            from .agent_registry import AgentRegistry
+            if AgentRegistry.get(canonical) is not None:
+                state["target_agent"] = canonical
+                state["routing_layer"] = 1
+                state.setdefault("events", []).append({
+                    "type": "route",
+                    "layer": 1,
+                    "reason": f"metadata.selected_agent={selected}",
+                    "target": canonical,
+                })
+                logger.info("[host_graph] layer1 metadata: %s -> %s", selected, canonical)
+                return canonical
+        except Exception:
+            # fallback 到 hardcode 校验（向后兼容）
+            if canonical in {"health_advisor", "health_records", "medication_reminder", "visit_summary"}:
+                state["target_agent"] = canonical
+                state["routing_layer"] = 1
+                state.setdefault("events", []).append({
+                    "type": "route",
+                    "layer": 1,
+                    "reason": f"metadata.selected_agent={selected}",
+                    "target": canonical,
+                })
+                logger.info("[host_graph] layer1 metadata: %s -> %s", selected, canonical)
+                return canonical
     return ""  # 未命中
 
 
 def _layer2_heuristic(state: HostState) -> str:
-    """第 2 层：关键词启发"""
+    """第 2 层：关键词启发（阶段31 动态从 AgentRegistry 拼）"""
     text = (state.get("query") or "").lower()
-    for agent_name, keywords in HEURISTIC_KEYWORDS.items():
+    keywords_map = _build_heuristic_keywords()
+    for agent_name, keywords in keywords_map.items():
         if any(kw in text for kw in keywords):
             state["target_agent"] = agent_name
             state["routing_layer"] = 2
@@ -292,24 +330,14 @@ def invoke_agent_node(agent_name: str):
     async def node(state: HostState) -> dict:
         started_at = _time.time()
         try:
-            from .sub_agents import (
-                HealthAdvisorV2,
-                HealthRecordsV2,
-                MedicationReminderV2,
-                VisitSummaryV2,
-            )
+            # 阶段31：用 AgentRegistry 自动发现，不再 hardcode 4 个 class
+            from .agent_registry import AgentRegistry
             from .v2_runtime import get_runtime
 
-            # 选择 agent
-            agent_cls_map = {
-                "health_advisor": HealthAdvisorV2,
-                "health_records": HealthRecordsV2,
-                "medication_reminder": MedicationReminderV2,
-                "visit_summary": VisitSummaryV2,
-            }
-            agent_cls = agent_cls_map.get(agent_name)
-            if agent_cls is None:
+            spec = AgentRegistry.get(agent_name)
+            if spec is None or spec.cls is None:
                 return {"error": f"unknown agent: {agent_name}"}
+            agent_cls = spec.cls
 
             if not get_runtime().available:
                 return {"error": "LangChain 1.x 不可用"}
@@ -518,68 +546,66 @@ def build_host_graph(*, use_checkpointer: bool = True, mode: str = "single"):
         logger.warning("[host_graph] LangGraph 不可用，构建失败")
         return None
 
+    # 阶段31：从 AgentRegistry 自动发现所有 agent
+    from .agent_registry import discover_agents
+    agents = discover_agents()
+    if not agents:
+        logger.warning("[host_graph] 没有可用 agent")
+        return None
+
     g = StateGraph(HostState)
 
     # 节点
     g.add_node("classify", classify_node)
-    g.add_node("invoke_health", invoke_agent_node("health_advisor"))
-    g.add_node("invoke_records", invoke_agent_node("health_records"))
-    g.add_node("invoke_medication", invoke_agent_node("medication_reminder"))
-    g.add_node("invoke_summary", invoke_agent_node("visit_summary"))
     g.add_node("aggregate", aggregate_node)
     # 阶段30新增
     g.add_node("fanout", fanout_node)
     g.add_node("aggregate_multi", aggregate_multi_node)
 
+    # 阶段31：为每个 agent 自动创建 invoke_<name> 节点
+    for spec in agents:
+        g.add_node(spec.node_name, invoke_agent_node(spec.name))
+        logger.debug("[host_graph] added node: %s", spec.node_name)
+
     # 边
     g.add_edge(START, "classify")
 
     if mode == "multi":
-        # 阶段30：并行模式
-        # classify 后通过 conditional_edges fan-out 到所有 invoke_X（同时启动）
-        # LangGraph 1.x：path 返回 Sequence[Hashable]，自动并行 fan-out
-        g.add_edge(START, "classify")
+        # 阶段30：并行模式（自动 fan-out 到所有 agent）
+        all_invoke_nodes = [spec.node_name for spec in agents]
 
-        # classify 完后并行启动 4 个 invoke_X
         # path 返回 list → LangGraph 自动 fan-out
         def _multi_path(state):
-            return [
-                "invoke_health",
-                "invoke_records",
-                "invoke_medication",
-                "invoke_summary",
-            ]
+            return all_invoke_nodes
 
         g.add_conditional_edges("classify", _multi_path)
 
-        # 所有 invoke_X 完成 → aggregate_multi（每条边单独声明）
-        for node_name in ["invoke_health", "invoke_records", "invoke_medication", "invoke_summary"]:
+        # 所有 invoke_X → aggregate_multi
+        for node_name in all_invoke_nodes:
             g.add_edge(node_name, "aggregate_multi")
         g.add_edge("aggregate_multi", END)
     else:
-        # 原 single 模式（向后兼容）
-        def _route_decision(state: HostState) -> str:
-            target = state.get("target_agent", "health_advisor")
-            return {
-                "health_advisor": "invoke_health",
-                "health_records": "invoke_records",
-                "medication_reminder": "invoke_medication",
-                "visit_summary": "invoke_summary",
-            }.get(target, "invoke_health")
+        # 原 single 模式（动态从 registry 拼路由表）
+        node_by_name = {spec.name: spec.node_name for spec in agents}
+        # 默认 fallback 到第一个 agent
+        default_node = agents[0].node_name if agents else None
 
+        def _route_decision(state: HostState) -> str:
+            target = state.get("target_agent")
+            if target and target in node_by_name:
+                return node_by_name[target]
+            return default_node or END
+
+        # conditional_edges 的 path_map 只需包含所有 invoke_X
+        path_map = {spec.node_name: spec.node_name for spec in agents}
         g.add_conditional_edges(
             "classify",
             _route_decision,
-            {
-                "invoke_health": "invoke_health",
-                "invoke_records": "invoke_records",
-                "invoke_medication": "invoke_medication",
-                "invoke_summary": "invoke_summary",
-            },
+            path_map,
         )
 
-        for node_name in ["invoke_health", "invoke_records", "invoke_medication", "invoke_summary"]:
-            g.add_edge(node_name, "aggregate")
+        for spec in agents:
+            g.add_edge(spec.node_name, "aggregate")
         g.add_edge("aggregate", END)
 
     # Checkpointer
