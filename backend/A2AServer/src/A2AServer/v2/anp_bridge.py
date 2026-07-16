@@ -33,6 +33,13 @@ from typing import Any, Dict
 
 import httpx
 
+# 注意：anp_bridge.py 不会直接 mount，create_hostapi_anp_app() 里的
+# endpoint 用 Request，必须 import
+try:
+    from fastapi import Request
+except ImportError:
+    Request = None
+
 logger = logging.getLogger(__name__)
 
 
@@ -358,12 +365,12 @@ def create_hostapi_anp_app():
         return {"resolved": True, "did": did, "document": doc.to_dict()}
 
     @app.post("/did/verify")
-    async def did_verify(request: Request):
+    async def did_verify(req: Request):
         """阶段39-2: 验证签名
 
         body: {did, signature, method, path, body, timestamp}
         """
-        body = await request.json()
+        body = await req.json()
         did = body.get("did")
         signature = body.get("signature")
         method = body.get("method", "GET")
@@ -381,10 +388,10 @@ def create_hostapi_anp_app():
         return {"valid": valid, "error": err, "did": did}
 
     @app.post("/did/sign")
-    async def did_sign(request: Request):
+    async def did_sign(req: Request):
         """阶段39-2: 用某 DID 私钥签名（仅测试用，生产应禁用）"""
         from .did_wba import sign_request
-        body = await request.json()
+        body = await req.json()
         did = body.get("did")
         method = body.get("method", "GET")
         path = body.get("path", "/")
