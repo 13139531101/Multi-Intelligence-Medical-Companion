@@ -26,6 +26,10 @@ RUN --mount=type=cache,target=/root/.cache/pip pip install -i ${PIP_INDEX_URL} -
 
 # App source (Host API)
 COPY frontend/hostAgentAPI ./
+# 阶段39-6: 复制 frontend/test_simple.html 和 test_page.html 用于浏览器测试
+COPY frontend/test_simple.html ./test_simple.html
+COPY frontend/test_page.html ./test_page.html
+COPY frontend/serve_cors.py ./serve_cors.py
 
 # Provide backend modules used by Host API integrations (WeChat subscribe messages, etc.)
 COPY backend/notification_service.py ./backend/notification_service.py

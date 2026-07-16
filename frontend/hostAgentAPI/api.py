@@ -96,6 +96,23 @@ except Exception as _e:
     print(f"[hostapi] v2 oauth2 endpoints mount failed: {_e}")
     traceback.print_exc()
 
+# 阶段39-6: 提供前端测试页（避免跨域）
+try:
+    from fastapi.staticfiles import StaticFiles
+    import os as _os
+    # 容器里 /app 是工作目录，html 文件已经 COPY 过来
+    _test_dir = _os.path.dirname(_os.path.abspath(__file__))
+    _test_files = ["test_simple.html", "test_page.html"]
+    if all(_os.path.isfile(_os.path.join(_test_dir, f)) for f in _test_files):
+        app.mount("/test", StaticFiles(directory=_test_dir, html=True), name="test_static")
+        print(f"[hostapi] test static mounted: /test/test_simple.html from {_test_dir}")
+    else:
+        print(f"[hostapi] test static skipped: files not in {_test_dir}")
+except Exception as _e:
+    import traceback
+    print(f"[hostapi] test static mount failed: {_e}")
+    traceback.print_exc()
+
 # 阶段21：集成 RAG 端点
 try:
     from A2AServer.v2.rag_endpoints import rag_router
@@ -4939,7 +4956,23 @@ async def v2_models_stream(request: Request):
             # 2. 转 ChatMessage
             chat_msgs = [ChatMessage(role=m["role"], content=m["content"]) for m in messages]
 
-            # 3. 调 router
+            # 3. 查缓存（阶段39-3 集成）
+            from A2AServer.v2.semantic_cache import get_cache
+            cache = get_cache()
+            entry = cache.get(messages, task_type=task_type, max_tokens=max_tokens, temperature=temperature)
+            if entry is not None:
+                # 缓存命中
+                yield f"event: cache_hit\ndata: {__import__('json').dumps({'cached': True, 'key': entry.key, 'hit_count': entry.hit_count, 'provider': entry.provider}, ensure_ascii=False)}\n\n"
+                content = entry.text
+                chunk_size = 10
+                for i in range(0, len(content), chunk_size):
+                    chunk = content[i:i + chunk_size]
+                    yield f"event: chunk\ndata: {__import__('json').dumps({'text': chunk}, ensure_ascii=False)}\n\n"
+                    await asyncio.sleep(0.02)
+                yield f"event: done\ndata: {__import__('json').dumps({'content': content, 'provider': entry.provider + ' (cached)', 'model': entry.model, 'latency_ms': 0, 'fallback_used': False, 'prompt_tokens': entry.prompt_tokens, 'completion_tokens': entry.completion_tokens, 'cached': True}, ensure_ascii=False)}\n\n"
+                return
+
+            # 4. 缓存 miss → 调 router
             router = multi_model.get_router()
             result = await router.chat(
                 messages=chat_msgs,
@@ -4949,7 +4982,21 @@ async def v2_models_stream(request: Request):
                 prefer_provider=prefer_provider,
             )
 
-            # 4. 流式 chunk
+            # 5. 存缓存
+            if result and result.text and not result.error:
+                cache.set(
+                    messages,
+                    result.text,
+                    provider=result.provider,
+                    model=result.model,
+                    task_type=task_type,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    prompt_tokens=result.prompt_tokens,
+                    completion_tokens=result.completion_tokens,
+                )
+
+            # 6. 流式 chunk
             content = result.text or ""
             chunk_size = 10
             for i in range(0, len(content), chunk_size):
@@ -4957,8 +5004,8 @@ async def v2_models_stream(request: Request):
                 yield f"event: chunk\ndata: {__import__('json').dumps({'text': chunk}, ensure_ascii=False)}\n\n"
                 await asyncio.sleep(0.02)
 
-            # 5. done
-            yield f"event: done\ndata: {__import__('json').dumps({'content': content, 'provider': result.provider, 'model': result.model, 'latency_ms': result.latency_ms, 'fallback_used': result.fallback_used, 'prompt_tokens': result.prompt_tokens, 'completion_tokens': result.completion_tokens}, ensure_ascii=False)}\n\n"
+            # 7. done
+            yield f"event: done\ndata: {__import__('json').dumps({'content': content, 'provider': result.provider, 'model': result.model, 'latency_ms': result.latency_ms, 'fallback_used': result.fallback_used, 'prompt_tokens': result.prompt_tokens, 'completion_tokens': result.completion_tokens, 'cached': False}, ensure_ascii=False)}\n\n"
 
         except Exception as e:
             import traceback

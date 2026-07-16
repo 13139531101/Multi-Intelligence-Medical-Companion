@@ -420,8 +420,17 @@ async def v2_alerts_rules():
 async def v2_alerts_evaluate():
     """手动触发一次评估（基于当前指标）"""
     from .alerting import get_alert_manager
+    from .semantic_cache import get_cache
     mgr = get_alert_manager()
+    # 合并 monitoring + semantic_cache 的指标
     metrics = get_metrics()
+    cache_stats = get_cache().stats()
+    metrics["cache"] = {
+        "hit_rate": cache_stats.get("hit_rate", 0),
+        "size": cache_stats.get("size", 0),
+        "hits": cache_stats.get("hits", 0),
+        "misses": cache_stats.get("misses", 0),
+    }
     await mgr.evaluate(metrics)
     return {
         "evaluated": True,

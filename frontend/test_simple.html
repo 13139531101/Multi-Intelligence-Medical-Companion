@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="zh">
+  <head>
+    <meta charset="UTF-8" />
+    <title>PHA v2 简单测试</title>
+    <style>
+      body {
+        font-family: sans-serif;
+        margin: 20px;
+        background: #f0f0f0;
+      }
+      h1 {
+        color: #333;
+      }
+      h2 {
+        color: white;
+        background: #4a90e2;
+        padding: 8px;
+        border-radius: 4px;
+      }
+      .links a {
+        display: inline-block;
+        background: #4a90e2;
+        color: white;
+        padding: 10px 20px;
+        margin: 5px;
+        border-radius: 4px;
+        text-decoration: none;
+      }
+      .links a:hover {
+        background: #357abd;
+      }
+      .test-btn {
+        background: #5cb85c;
+        color: white;
+        border: none;
+        padding: 12px 24px;
+        font-size: 16px;
+        border-radius: 4px;
+        cursor: pointer;
+        margin: 5px;
+      }
+      .test-btn:hover {
+        background: #4cae4c;
+      }
+      iframe {
+        width: 100%;
+        height: 200px;
+        border: 1px solid #ccc;
+        margin: 10px 0;
+      }
+      pre {
+        background: #1e1e1e;
+        color: #d4d4d4;
+        padding: 10px;
+        border-radius: 4px;
+        overflow-x: auto;
+      }
+      .ok {
+        color: #5cb85c;
+        font-weight: bold;
+      }
+      .err {
+        color: #e94b35;
+        font-weight: bold;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>🏥 PHA v2 Stage39 - 测试页（同源，无 CORS）</h1>
+    <p>
+      HostAPI: <code>http://localhost:13002</code> | 页面：<code
+        >/test/test_simple.html</code
+      >
+    </p>
+
+    <h2>📋 方式 1：直接点击链接（新窗口看 JSON）</h2>
+    <div class="links">
+      <a href="/health" target="_blank">/health</a>
+      <a href="/v2/agents/status" target="_blank">/v2/agents/status</a>
+      <a href="/v2/alerts/rules" target="_blank">/v2/alerts/rules</a>
+      <a href="/anp/did/list" target="_blank">/anp/did/list</a>
+      <a href="/v2/models/cache/stats" target="_blank"
+        >/v2/models/cache/stats</a
+      >
+    </div>
+
+    <h2>📋 方式 2：iframe 内嵌显示（不用点）</h2>
+    <h3>/v2/agents/status</h3>
+    <iframe src="/v2/agents/status"></iframe>
+
+    <h3>/v2/alerts/rules</h3>
+    <iframe src="/v2/alerts/rules"></iframe>
+
+    <h3>/anp/did/list</h3>
+    <iframe src="/anp/did/list"></iframe>
+
+    <h2>📋 方式 3：fetch 按钮（同源，不会有 CORS）</h2>
+    <button class="test-btn" onclick="loadJson('/health', 'out1')">
+      测试 /health
+    </button>
+    <button class="test-btn" onclick="loadJson('/v2/agents/status', 'out2')">
+      测试 /v2/agents/status
+    </button>
+    <button class="test-btn" onclick="loadJson('/v2/alerts/rules', 'out3')">
+      测试 /v2/alerts/rules
+    </button>
+    <button class="test-btn" onclick="loadJson('/anp/did/list', 'out4')">
+      测试 /anp/did/list
+    </button>
+    <button
+      class="test-btn"
+      onclick="loadJson('/v2/models/cache/stats', 'out5')"
+    >
+      测试 /v2/models/cache/stats
+    </button>
+    <button class="test-btn" onclick="loadJson('/v2/alerts/active', 'out6')">
+      测试 /v2/alerts/active
+    </button>
+
+    <pre id="out1">点击按钮测试...</pre>
+    <pre id="out2">点击按钮测试...</pre>
+    <pre id="out3">点击按钮测试...</pre>
+    <pre id="out4">点击按钮测试...</pre>
+    <pre id="out5">点击按钮测试...</pre>
+    <pre id="out6">点击按钮测试...</pre>
+
+    <h2>📋 方式 4：SSE 流式（看 LLM 实时回答）</h2>
+    <button class="test-btn" onclick="testSSE()">
+      调用 /v2/chat/stream SSE
+    </button>
+    <pre id="sse-out" style="min-height: 100px">点击按钮开始流式调用...</pre>
+
+    <h2>📋 方式 5：POST 请求</h2>
+    <button class="test-btn" onclick="testPost()">
+      POST /v2/alerts/evaluate (触发评估)
+    </button>
+    <button class="test-btn" onclick="testSign()">
+      POST /anp/did/sign (签名测试)
+    </button>
+    <pre id="post-out">点击按钮测试 POST...</pre>
+
+    <script>
+      async function loadJson(path, outId) {
+        const out = document.getElementById(outId);
+        out.textContent = "Loading " + path + " ...";
+        try {
+          const r = await fetch(path);
+          const text = await r.text();
+          try {
+            const obj = JSON.parse(text);
+            out.textContent =
+              "✅ HTTP " + r.status + "\n" + JSON.stringify(obj, null, 2);
+          } catch (e) {
+            out.textContent = "HTTP " + r.status + "\n" + text;
+          }
+        } catch (e) {
+          out.textContent = "❌ ERROR: " + e.message;
+        }
+      }
+
+      async function testSSE() {
+        const out = document.getElementById("sse-out");
+        out.textContent = "Connecting...\n";
+        try {
+          const r = await fetch("/v2/chat/stream", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              message: "你好，介绍下自己",
+              conversation_id: "test-" + Date.now(),
+            }),
+          });
+          if (!r.ok) {
+            out.textContent = "HTTP " + r.status;
+            return;
+          }
+          const reader = r.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = "";
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split("\n");
+            buffer = lines.pop() || "";
+            for (const line of lines) {
+              out.textContent += line + "\n";
+            }
+          }
+        } catch (e) {
+          out.textContent = "ERROR: " + e.message;
+        }
+      }
+
+      async function testPost() {
+        const out = document.getElementById("post-out");
+        out.textContent = "Loading...";
+        try {
+          const r = await fetch("/v2/alerts/evaluate", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+          });
+          const text = await r.text();
+          try {
+            out.textContent =
+              "HTTP " +
+              r.status +
+              "\n" +
+              JSON.stringify(JSON.parse(text), null, 2);
+          } catch (e) {
+            out.textContent = "HTTP " + r.status + "\n" + text;
+          }
+        } catch (e) {
+          out.textContent = "ERROR: " + e.message;
+        }
+      }
+
+      async function testSign() {
+        const out = document.getElementById("post-out");
+        out.textContent = "Signing...";
+        try {
+          const r = await fetch("/anp/did/sign", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              did: "did:wba:pha.local:hostapi",
+              method: "POST",
+              path: "/test",
+              body: "hello",
+            }),
+          });
+          const text = await r.text();
+          try {
+            out.textContent =
+              "HTTP " +
+              r.status +
+              "\n" +
+              JSON.stringify(JSON.parse(text), null, 2);
+          } catch (e) {
+            out.textContent = "HTTP " + r.status + "\n" + text;
+          }
+        } catch (e) {
+          out.textContent = "ERROR: " + e.message;
+        }
+      }
+    </script>
+  </body>
+</html>
