@@ -1,12 +1,19 @@
 # 🎯 面试准备：PHA v2 LangGraph 阶段开发记录
 
-> **日期**: 2026-07-15
+> **日期**: 2026-07-15 ~ 2026-07-16
 > **目的**: 面试展示完整项目经验 + 问题解决能力
 > **对应代码 commit + tag**:
+>
 > - `85d26e4` / `v2.0-stage35-miniapp-v2` (小程序 v2 接入)
 > - `124ed3f` / `v2.0-stage36-asyncfix` (astream async 修复)
 > - `b33cdd3` / `v2.0-stage37-sse` (SSE 流式端点)
 > - `a3d72a5` / `v2.0-stage37sse-fix` (SSE 3 BUG 修复)
+> - `403806d` / `v2.0-stage38-1-crawler` (ANP 递归爬虫)
+> - `88cb64b` / `v2.0-stage38-2-multimodel` (多 LLM SSE)
+> - `115fa07` / `v2.0-stage38-3-alerting` (性能监控 + 报警)
+> - `77f9e30` / `v2.0-stage39-1-2-registry-did` (Registry + DID WBA)
+> - `34d9dd9` / `v2.0-stage39-3-semantic-cache` (LLM 语义缓存)
+> - `500d128` / `v2.0-stage39-4-e2e` (E2E 测试)
 
 ---
 
@@ -25,27 +32,30 @@
 ## 2. 阶段 35: 小程序 v2 集成 + ANP 接入
 
 ### 2.1 目标
+
 - 小程序同时支持 v1 (A2A) + v2 (LangGraph)
 - 接入 ANP 协议 (Agent Description + DID:WBA)
 - 加 agent 状态监控页
 
 ### 2.2 关键决策
 
-| 决策点 | 选 A | 选 B | 实际 |
-|--------|------|------|------|
-| v1/v2 切换 | 服务端 header `X-Use-V2` | 客户端 UI 切换 | **客户端 UI**（用户可见） |
-| 端点路径 | `/api/v2/chat` 统一前缀 | 顶层 `/smart_chat` | **顶层**（hostapi 现状） |
-| ANP AD 格式 | OpenAPI 3.0 | 自定义 JSON | **自定义**（类比 Schema.org Product） |
+| 决策点      | 选 A                     | 选 B               | 实际                                  |
+| ----------- | ------------------------ | ------------------ | ------------------------------------- |
+| v1/v2 切换  | 服务端 header `X-Use-V2` | 客户端 UI 切换     | **客户端 UI**（用户可见）             |
+| 端点路径    | `/api/v2/chat` 统一前缀  | 顶层 `/smart_chat` | **顶层**（hostapi 现状）              |
+| ANP AD 格式 | OpenAPI 3.0              | 自定义 JSON        | **自定义**（类比 Schema.org Product） |
 
 ### 2.3 实现细节
 
 **14 个新 API 函数**（1280 行，54 个 exports）:
+
 - `sendMessageV2 / sendMessageV2Multi`: 调 `/smart_chat`
 - `getV2AgentsStatus`: 4 个 sub-agent 状态
 - `getAnpHealth / getAnpAgentDescription / getAnpAgents / callAnpRpc`
 - `detectBackendVersion`: 探测 v1/v2 自动 fallback
 
 **agent_chat.js 改动**:
+
 ```js
 // 统一发送入口（v1/v2/single/multi）
 async _sendWithV2(payload) {
@@ -61,6 +71,7 @@ async _sendWithV2(payload) {
 ```
 
 **新页面**:
+
 - `pages/agents_status/`: 4 个 v2 sub-agent + 4 个 ANP agent (DID) + 点击查看详情 + ANP JSON-RPC 测试
 
 ### 2.4 面试亮点
@@ -74,11 +85,13 @@ async _sendWithV2(payload) {
 ## 3. 阶段 36: astream async 修复 (踩坑分享)
 
 ### 3.1 问题
+
 ```
 TypeError: 'async_generator' object is not iterable
 ```
 
 ### 3.2 根因
+
 阶段30 把 `agent.stream()` 改为 `agent.astream()` 适配 `AsyncPostgresSaver`，**漏改了一处 `for` 循环**：
 
 ```python
@@ -92,6 +105,7 @@ async for chunk in stream_iter:   # ✅ async def 内必须用 async for
 ```
 
 ### 3.3 为什么阶段30 没暴露？
+
 - `/v2/agents/status` 显示 `cache_size=0`（agent 没实例化）
 - 没真调过 LLM 路由
 - 阶段35 用户点开小程序 → 实际发请求 → 实例化 → 调 astream → **报错**
@@ -108,22 +122,26 @@ async for chunk in stream_iter:   # ✅ async def 内必须用 async for
 ## 4. 阶段 37: v2 SSE 流式端点 (架构优化)
 
 ### 4.1 背景
+
 阶段35 修完 async 后，**前端 v2 消息 1 分钟没显示**。
 
 ### 4.2 根因（3 层 bug）
 
 **层级 1: 架构问题**
+
 - v2 `smart_chat` 立刻返回 routing 结果（"已将您的请求转发给..."）
 - 实际 LLM 调用在 `asyncio.create_task(_v2_runner())` 后台跑
 - 跑完 inject 到 v1 manager
 - 前端只能**轮询** `/message/list` 拉
 
 **层级 2: 前端轮询逻辑复杂**
+
 - `isFinalAssistantReply` 条件判断（200 字符 / `##` / 列表 / 问号结尾）
 - `pendingMsg` 过滤逻辑
 - v2 注入消息格式（`source: pha-v2-host-graph`）
 
 **层级 3: formattedMessages map 丢 metadata**
+
 - 上一版 `formattedMessages` 没保留 `m.metadata` 字段
 - `isV2Msg(m)` 永远返回 false
 - v2 消息被反复过滤
@@ -131,6 +149,7 @@ async for chunk in stream_iter:   # ✅ async def 内必须用 async for
 ### 4.3 解决：加 SSE 流式端点
 
 **后端** `frontend/hostAgentAPI/api.py`:
+
 ```python
 @app.post("/v2/chat/stream")
 async def v2_chat_stream(request: Request):
@@ -138,27 +157,28 @@ async def v2_chat_stream(request: Request):
     async def event_generator():
         result = await v2_process_message(a2a_msg)
         content = result["result"]["content"]
-        
+
         yield f"event: routing\ndata: {json.dumps(...)}\n\n"
         for i in range(0, len(content), 10):
             yield f"event: chunk\ndata: {json.dumps({'text': content[i:i+10]})}\n\n"
             await asyncio.sleep(0.02)
         yield f"event: done\ndata: {json.dumps(...)}\n\n"
-    
+
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 ```
 
 **前端** `utils/api.js`:
+
 ```js
 const sendMessageV2Stream = (message, onEvent, onError) => {
   const requestTask = wx.request({
     url: `${SERVER_URL}/v2/chat/stream`,
     method: "POST",
     data: requestBody,
-    enableChunked: true,  // ← 关键：微信小程序 SSE 支持
+    enableChunked: true, // ← 关键：微信小程序 SSE 支持
     header: { "Content-Type": "application/json" },
   });
-  
+
   // 解析 SSE: event: routing\ndata: {...}\n\n
   requestTask.onChunkReceived((response) => {
     const text = new TextDecoder("utf-8").decode(new Uint8Array(response.data));
@@ -169,6 +189,7 @@ const sendMessageV2Stream = (message, onEvent, onError) => {
 ```
 
 **前端** `agent_chat.js`:
+
 ```js
 // 流式显示
 (evt) => {
@@ -180,26 +201,26 @@ const sendMessageV2Stream = (message, onEvent, onError) => {
   } else if (evt.event === "done") {
     // 标记 isStreaming = false
   }
-}
+};
 ```
 
 ### 4.4 SSE 模式的 3 个 BUG 修复
 
-| # | BUG | 原因 | 修复 |
-|---|-----|------|------|
-| 1 | 空白回答框 | WXML 用 `part.content`，代码设 `part.text` | 同时设两个字段 |
-| 2 | 还在轮询 | `_sendWithV2` 完后无条件 `startPolling()` | v2 模式不轮询 |
-| 3 | "AI 思考中..." 卡住 | `pending_ai_xxx` 没删 | 第一个 chunk 时 filter 旧 pending |
+| #   | BUG                 | 原因                                       | 修复                              |
+| --- | ------------------- | ------------------------------------------ | --------------------------------- |
+| 1   | 空白回答框          | WXML 用 `part.content`，代码设 `part.text` | 同时设两个字段                    |
+| 2   | 还在轮询            | `_sendWithV2` 完后无条件 `startPolling()`  | v2 模式不轮询                     |
+| 3   | "AI 思考中..." 卡住 | `pending_ai_xxx` 没删                      | 第一个 chunk 时 filter 旧 pending |
 
 ### 4.5 效果对比
 
-| 指标 | 之前 | 现在 |
-|------|------|------|
-| 响应延迟 | 30-60 秒 | **5.7 秒** |
-| 显示方式 | 一次性显示完整答案 | **逐字打字机效果** |
-| 轮询次数 | 15-30 次（每 2 秒） | **0 次**（SSE 一次连接） |
-| 后端压力 | 高（轮询 list_messages） | **低**（单向流） |
-| 用户体验 | "AI 卡住了？" | "AI 在打字！" |
+| 指标     | 之前                     | 现在                     |
+| -------- | ------------------------ | ------------------------ |
+| 响应延迟 | 30-60 秒                 | **5.7 秒**               |
+| 显示方式 | 一次性显示完整答案       | **逐字打字机效果**       |
+| 轮询次数 | 15-30 次（每 2 秒）      | **0 次**（SSE 一次连接） |
+| 后端压力 | 高（轮询 list_messages） | **低**（单向流）         |
+| 用户体验 | "AI 卡住了？"            | "AI 在打字！"            |
 
 ### 4.6 面试亮点
 
@@ -214,6 +235,7 @@ const sendMessageV2Stream = (message, onEvent, onError) => {
 ## 5. 整体技术栈
 
 ### 后端
+
 - **Python 3.11** + **FastAPI** + **uvicorn**
 - **LangGraph 1.x** (StateGraph + ToolNode + AsyncPostgresSaver)
 - **LangChain 1.x** (ChatOpenAI 兼容层)
@@ -223,12 +245,14 @@ const sendMessageV2Stream = (message, onEvent, onError) => {
 - **Docker Compose** (编排 7 个容器)
 
 ### 前端
+
 - **微信小程序** (WeChat Mini Program)
 - **JavaScript** (无 TS，原生)
 - **A2A JSON-RPC 2.0** 协议
 - **SSE 客户端** (`enableChunked: true`)
 
 ### AI 协议
+
 - **A2A** (Agent-to-Agent): Google 推出的 agent 通信协议
 - **MCP** (Model Context Protocol): Anthropic 推出的 tool 协议
 - **ANP** (Agent Network Protocol): 我自定义的 agent 网络协议，类比 HTTP
@@ -238,51 +262,67 @@ const sendMessageV2Stream = (message, onEvent, onError) => {
 ## 6. 面试可能被问的问题
 
 ### Q1: 为什么选 LangGraph 而不是 LangChain Agents？
+
 **A**: LangGraph 1.0 提供：
+
 - 显式状态管理（`AsyncPostgresSaver` + thread_id）
 - 多 agent 编排（multi-agent state graph）
 - 持久化 + 错误恢复
 - 比 LangChain Agents 更可控
 
 ### Q2: astream 和 stream 的区别？
-**A**: 
+
+**A**:
+
 - `stream()` 同步，`astream()` 异步
 - `astream()` 才能配合 `AsyncPostgresSaver`（避免 event loop 冲突）
 - `async for` 必须在 `async def` 内使用
 
 ### Q3: SSE 和 WebSocket 的区别？为啥选 SSE？
+
 **A**:
+
 - SSE 单向（server → client），WebSocket 双向
 - 我们的场景：客户端发一次请求，服务器连续推数据
 - SSE 简单，自动重连，HTTP 友好
 - 微信小程序天然支持 SSE
 
 ### Q4: ANP 和 A2A 的区别？
+
 **A**:
+
 - A2A: 点对点 agent 通信（JSON-RPC）
 - ANP: agent 网络协议，有 Agent Description + DID 标识
 - 类似 HTTP vs DNS 的关系：ANP 给 A2A 提供发现能力
 
 ### Q5: 单例化为什么能加速 3 秒？
+
 **A**:
+
 - LangGraph agent 编译耗时 3 秒
 - 状态由 thread_id 隔离，**安全共享**同一实例
 - 类比数据库连接池
 
 ### Q6: 5.7 秒还是慢，怎么优化？
+
 **A**:
+
 - LLM 推理占 90%，模型本身慢
 - 可以：模型蒸馏 / 缓存常见问答 / 用更快模型（Qwen2.5 7B）
 - 架构已经最优：流式显示让用户感觉快
 
 ### Q7: 怎么保证多 agent 数据一致性？
+
 **A**:
+
 - LangGraph 1.x 的 `AsyncPostgresSaver` 提供 ACID 保证
 - 每个 conversation_id 一个 thread
 - 状态序列化到 Postgres，重启可恢复
 
 ### Q8: 这个项目最难的 bug 是什么？
+
 **A**: 阶段 36 的 `async_generator object is not iterable`
+
 - 难在**埋得深**：阶段 30 改的，阶段 35 才暴露
 - 难在**症状误导**：以为后端没回答，实际是 streaming 失败
 - 教训：单测要覆盖**实际运行路径**，不能只测 endpoint 是否返回 200
@@ -296,6 +336,7 @@ const sendMessageV2Stream = (message, onEvent, onError) => {
    - 4 sub-agent + 编排图
 
 2. **跑后端**（1 分钟）
+
    ```bash
    docker compose up -d
    docker run -d --name hostapi a2aserver-hostapi:stage37sse ...
@@ -310,6 +351,7 @@ const sendMessageV2Stream = (message, onEvent, onError) => {
    - 点 ANP RPC 测试
 
 4. **展示 commit 历史**（1 分钟）
+
    ```bash
    git log --oneline | head -20
    git tag -l 'v2.0-*'
@@ -323,18 +365,45 @@ const sendMessageV2Stream = (message, onEvent, onError) => {
 
 ## 8. 关键文件位置
 
-| 文件 | 作用 |
-|------|------|
-| `frontend/hostAgentAPI/api.py:4820` | v2 SSE 端点 |
-| `frontend/hostAgentAPI/api.py:4618` | v2 smart_chat 端点 |
-| `backend/A2AServer/src/A2AServer/v2/v2_agent.py:272` | astream async for 修复 |
-| `frontend/wechat_mini_program/utils/api.js:899` | sendMessageV2Stream SSE 客户端 |
-| `frontend/wechat_mini_program/pages/agent_chat/agent_chat.js:1645` | _sendWithV2Stream 流式处理 |
-| `frontend/wechat_mini_program/pages/agents_status/` | agent 状态监控页 |
-| `docs/Chinese/V2_API_REFERENCE.md` | v2 API 文档 |
-| `docs/Chinese/V2_ARCHITECTURE.md` | v2 架构文档 |
+| 文件                                                               | 作用                           |
+| ------------------------------------------------------------------ | ------------------------------ |
+| `frontend/hostAgentAPI/api.py:4820`                                | v2 SSE 端点                    |
+| `frontend/hostAgentAPI/api.py:4618`                                | v2 smart_chat 端点             |
+| `backend/A2AServer/src/A2AServer/v2/v2_agent.py:272`               | astream async for 修复         |
+| `frontend/wechat_mini_program/utils/api.js:899`                    | sendMessageV2Stream SSE 客户端 |
+| `frontend/wechat_mini_program/pages/agent_chat/agent_chat.js:1645` | \_sendWithV2Stream 流式处理    |
+| `frontend/wechat_mini_program/pages/agents_status/`                | agent 状态监控页               |
+| `docs/Chinese/V2_API_REFERENCE.md`                                 | v2 API 文档                    |
+| `docs/Chinese/V2_ARCHITECTURE.md`                                  | v2 架构文档                    |
 
 ---
+
+## 8.5 阶段 38-39 后续优化（7 个新阶段）
+
+### 阶段 38: 长期任务三大件
+
+- **38-1 ANP 递归爬虫** (anp_crawler.py): BFS + DID 去重 + 缓存
+  - 类似 web crawler，从种子 URL 开始 BFS 发现 agent
+  - 5 分钟缓存，DID 解析
+- **38-2 多 LLM SSE** (multi_model_endpoints.py + api.py)
+  - 集成 multi_model 路由 + fallback + 限流
+  - 6 种 task_type 自动路由
+- **38-3 报警系统** (alerting.py)
+  - 5 个默认规则 + 自定义 + webhook + 历史
+  - 7/7 测试过
+
+### 阶段 39: 协议完善 + 性能 + 监控
+
+- **39-1 AgentRegistry HTTP 端点** - 4 个端点（list/enable/disable/alias）
+- **39-2 DID WBA 签名验证** (did_wba.py) - 简化版 Ed25519
+  - W3C DID 规范（DID Document + verificationMethod）
+  - 时间戳防重放（5 分钟有效期）
+- **39-3 LLM 语义缓存** (semantic_cache.py) - LRU + TTL + 命中率
+  - cached_chat() 集成 wrapper
+  - 8/8 测试过
+- **39-4 E2E 测试** (test_e2e_miniapp.py) - 6 个端到端测试
+  - 全部跑通真实 hostapi stage39
+  - 修复 422 错误（anp_bridge 缺 Request import）
 
 ## 9. 完整 commit / tag 列表
 
@@ -364,12 +433,22 @@ git tag -l 'v2.0-stage3*'
 
 ---
 
-## 10. 总结：可面试的 5 大能力
+## 10. 总结：可面试的 7 大能力
 
-1. **协议设计能力** (A2A/MCP/ANP 三协议)
-2. **异步编程深度** (async_generator 修复)
-3. **架构优化能力** (轮询 → SSE 流式)
+1. **协议设计能力** (A2A/MCP/ANP 三协议 + DID:WBA)
+2. **异步编程深度** (async_generator 修复 + astream)
+3. **架构优化能力** (轮询 → SSE 流式 + 单例化 + 缓存)
 4. **端到端调试** (Docker + curl + wx 模拟器 + 浏览器)
-5. **文档 + 版本管理** (24 个 tag + 详细 commit message)
+5. **性能与可靠性** (LLM 缓存 + 报警 + 限流 + fallback)
+6. **安全性** (DID WBA 签名 + 时间戳防重放)
+7. **文档 + 版本管理** (35+ tag + 详细 commit message)
+
+### 长期价值
+
+- **自动化扩展**: ANP 递归爬虫自动发现新 agent
+- **弹性**: 4 provider fallback，任何一个挂掉都能继续
+- **可观测**: Prometheus metrics + 报警 + 100 条历史
+- **可测试**: 6 个 e2e 测试 + 30+ 单元测试
+- **可灰度**: AgentRegistry enable/disable 动态切换
 
 > **背熟这份文档 + 演示流程，面试稳过！** 🎯
