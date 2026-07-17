@@ -929,6 +929,26 @@ try:
         except Exception:
             return None
 
+    def _smart_title(payload: dict) -> str:
+        """阶段47: 自动解析文件名。清理 'medical_record - xxxhash.png' 变成有意义标题。"""
+        raw_title = (payload.get("title") or "").strip()
+        # 检测 hash 形式: 'medical_record - <hash>.<ext>' 或 '处方单 - <hash>.jpg'
+        import re
+        m = re.match(r"^(?:medical_record|ocr_result|scan|upload)[_\-\s]*[-_]\s*([A-Za-z0-9_-]{15,})\.(\w+)$", raw_title)
+        if m:
+            rtype = payload.get("type") or payload.get("record_type") or "other"
+            label_map = {
+                "diagnosis": "诊断报告", "exam": "检查报告",
+                "report": "检查报告", "allergy": "过敏记录",
+                "medication": "用药记录", "other": "健康档案",
+            }
+            return f"{label_map.get(rtype, '健康档案')}（{m.group(2).upper()}）"
+        # 检测 '中文标签 - <hash>.<ext>'
+        m2 = re.match(r"^([一-龥]{2,8})\s*[-_]\s*([A-Za-z0-9_-]{15,})\.(\w+)$", raw_title)
+        if m2:
+            return f"{m2.group(1)}（{m2.group(3).upper()}）"
+        return raw_title
+
     def transform_record_payload(payload: dict) -> dict:
         # 映射前端字段到后端模型
         record_type = _map_record_type(payload.get("type") or payload.get("record_type"))
@@ -949,7 +969,7 @@ try:
         if safe_files:
             metadata["uploaded_files"] = safe_files
         return {
-            "title": payload.get("title", ""),
+            "title": _smart_title(payload),
             "record_type": record_type or health_api.RecordType.OTHER,
             "summary": summary,
             "content": content,

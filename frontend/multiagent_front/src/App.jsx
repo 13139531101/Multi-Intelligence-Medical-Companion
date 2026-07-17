@@ -85,6 +85,17 @@ function App() {
             <Route path="/test-chat" element={<TestChat />} />
             <Route path="/register" element={<Register />} />
 
+            {/* 阶段46: 旧路由重定向到新设计页 */}
+            <Route
+              path="/health-records"
+              element={<Navigate to="/v2/health-records" replace />}
+            />
+            <Route
+              path="/medication"
+              element={<Navigate to="/v2/medication" replace />}
+            />
+            <Route path="/chat" element={<Navigate to="/v2/chat" replace />} />
+
             {/* 阶段44: 全新设计页面 */}
             <Route
               path="/v2/dashboard"

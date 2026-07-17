@@ -1251,6 +1251,173 @@ function ApiExplorerTab() {
 }
 
 // ============================================================
+// Tab 12: RAG
+// ============================================================
+function RagTab() {
+  const [stats, setStats] = useState(null);
+  const [query, setQuery] = useState("高血压");
+  const [results, setResults] = useState([]);
+  const [feedback, setFeedback] = useState("");
+  const load = useCallback(async () => {
+    try {
+      setStats(await fetchApi("/v2/rag/stats"));
+    } catch (e) {
+      console.error(e);
+    }
+  }, []);
+  useEffect(() => {
+    load();
+    const t = setInterval(load, 5000);
+    return () => clearInterval(t);
+  }, [load]);
+  const search = async () => {
+    const r = await fetch(
+      `${API_BASE}/v2/rag/search?q=${encodeURIComponent(query)}&top_k=5`,
+    );
+    const data = await r.json();
+    setResults(data.results || data || []);
+  };
+  return (
+    <div className="space-y-4">
+      <Card title="RAG Stats" icon={BarChart3}>
+        {stats && (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            {Object.entries(stats)
+              .slice(0, 12)
+              .map(([k, v]) => (
+                <div key={k} className="p-2 bg-slate-900/40 rounded">
+                  <div className="text-[10px] text-cyan-600 font-mono">{k}</div>
+                  <div className="text-cyan-200 text-lg">
+                    {typeof v === "object"
+                      ? JSON.stringify(v).slice(0, 50)
+                      : String(v)}
+                  </div>
+                </div>
+              ))}
+          </div>
+        )}
+      </Card>
+      <Card title="RAG Search" icon={Search}>
+        <div className="flex gap-2 mb-2">
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && search()}
+            className="flex-1 bg-slate-900 border border-cyan-800 rounded px-3 py-1 text-cyan-100 font-mono text-xs"
+          />
+          <button
+            onClick={search}
+            className="bg-cyan-600 hover:bg-cyan-500 text-white px-3 py-1 rounded text-xs"
+          >
+            搜索
+          </button>
+        </div>
+        <div className="space-y-2">
+          {results.map((r, i) => (
+            <div key={i} className="p-2 bg-slate-900/40 rounded">
+              <div className="text-[10px] text-cyan-600">
+                score: {r.score?.toFixed(3)}
+              </div>
+              <div className="text-cyan-200 text-xs">
+                {r.content || r.text || JSON.stringify(r).slice(0, 200)}
+              </div>
+            </div>
+          ))}
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+// ============================================================
+// Tab 13: Audit
+// ============================================================
+function AuditTab() {
+  const [stats, setStats] = useState(null);
+  const [recent, setRecent] = useState([]);
+  const load = useCallback(async () => {
+    try {
+      const [s, r] = await Promise.all([
+        fetchApi("/v2/audit/stats").catch(() => null),
+        fetchApi("/v2/audit/recent?limit=50").catch(() => ({ events: [] })),
+      ]);
+      setStats(s);
+      setRecent(r.events || r || []);
+    } catch (e) {
+      console.error(e);
+    }
+  }, []);
+  useEffect(() => {
+    load();
+    const t = setInterval(load, 5000);
+    return () => clearInterval(t);
+  }, [load]);
+  return (
+    <div className="space-y-4">
+      <Card title="Audit Stats" icon={Eye}>
+        {stats && (
+          <div className="grid grid-cols-2 gap-3">
+            {Object.entries(stats).map(([k, v]) => (
+              <StatRow
+                key={k}
+                label={k}
+                value={
+                  typeof v === "object"
+                    ? JSON.stringify(v).slice(0, 30)
+                    : String(v)
+                }
+              />
+            ))}
+          </div>
+        )}
+      </Card>
+      <Card title="Recent Events" icon={ListChecks}>
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="text-cyan-600 text-left">
+              <th>Time</th>
+              <th>Type</th>
+              <th>Action</th>
+              <th>User</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {recent.slice(0, 20).map((e, i) => (
+              <tr key={i} className="border-t border-cyan-900/30">
+                <td className="py-1 font-mono text-[10px]">
+                  {new Date(
+                    (e.timestamp || e.ts || 0) * 1000,
+                  ).toLocaleTimeString()}
+                </td>
+                <td>{e.type || e.event_type || "-"}</td>
+                <td>{e.action || "-"}</td>
+                <td className="font-mono text-[10px]">
+                  {e.user_id || e.user || "-"}
+                </td>
+                <td>
+                  <Badge
+                    type={
+                      e.status === "error"
+                        ? "error"
+                        : e.status === "success"
+                          ? "success"
+                          : "default"
+                    }
+                  >
+                    {e.status || "ok"}
+                  </Badge>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </Card>
+    </div>
+  );
+}
+
+// ============================================================
 // 主 App
 // ============================================================
 function App() {
@@ -1273,6 +1440,8 @@ function App() {
     { key: "metrics", label: "指标", icon: BarChart3 },
     { key: "anp", label: "ANP/DID", icon: Network },
     { key: "oauth2", label: "OAuth2", icon: Lock },
+    { key: "rag", label: "RAG", icon: BookOpen },
+    { key: "audit", label: "审计", icon: Eye },
     { key: "api", label: "API Explorer", icon: Zap },
   ];
 
@@ -1364,6 +1533,8 @@ function App() {
         {activeTab === "metrics" && <MetricsTab />}
         {activeTab === "anp" && <ANPTab />}
         {activeTab === "oauth2" && <OAuth2Tab />}
+        {activeTab === "rag" && <RagTab />}
+        {activeTab === "audit" && <AuditTab />}
         {activeTab === "api" && <ApiExplorerTab />}
       </main>
     </div>
