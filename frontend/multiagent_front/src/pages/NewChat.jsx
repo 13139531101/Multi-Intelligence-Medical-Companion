@@ -67,52 +67,91 @@ const SUGGESTIONS = [
   "如何预防 2 型糖尿病?",
 ];
 
+// 阶段48-4: 解析 markdown 表格 (轻度)
+const renderTable = (lines, startI, key) => {
+  // lines[startI] 是 header (| A | B |), lines[startI+1] 是分隔 (|---|---|
+  const headerLine = lines[startI];
+  const cells = headerLine.split("|").map(c => c.trim()).filter(c => c !== "");
+  if (cells.length < 2) return null;
+  return (
+    <Box key={key} sx={{ border: "1px solid", borderColor: "divider", borderRadius: 1, overflow: "hidden", my: 1 }}>
+      <Box sx={{ display: "flex", bgcolor: "grey.100" }}>
+        {cells.map((c, ci) => (
+          <Box key={ci} sx={{ flex: 1, p: 1, fontWeight: 600, fontSize: "0.85rem" }}>
+            {c}
+          </Box>
+        ))}
+      </Box>
+      {lines.slice(startI + 2).map((row, ri) => {
+        if (!row.startsWith("|")) return null;
+        const rcells = row.split("|").map(c => c.trim()).filter(c => c !== "");
+        return (
+          <Box key={`${key}-${ri}`} sx={{ display: "flex", borderTop: "1px solid", borderColor: "divider" }}>
+            {rcells.map((c, ci) => (
+              <Box key={ci} sx={{ flex: 1, p: 1, fontSize: "0.85rem" }}>
+                {c}
+              </Box>
+            ))}
+          </Box>
+        );
+      })}
+    </Box>
+  );
+};
+
 const renderMd = (text) => {
   if (!text) return null;
   const lines = text.split("\n");
-  return lines.map((line, i) => {
-    if (line.startsWith("## ")) {
-      return (
-        <Typography
-          key={i}
-          variant="h6"
-          sx={{ fontWeight: 600, mt: 1.5, mb: 0.5, fontSize: "1rem" }}
-        >
-          {line.slice(3)}
-        </Typography>
+  const result = [];
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    if (line.startsWith("#### ")) {
+      result.push(<Typography key={i} variant="subtitle2" sx={{ fontWeight: 600, mt: 1, color: "text.primary" }}>{line.slice(5)}</Typography>);
+    } else if (line.startsWith("### ")) {
+      result.push(<Typography key={i} variant="subtitle1" sx={{ fontWeight: 600, mt: 1.2, color: "text.primary", fontSize: "0.95rem" }}>{line.slice(4)}</Typography>);
+    } else if (line.startsWith("## ")) {
+      result.push(<Typography key={i} variant="h6" sx={{ fontWeight: 600, mt: 1.5, mb: 0.5, fontSize: "1rem", borderBottom: "2px solid", borderColor: "primary.main", pb: 0.5 }}>{line.slice(3)}</Typography>);
+    } else if (line.startsWith("# ")) {
+      result.push(<Typography key={i} variant="h5" sx={{ fontWeight: 700, mt: 1.5 }}>{line.slice(2)}</Typography>);
+    } else if (line.startsWith("> ")) {
+      result.push(
+        <Box key={i} sx={{ borderLeft: "4px solid", borderColor: "warning.main", pl: 1.5, py: 0.5, bgcolor: "rgba(255,193,7,0.05)", my: 0.5 }}>
+          <Typography variant="body1" component="div" sx={{ fontStyle: "italic" }} dangerouslySetInnerHTML={{ __html: formatInline(line.slice(2)) }} />
+        </Box>,
+      );
+    } else if (line.startsWith("---")) {
+      result.push(<Box key={i} sx={{ borderTop: "1px solid", borderColor: "divider", my: 1 }} />);
+    } else if (line.match(/^[-*]\s/)) {
+      result.push(
+        <Box key={i} sx={{ display: "flex", gap: 1, ml: 1, my: 0.25, alignItems: "flex-start" }}>
+          <Box sx={{ color: "primary.main", fontWeight: 700 }}>•</Box>
+          <Typography variant="body1" component="div" sx={{ flex: 1, lineHeight: 1.6 }} dangerouslySetInnerHTML={{ __html: formatInline(line.slice(2)) }} />
+        </Box>,
+      );
+    } else if (line.match(/^\d+\.\s/)) {
+      const num = line.match(/^(\d+)\.\s/)[1];
+      result.push(
+        <Box key={i} sx={{ display: "flex", gap: 1, ml: 1, my: 0.25, alignItems: "flex-start" }}>
+          <Box sx={{ color: "primary.main", fontWeight: 700, minWidth: 20 }}>{num}.</Box>
+          <Typography variant="body1" component="div" sx={{ flex: 1, lineHeight: 1.6 }} dangerouslySetInnerHTML={{ __html: formatInline(line.slice(num.length + 2)) }} />
+        </Box>,
+      );
+    } else if (line.startsWith("|") && line.endsWith("|") && lines[i + 1] && lines[i + 1].match(/^\|[\s\-:|]+\|")) {
+      const tableR = renderTable(lines, i, `t-${i}`);
+      result.push(tableR);
+      i = i + 1;
+      while (i + 1 < lines.length && lines[i + 1].startsWith("|")) i++;
+    } else if (line.trim() === "") {
+      result.push(<Box key={i} sx={{ height: 6 }} />);
+    } else {
+      result.push(
+        <Typography key={i} variant="body1" component="div" sx={{ mb: 0.5, lineHeight: 1.7 }} dangerouslySetInnerHTML={{ __html: formatInline(line) }} />,
       );
     }
-    if (line.startsWith("# ")) {
-      return (
-        <Typography key={i} variant="h5" sx={{ fontWeight: 600, mt: 1.5 }}>
-          {line.slice(2)}
-        </Typography>
-      );
-    }
-    if (line.match(/^[-*]\s/)) {
-      return (
-        <Box key={i} sx={{ display: "flex", gap: 1, ml: 1, my: 0.25 }}>
-          <Box sx={{ color: "primary.main" }}>•</Box>
-          <Typography
-            variant="body1"
-            component="div"
-            sx={{ flex: 1 }}
-            dangerouslySetInnerHTML={{ __html: formatInline(line.slice(2)) }}
-          />
-        </Box>
-      );
-    }
-    if (line.trim() === "") return <Box key={i} sx={{ height: 8 }} />;
-    return (
-      <Typography
-        key={i}
-        variant="body1"
-        component="div"
-        sx={{ mb: 0.5, lineHeight: 1.7 }}
-        dangerouslySetInnerHTML={{ __html: formatInline(line) }}
-      />
-    );
-  });
+    i++;
+  }
+  return result;
 };
 
 const formatInline = (text) => {
@@ -123,6 +162,22 @@ const formatInline = (text) => {
       '<code style="background:rgba(0,0,0,0.06);padding:0 4px;border-radius:3px;font-family:monospace;font-size:0.9em">$1</code>',
     )
     .replace(/\n/g, "<br/>");
+};
+
+// 阶段48-4: 去掉 markdown 符号用于列表预览
+const stripMd = (text) => {
+  if (!text) return "";
+  return text
+    .replace(/^#+\s+/gm, "") // # h
+    .replace(/\*\*(.+?)\*\*/g, "$1") // **b**
+    .replace(/\*(.+?)\*/g, "$1") // *i*
+    .replace(/`(.+?)`/g, "$1") // `c`
+    .replace(/^[-*]\s+/gm, "•") // - *
+    .replace(/^\d+\.\s+/gm, "•") // 1.
+    .replace(/\|/g, " ") // table
+    .replace(/\n+/g, " ") // 多行合一
+    .replace(/\s+/g, " ")
+    .trim();
 };
 
 const WELCOME = `你好，我是 PHA 健康咨询助手。
@@ -953,14 +1008,20 @@ export default function NewChat() {
                   <ListItemButton
                     onClick={() => loadConversation(c.id)}
                     selected={currentConvId === c.id}
+                    sx={{ alignItems: "flex-start", py: 1.25 }}
                   >
-                    <ListItemIcon>
-                      <AccessTime color="action" />
+                    <ListItemIcon sx={{ minWidth: 36, mt: 0.5 }}>
+                      <AccessTime color="action" fontSize="small" />
                     </ListItemIcon>
                     <ListItemText
                       primary={c.title}
                       secondary={
-                        <Stack direction="row" spacing={1} alignItems="center">
+                        <Stack
+                          direction="row"
+                          spacing={1}
+                          alignItems="flex-start"
+                          sx={{ mt: 0.25 }}
+                        >
                           <Typography
                             variant="caption"
                             color="text.secondary"
@@ -968,15 +1029,25 @@ export default function NewChat() {
                               flex: 1,
                               overflow: "hidden",
                               textOverflow: "ellipsis",
+                              display: "-webkit-box",
+                              WebkitLineClamp: 2,
+                              WebkitBoxOrient: "vertical",
+                              whiteSpace: "normal",
+                              lineHeight: 1.3,
                             }}
                           >
-                            {c.preview || ""}
+                            {/* 阶段48-4: preview 截 60 字 + 去掉 markdown 符号 */}
+                            {stripMd(c.preview || "").slice(0, 60)}
                           </Typography>
                           {c.count > 0 && (
                             <Chip
                               label={c.count}
                               size="small"
-                              sx={{ height: 16, fontSize: "0.65rem" }}
+                              sx={{
+                                height: 16,
+                                fontSize: "0.65rem",
+                                flexShrink: 0,
+                              }}
                             />
                           )}
                         </Stack>
