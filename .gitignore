@@ -57,3 +57,8 @@ tessdata/
 # Ignore root multiagent_front
 multiagent_front/
 论文相关/
+
+# 阶段48-3: 前端 multiagent_front 子目录需要被追踪 (新建文件)
+!frontend/multiagent_front/
+!frontend/multiagent_front/src/
+!frontend/multiagent_front/src/**/

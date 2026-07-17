@@ -169,22 +169,31 @@ export default function NewChat() {
     setLoadingHistory(true);
     try {
       const data = await getConsultationHistory({ limit: 50 });
-      const list = Array.isArray(data)
-        ? data
-        : data?.consultations || data?.messages || [];
-      setConversations(
-        list.map((c) => ({
-          id: c.id || c.conversation_id || c._id,
-          title:
-            c.title || (c.first_message || c.preview || "对话").slice(0, 30),
-          time: c.updated_at || c.created_at || c.timestamp,
-          preview: c.preview || c.last_message || c.summary,
-          count: c.message_count || c.count || 0,
-        })),
+      console.log(
+        "[DEBUG] raw:",
+        data,
+        typeof data,
+        Array.isArray(data),
+        Array.isArray(data) ? data.length : "-",
       );
+      // 过滤：跳过没有 id 的、跳过空对象
+      const list = (
+        Array.isArray(data) ? data : data?.consultations || data?.messages || []
+      ).filter((c) => c && (c.id || c.conversation_id || c._id));
+      const mapped = list.map((c) => ({
+        id: c.consultation_id || c.id || c._id,
+        // 用 question 当主显示文本 (因为 title 通常空)
+        title:
+          c.title ||
+          (c.question || c.preview || c.first_message || "对话").slice(0, 30),
+        time: c.updated_at || c.created_at || c.timestamp,
+        preview: c.answer || c.preview || c.last_message || c.summary,
+        count: c.message_count || c.count || 0,
+      }));
+      console.log("[DEBUG] mapped:", mapped.length, mapped.slice(0, 2));
+      setConversations(mapped);
     } catch (e) {
-      // fallback: 用 messages 当当前会话
-      console.warn("history:", e?.message);
+      console.warn("[DEBUG] history error:", e?.message);
       setConversations([]);
     }
     setLoadingHistory(false);
