@@ -220,7 +220,7 @@ export default function Dashboard() {
             {SECTIONS.map((s) => (
               <Grid item xs={6} md={3} key={s.name}>
                 <Paper
-                  onClick={() => navigate(s.path)}
+                  onClick={() => navigate("/v2" + s.path)}
                   variant="outlined"
                   sx={{
                     p: 2,
@@ -277,7 +277,7 @@ export default function Dashboard() {
                   <Grid item xs={6} md={3} key={stat.label}>
                     <Paper
                       variant="outlined"
-                      onClick={() => navigate("/health-records")}
+                      onClick={() => navigate("/v2/health-records")}
                       sx={{
                         p: 1.5,
                         textAlign: "center",

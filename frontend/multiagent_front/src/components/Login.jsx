@@ -47,7 +47,7 @@ const Login = () => {
       authLogin(response.access_token, response.user);
       
       // 跳转到仪表盘
-      navigate('/dashboard');
+      navigate('/v2/dashboard');
     } catch (err) {
       setError(err.detail || err.message || '登录失败，请检查用户名和密码');
     } finally {

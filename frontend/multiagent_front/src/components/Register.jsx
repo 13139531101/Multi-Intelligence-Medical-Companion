@@ -74,7 +74,7 @@ const Register = () => {
       authLogin(response.access_token, response.user);
       
       // 跳转到仪表盘
-      navigate('/dashboard');
+      navigate('/v2/dashboard');
     } catch (err) {
       setError(err.detail || err.message || '注册失败，请重试');
     } finally {

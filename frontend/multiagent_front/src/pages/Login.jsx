@@ -69,7 +69,7 @@ const Login = () => {
             token: response.token
           });
           localStorage.setItem('healthToken', response.token);
-          navigate('/dashboard');
+          navigate('/v2/dashboard');
         } else {
           setError(response.message || '登录失败');
         }

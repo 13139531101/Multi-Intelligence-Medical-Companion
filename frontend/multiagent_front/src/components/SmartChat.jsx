@@ -401,7 +401,7 @@ const SmartChat = () => {
         }}
       >
         <Typography variant="h4">智能健康助手</Typography>
-        <Button variant="outlined" onClick={() => navigate("/dashboard")}>
+        <Button variant="outlined" onClick={() => navigate("/v2/dashboard")}>
           返回仪表盘
         </Button>
       </Box>
