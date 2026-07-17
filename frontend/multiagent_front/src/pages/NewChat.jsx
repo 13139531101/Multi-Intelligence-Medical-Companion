@@ -71,22 +71,47 @@ const SUGGESTIONS = [
 const renderTable = (lines, startI, key) => {
   // lines[startI] 是 header (| A | B |), lines[startI+1] 是分隔 (|---|---|
   const headerLine = lines[startI];
-  const cells = headerLine.split("|").map(c => c.trim()).filter(c => c !== "");
+  const cells = headerLine
+    .split("|")
+    .map((c) => c.trim())
+    .filter((c) => c !== "");
   if (cells.length < 2) return null;
   return (
-    <Box key={key} sx={{ border: "1px solid", borderColor: "divider", borderRadius: 1, overflow: "hidden", my: 1 }}>
+    <Box
+      key={key}
+      sx={{
+        border: "1px solid",
+        borderColor: "divider",
+        borderRadius: 1,
+        overflow: "hidden",
+        my: 1,
+      }}
+    >
       <Box sx={{ display: "flex", bgcolor: "grey.100" }}>
         {cells.map((c, ci) => (
-          <Box key={ci} sx={{ flex: 1, p: 1, fontWeight: 600, fontSize: "0.85rem" }}>
+          <Box
+            key={ci}
+            sx={{ flex: 1, p: 1, fontWeight: 600, fontSize: "0.85rem" }}
+          >
             {c}
           </Box>
         ))}
       </Box>
       {lines.slice(startI + 2).map((row, ri) => {
         if (!row.startsWith("|")) return null;
-        const rcells = row.split("|").map(c => c.trim()).filter(c => c !== "");
+        const rcells = row
+          .split("|")
+          .map((c) => c.trim())
+          .filter((c) => c !== "");
         return (
-          <Box key={`${key}-${ri}`} sx={{ display: "flex", borderTop: "1px solid", borderColor: "divider" }}>
+          <Box
+            key={`${key}-${ri}`}
+            sx={{
+              display: "flex",
+              borderTop: "1px solid",
+              borderColor: "divider",
+            }}
+          >
             {rcells.map((c, ci) => (
               <Box key={ci} sx={{ flex: 1, p: 1, fontSize: "0.85rem" }}>
                 {c}
@@ -107,37 +132,136 @@ const renderMd = (text) => {
   while (i < lines.length) {
     const line = lines[i];
     if (line.startsWith("#### ")) {
-      result.push(<Typography key={i} variant="subtitle2" sx={{ fontWeight: 600, mt: 1, color: "text.primary" }}>{line.slice(5)}</Typography>);
+      result.push(
+        <Typography
+          key={i}
+          variant="subtitle2"
+          sx={{ fontWeight: 600, mt: 1, color: "text.primary" }}
+        >
+          {line.slice(5)}
+        </Typography>,
+      );
     } else if (line.startsWith("### ")) {
-      result.push(<Typography key={i} variant="subtitle1" sx={{ fontWeight: 600, mt: 1.2, color: "text.primary", fontSize: "0.95rem" }}>{line.slice(4)}</Typography>);
+      result.push(
+        <Typography
+          key={i}
+          variant="subtitle1"
+          sx={{
+            fontWeight: 600,
+            mt: 1.2,
+            color: "text.primary",
+            fontSize: "0.95rem",
+          }}
+        >
+          {line.slice(4)}
+        </Typography>,
+      );
     } else if (line.startsWith("## ")) {
-      result.push(<Typography key={i} variant="h6" sx={{ fontWeight: 600, mt: 1.5, mb: 0.5, fontSize: "1rem", borderBottom: "2px solid", borderColor: "primary.main", pb: 0.5 }}>{line.slice(3)}</Typography>);
+      result.push(
+        <Typography
+          key={i}
+          variant="h6"
+          sx={{
+            fontWeight: 600,
+            mt: 1.5,
+            mb: 0.5,
+            fontSize: "1rem",
+            borderBottom: "2px solid",
+            borderColor: "primary.main",
+            pb: 0.5,
+          }}
+        >
+          {line.slice(3)}
+        </Typography>,
+      );
     } else if (line.startsWith("# ")) {
-      result.push(<Typography key={i} variant="h5" sx={{ fontWeight: 700, mt: 1.5 }}>{line.slice(2)}</Typography>);
+      result.push(
+        <Typography key={i} variant="h5" sx={{ fontWeight: 700, mt: 1.5 }}>
+          {line.slice(2)}
+        </Typography>,
+      );
     } else if (line.startsWith("> ")) {
       result.push(
-        <Box key={i} sx={{ borderLeft: "4px solid", borderColor: "warning.main", pl: 1.5, py: 0.5, bgcolor: "rgba(255,193,7,0.05)", my: 0.5 }}>
-          <Typography variant="body1" component="div" sx={{ fontStyle: "italic" }} dangerouslySetInnerHTML={{ __html: formatInline(line.slice(2)) }} />
+        <Box
+          key={i}
+          sx={{
+            borderLeft: "4px solid",
+            borderColor: "warning.main",
+            pl: 1.5,
+            py: 0.5,
+            bgcolor: "rgba(255,193,7,0.05)",
+            my: 0.5,
+          }}
+        >
+          <Typography
+            variant="body1"
+            component="div"
+            sx={{ fontStyle: "italic" }}
+            dangerouslySetInnerHTML={{ __html: formatInline(line.slice(2)) }}
+          />
         </Box>,
       );
     } else if (line.startsWith("---")) {
-      result.push(<Box key={i} sx={{ borderTop: "1px solid", borderColor: "divider", my: 1 }} />);
+      result.push(
+        <Box
+          key={i}
+          sx={{ borderTop: "1px solid", borderColor: "divider", my: 1 }}
+        />,
+      );
     } else if (line.match(/^[-*]\s/)) {
       result.push(
-        <Box key={i} sx={{ display: "flex", gap: 1, ml: 1, my: 0.25, alignItems: "flex-start" }}>
+        <Box
+          key={i}
+          sx={{
+            display: "flex",
+            gap: 1,
+            ml: 1,
+            my: 0.25,
+            alignItems: "flex-start",
+          }}
+        >
           <Box sx={{ color: "primary.main", fontWeight: 700 }}>•</Box>
-          <Typography variant="body1" component="div" sx={{ flex: 1, lineHeight: 1.6 }} dangerouslySetInnerHTML={{ __html: formatInline(line.slice(2)) }} />
+          <Typography
+            variant="body1"
+            component="div"
+            sx={{ flex: 1, lineHeight: 1.6 }}
+            dangerouslySetInnerHTML={{ __html: formatInline(line.slice(2)) }}
+          />
         </Box>,
       );
     } else if (line.match(/^\d+\.\s/)) {
       const num = line.match(/^(\d+)\.\s/)[1];
       result.push(
-        <Box key={i} sx={{ display: "flex", gap: 1, ml: 1, my: 0.25, alignItems: "flex-start" }}>
-          <Box sx={{ color: "primary.main", fontWeight: 700, minWidth: 20 }}>{num}.</Box>
-          <Typography variant="body1" component="div" sx={{ flex: 1, lineHeight: 1.6 }} dangerouslySetInnerHTML={{ __html: formatInline(line.slice(num.length + 2)) }} />
+        <Box
+          key={i}
+          sx={{
+            display: "flex",
+            gap: 1,
+            ml: 1,
+            my: 0.25,
+            alignItems: "flex-start",
+          }}
+        >
+          <Box sx={{ color: "primary.main", fontWeight: 700, minWidth: 20 }}>
+            {num}.
+          </Box>
+          <Typography
+            variant="body1"
+            component="div"
+            sx={{ flex: 1, lineHeight: 1.6 }}
+            dangerouslySetInnerHTML={{
+              __html: formatInline(line.slice(num.length + 2)),
+            }}
+          />
         </Box>,
       );
-    } else if (line.startsWith("|") && line.endsWith("|") && lines[i + 1] && lines[i + 1].match(/^\|[\s\-:|]+\|")) {
+    } else if (
+      line.startsWith("|") &&
+      line.endsWith("|") &&
+      lines[i + 1] &&
+      lines[i + 1].startsWith("|") &&
+      lines[i + 1].includes("-")
+    ) {
       const tableR = renderTable(lines, i, `t-${i}`);
       result.push(tableR);
       i = i + 1;
@@ -146,7 +270,13 @@ const renderMd = (text) => {
       result.push(<Box key={i} sx={{ height: 6 }} />);
     } else {
       result.push(
-        <Typography key={i} variant="body1" component="div" sx={{ mb: 0.5, lineHeight: 1.7 }} dangerouslySetInnerHTML={{ __html: formatInline(line) }} />,
+        <Typography
+          key={i}
+          variant="body1"
+          component="div"
+          sx={{ mb: 0.5, lineHeight: 1.7 }}
+          dangerouslySetInnerHTML={{ __html: formatInline(line) }}
+        />,
       );
     }
     i++;
