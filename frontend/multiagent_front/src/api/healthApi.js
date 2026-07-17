@@ -629,6 +629,19 @@ export const getHealthTrends = async (params = {}) => {
   }
 };
 
+// 获取服药历史 (未实现 - 给个兜底)
+export const getMedicationsHistory = async (params = {}) => {
+  return [
+    { day: "周一", value: 85 },
+    { day: "周二", value: 92 },
+    { day: "周三", value: 78 },
+    { day: "周四", value: 88 },
+    { day: "周五", value: 95 },
+    { day: "周六", value: 100 },
+    { day: "今日", value: 60 },
+  ];
+};
+
 // === 智能路由 ===
 export const smartChat = async (message) => {
   try {
