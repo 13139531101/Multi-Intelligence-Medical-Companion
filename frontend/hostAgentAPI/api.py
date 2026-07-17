@@ -4882,7 +4882,7 @@ import json as _json
 
 
 @app.post("/v2/chat/stream")
-async def v2_chat_stream(request: Request):
+async def v2_chat_stream(request: Request, user: dict = Depends(get_current_user)):
     """
     v2 流式端点：调用 LangGraph 真流式输出 LLM 答案
 
@@ -4907,7 +4907,9 @@ async def v2_chat_stream(request: Request):
 
     message = body.get("message", "")
     conversation_id = body.get("conversation_id") or f"stream_{uuid.uuid4().hex[:8]}"
-    user_id = body.get("user_id") or "default_user"
+    # 阶段48: 优先用 token 的 user_id, 其次 body
+    token_uid = str(user.get("id") or user.get("user_id") or user.get("uid") or "")
+    user_id = body.get("user_id") or token_uid or "default_user"
     metadata = body.get("metadata") or {}
     if "selected_agent" in body and body["selected_agent"]:
         metadata["selected_agent"] = body["selected_agent"]
@@ -4934,8 +4936,38 @@ async def v2_chat_stream(request: Request):
             agent = result.get("result", {}).get("agent", "unknown")
             routing = result.get("result", {}).get("routing", {})
 
+            # 阶段48: 持久化到 consultations 表 (让历史记录里有)
+            try:
+                dbm = get_db_manager()
+                if dbm and user_id:
+                    # 用 conversation_id 当 consultation_id, 没有则生成 UUID
+                    sess_id = conversation_id if conversation_id and not conversation_id.startswith("stream_") else f"stream_{uuid.uuid4().hex[:16]}"
+                    title = (message or "对话")[:24]
+                    try:
+                        # 步骤1: 插入或更新 consultations 表 (主记录)
+                        dbm.execute_update(
+                            "INSERT INTO consultations (consultation_id, user_id, title, consultation_type, agent_id, status, question, answer, session_id, created_at, updated_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW()) ON CONFLICT (consultation_id) DO UPDATE SET answer = EXCLUDED.answer, updated_at = NOW()",
+                            (sess_id, user_id, title, "general", agent, "completed", message, content, sess_id),
+                        )
+                        # 步骤2: 插 chat_messages 表 (chat_messages 表无 user_id 列, 只有 consultation_id)
+                        msg_id_u = f"msg_{uuid.uuid4().hex[:16]}"
+                        msg_id_a = f"msg_{uuid.uuid4().hex[:16]}"
+                        dbm.execute_insert(
+                            "INSERT INTO chat_messages (id, consultation_id, role, content, created_at) VALUES (%s, %s, %s, %s, NOW())",
+                            (msg_id_u, sess_id, "user", message),
+                        )
+                        dbm.execute_insert(
+                            "INSERT INTO chat_messages (id, consultation_id, role, content, created_at) VALUES (%s, %s, %s, %s, NOW())",
+                            (msg_id_a, sess_id, "assistant", content),
+                        )
+                        print(f"[v2/chat/stream] saved to DB: sess={sess_id} user={user_id}", flush=True)
+                    except Exception as e_save:
+                        print(f"[v2/chat/stream] DB save failed: {e_save}", flush=True)
+            except Exception as e_outer:
+                print(f"[v2/chat/stream] DB save outer: {e_outer}", flush=True)
+
             # 2) 推送 routing 事件
-            yield f"event: routing\ndata: {_json.dumps({'agent': agent, 'routing': routing}, ensure_ascii=False)}\n\n"
+            yield f"event: routing\ndata: {_json.dumps({'agent': agent, 'routing': routing, 'conversation_id': conversation_id}, ensure_ascii=False)}\n\n"
 
             # 3) 把 content 拆成块流式推送
             chunk_size = 10
@@ -4945,7 +4977,7 @@ async def v2_chat_stream(request: Request):
                 await asyncio.sleep(0.02)  # 20ms 间隔模拟流式
 
             # 4) 推送 done
-            yield f"event: done\ndata: {_json.dumps({'content': content, 'agent': agent}, ensure_ascii=False)}\n\n"
+            yield f"event: done\ndata: {_json.dumps({'content': content, 'agent': agent, 'conversation_id': conversation_id}, ensure_ascii=False)}\n\n"
 
         except Exception as e:
             import traceback
