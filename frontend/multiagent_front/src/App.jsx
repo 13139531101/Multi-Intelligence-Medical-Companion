@@ -143,10 +143,10 @@ function App() {
             <Route path="/tasks" element={<TasksPage />} />
 
             {/* 默认重定向到仪表板 */}
-            <Route path="/" element={<Navigate to="/dashboard" replace />} />
+            <Route path="/" element={<Navigate to="/v2/dashboard" replace />} />
 
             {/* 404页面 */}
-            <Route path="*" element={<Navigate to="/dashboard" replace />} />
+            <Route path="*" element={<Navigate to="/v2/dashboard" replace />} />
           </Routes>
 
           {/* 全局通知组件 */}
