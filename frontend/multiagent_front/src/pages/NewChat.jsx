@@ -689,6 +689,42 @@ export default function NewChat() {
     >
       <Header />
 
+      {/* 阶段48-6: 智能体标识 (蓝色 health_advisor) */}
+      <Box sx={{ bgcolor: "primary.main", color: "white", py: 0.75, px: 2 }}>
+        <Container
+          maxWidth="lg"
+          sx={{ display: "flex", alignItems: "center", gap: 2 }}
+        >
+          <Avatar
+            sx={{
+              bgcolor: "white",
+              color: "primary.main",
+              width: 28,
+              height: 28,
+            }}
+          >
+            <SmartToy sx={{ fontSize: 16 }} />
+          </Avatar>
+          <Typography variant="caption">
+            智能体 <strong>health_advisor</strong> 工作页 · 每次提问自动 routing
+            到合适智能体
+          </Typography>
+          {streamingAgent && (
+            <Chip
+              label={`${streamingAgent}`}
+              size="small"
+              color="warning"
+              sx={{
+                ml: "auto",
+                height: 22,
+                fontSize: "0.65rem",
+                fontFamily: "monospace",
+              }}
+            />
+          )}
+        </Container>
+      </Box>
+
       <Paper
         square
         sx={{
