@@ -132,7 +132,7 @@ const HealthHeader = () => {
           <Typography
             variant="h6"
             component="div"
-            sx={{ fontWeight: "bold", cursor: "pointer" }}
+            sx={{ fontWeight: "bold", color: "#FFFFFF", cursor: "pointer" }}
             onClick={() => navigate("/v2/dashboard")}
           >
             智能健康助手
@@ -152,9 +152,11 @@ const HealthHeader = () => {
                 sx={{
                   mx: 1,
                   borderRadius: 2,
-                  bgcolor: isActive ? "rgba(255,255,255,0.1)" : "transparent",
+                  color: "#FFFFFF",
+                  fontWeight: 600,
+                  bgcolor: isActive ? "rgba(255,255,255,0.2)" : "transparent",
                   "&:hover": {
-                    bgcolor: "rgba(255,255,255,0.1)",
+                    bgcolor: "rgba(255,255,255,0.2)",
                   },
                 }}
               >
@@ -183,7 +185,11 @@ const HealthHeader = () => {
           <Box sx={{ display: "flex", alignItems: "center" }}>
             <Typography
               variant="body2"
-              sx={{ mr: 1, display: { xs: "none", sm: "block" } }}
+              sx={{
+                mr: 1,
+                color: "#FFFFFF",
+                display: { xs: "none", sm: "block" },
+              }}
             >
               {user?.username || "用户"}
             </Typography>
