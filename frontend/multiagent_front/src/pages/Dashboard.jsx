@@ -22,6 +22,7 @@ import {
   TextField,
   Tooltip,
   Badge,
+  InputAdornment,
 } from "@mui/material";
 import {
   FavoriteBorder,
@@ -54,6 +55,7 @@ import {
   MenuBook,
   Close,
   History,
+  MessageOutlined,
   Dashboard as DashboardIcon,
 } from "@mui/icons-material";
 import {
@@ -147,13 +149,10 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   // Agent 状态机
   const [activeAgent, setActiveAgent] = useState(null); // 最近被点击的
-  // 快速问答 drawer
-  const [askOpen, setAskOpen] = useState(false);
-  const [askQ, setAskQ] = useState("");
-  const [quickAskQ, setQuickAskQ] = useState(""); // 阶段48-7: 顶部快捷输入
-  const [askTarget, setAskTarget] = useState("health_advisor");
-  const [askReply, setAskReply] = useState("");
-  const [askLoading, setAskLoading] = useState(false);
+  // 阶段48-10: 首页嵌入式对话 (替代 Drawer)
+  const [quickAskQ, setQuickAskQ] = useState(""); // 当前输入框
+  const [quickAskHistory, setQuickAskHistory] = useState([]); // [{id, q, agent, reply, loading, error, time}]
+  const [askTarget, setAskTarget] = useState("auto"); // 用户可选 agent 锁定, 默认 auto (host 自动路由)
 
   const computeScore = (recCount, medTaken, medTotal) => {
     // 阶段48-8: deprecated, 用 utils/healthMetrics.js 的真实算法替代
@@ -226,21 +225,36 @@ export default function Dashboard() {
     fetchAll();
   }, []);
 
+  // 阶段48-10: 嵌入式对话, 在 history 数组 append 一个 entry
   const handleAskAgent = async (agentId, q) => {
-    setAskTarget(agentId === "auto" ? "auto-routing..." : agentId || askTarget);
-    setAskQ(q || askQ);
-    setAskOpen(true);
-    setAskReply("");
-    if (!q || !q.trim()) return;
-    setAskLoading(true);
+    const userQ = (q || "").trim();
+    if (!userQ) return;
+    const targetAgent = agentId || askTarget || "auto";
+
+    // 1) push 一条 pending entry
+    const entryId = `qk_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const initialAgent =
+      targetAgent === "auto" ? "auto-routing..." : targetAgent;
+    const newEntry = {
+      id: entryId,
+      q: userQ,
+      agent: initialAgent,
+      reply: "",
+      loading: true,
+      error: null,
+      time: new Date(),
+    };
+    setQuickAskHistory((h) => [newEntry, ...h].slice(0, 10)); // 保留最近 10 条
+    setQuickAskQ("");
+    setActiveAgent(initialAgent);
+
     try {
       const token = localStorage.getItem("token") || "";
       const apiBase =
         import.meta?.env?.VITE_API_BASE || "http://localhost:13002";
-      // 阶段48-9: agentId="auto" 不传 selected_agent, 让 backend 自由 routing
       const metadata = { from_dashboard: true };
-      if (agentId && agentId !== "auto") {
-        metadata.selected_agent = agentId;
+      if (targetAgent && targetAgent !== "auto") {
+        metadata.selected_agent = targetAgent;
       }
       const resp = await fetch(apiBase + "/v2/chat/stream", {
         method: "POST",
@@ -248,10 +262,7 @@ export default function Dashboard() {
           "Content-Type": "application/json",
           Authorization: token ? `Bearer ${token}` : "",
         },
-        body: JSON.stringify({
-          message: q,
-          metadata,
-        }),
+        body: JSON.stringify({ message: userQ, metadata }),
       });
       const reader = resp.body.getReader();
       const decoder = new TextDecoder();
@@ -271,7 +282,11 @@ export default function Dashboard() {
                 const p = JSON.parse(m.slice(6));
                 if (p.text) {
                   text += p.text;
-                  setAskReply(text);
+                  setQuickAskHistory((h) =>
+                    h.map((e) =>
+                      e.id === entryId ? { ...e, reply: text } : e,
+                    ),
+                  );
                 }
               } catch {
                 /* ignore */
@@ -283,8 +298,12 @@ export default function Dashboard() {
               try {
                 const p = JSON.parse(m.slice(6));
                 if (p.agent) {
+                  setQuickAskHistory((h) =>
+                    h.map((e) =>
+                      e.id === entryId ? { ...e, agent: p.agent } : e,
+                    ),
+                  );
                   setActiveAgent(p.agent);
-                  setAskTarget(p.agent);
                 }
               } catch {
                 /* ignore */
@@ -293,10 +312,24 @@ export default function Dashboard() {
           }
         }
       }
+      // 标记完成
+      setQuickAskHistory((h) =>
+        h.map((e) => (e.id === entryId ? { ...e, loading: false } : e)),
+      );
     } catch (e) {
-      setAskReply("调用失败: " + e.message);
+      setQuickAskHistory((h) =>
+        h.map((entry) =>
+          entry.id === entryId
+            ? {
+                ...entry,
+                loading: false,
+                error: e.message,
+                reply: entry.reply || `调用失败: ${e.message}`,
+              }
+            : entry,
+        ),
+      );
     }
-    setAskLoading(false);
   };
 
   return (
@@ -304,53 +337,277 @@ export default function Dashboard() {
       <Header />
 
       <Container maxWidth="lg" sx={{ py: 3 }}>
-        {/* 阶段48-7: 简洁问候 + 直接输入 (无按钮自动答) */}
+        {/* 阶段48-10: 首页嵌入式对话面板 - 不是 Drawer, 是 dashboard 一部分 */}
         <Paper
           sx={{
-            p: 3,
+            p: 0,
             mb: 3,
-            bgcolor: "primary.main",
-            color: "white",
+            borderRadius: 2,
+            border: "1px solid",
+            borderColor: "divider",
+            overflow: "hidden",
             boxShadow: 1,
           }}
         >
-          <Typography variant="h5" sx={{ fontWeight: 600 }}>
-            你好, {user?.username || "用户"}
-          </Typography>
-          <Typography variant="body2" sx={{ opacity: 0.9, mt: 0.5, mb: 2 }}>
-            有任何健康问题, 直接在下面输入, 我会找最合适的 AI 帮你
-          </Typography>
-          <TextField
-            fullWidth
-            placeholder="例如: 我最近血压偏高, 需要注意什么?"
-            value={quickAskQ}
-            onChange={(e) => setQuickAskQ(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && quickAskQ.trim()) {
-                handleAskAgent("auto", quickAskQ); // host agent 自动路由
-              }
-            }}
-            sx={{
-              bgcolor: "rgba(255,255,255,0.95)",
-              borderRadius: 1,
-              "& .MuiInputBase-input": { color: "text.primary", py: 1.25 },
-            }}
-            InputProps={{
-              endAdornment: (
-                <Button
-                  variant="contained"
-                  color="primary"
+          {/* 蓝色问候 header */}
+          <Box sx={{ bgcolor: "primary.main", color: "white", px: 2.5, py: 2 }}>
+            <Stack direction="row" alignItems="center" spacing={1.5}>
+              <Avatar
+                sx={{
+                  bgcolor: "white",
+                  color: "primary.main",
+                  width: 36,
+                  height: 36,
+                }}
+              >
+                <SmartToy fontSize="small" />
+              </Avatar>
+              <Box sx={{ flex: 1 }}>
+                <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
+                  你好, {user?.username || "用户"}
+                </Typography>
+                <Typography variant="caption" sx={{ opacity: 0.9 }}>
+                  有任何健康问题, 直接问我 — 我会自动找最合适的 AI 回答
+                </Typography>
+              </Box>
+              {askTarget !== "auto" && (
+                <Chip
+                  label={`锁定 ${askTarget}`}
                   size="small"
-                  onClick={() =>
-                    quickAskQ.trim() && handleAskAgent("auto", quickAskQ)
-                  }
-                  disabled={!quickAskQ.trim()}
-                >
-                  提问
-                </Button>
-              ),
+                  onClick={() => setAskTarget("auto")}
+                  sx={{
+                    bgcolor: "rgba(255,255,255,0.2)",
+                    color: "white",
+                    cursor: "pointer",
+                  }}
+                />
+              )}
+            </Stack>
+          </Box>
+
+          {/* 输入栏 (始终在顶部) */}
+          <Box
+            sx={{
+              px: 2,
+              py: 1.5,
+              bgcolor: "background.paper",
+              borderBottom: 1,
+              borderColor: "divider",
             }}
-          />
+          >
+            <TextField
+              fullWidth
+              size="small"
+              multiline
+              maxRows={3}
+              placeholder="我血压 145/95 怎么办?  今天吃什么药?  这份报告什么意思?"
+              value={quickAskQ}
+              onChange={(e) => setQuickAskQ(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey && quickAskQ.trim()) {
+                  e.preventDefault();
+                  handleAskAgent("auto", quickAskQ);
+                }
+              }}
+              InputProps={{
+                startAdornment: (
+                  <InputAdornment position="start">
+                    <MessageOutlined
+                      fontSize="small"
+                      sx={{ color: "text.disabled" }}
+                    />
+                  </InputAdornment>
+                ),
+                endAdornment: quickAskQ.trim() ? (
+                  <InputAdornment position="end">
+                    <IconButton
+                      size="small"
+                      color="primary"
+                      onClick={() => handleAskAgent("auto", quickAskQ)}
+                      disabled={!quickAskQ.trim()}
+                    >
+                      <Send fontSize="small" />
+                    </IconButton>
+                  </InputAdornment>
+                ) : null,
+                sx: { borderRadius: 2, bgcolor: "grey.50" },
+              }}
+            />
+            {/* 快捷 chip + 清空 */}
+            <Stack
+              direction="row"
+              spacing={0.5}
+              sx={{ mt: 1, flexWrap: "wrap", gap: 0.5, alignItems: "center" }}
+            >
+              <Typography variant="caption" color="text.disabled">
+                试试:
+              </Typography>
+              {["我血压偏高怎么办", "今天吃什么药", "帮我看体检报告"].map(
+                (s, i) => (
+                  <Chip
+                    key={i}
+                    label={s}
+                    size="small"
+                    variant="outlined"
+                    onClick={() => handleAskAgent("auto", s)}
+                    sx={{ cursor: "pointer", fontSize: "0.7rem", height: 22 }}
+                  />
+                ),
+              )}
+              {quickAskHistory.length > 0 && <Box sx={{ flex: 1 }} />}
+              {quickAskHistory.length > 0 && (
+                <Chip
+                  label="清空对话"
+                  size="small"
+                  onClick={() => setQuickAskHistory([])}
+                  sx={{ cursor: "pointer", fontSize: "0.7rem", height: 22 }}
+                  variant="outlined"
+                  color="default"
+                />
+              )}
+            </Stack>
+          </Box>
+
+          {/* 对话历史 (嵌入式, 流式更新) */}
+          {quickAskHistory.length > 0 && (
+            <Box sx={{ maxHeight: 480, overflowY: "auto" }}>
+              {quickAskHistory.map((entry, idx) => (
+                <Box
+                  key={entry.id}
+                  sx={{
+                    px: 2.5,
+                    py: 2,
+                    borderBottom: idx < quickAskHistory.length - 1 ? 1 : 0,
+                    borderColor: "divider",
+                    bgcolor: idx % 2 === 0 ? "grey.50" : "background.paper",
+                  }}
+                >
+                  {/* 用户问题 */}
+                  <Stack direction="row" alignItems="flex-start" spacing={1.5}>
+                    <Avatar
+                      sx={{ bgcolor: "secondary.main", width: 28, height: 28 }}
+                    >
+                      <Typography
+                        variant="caption"
+                        sx={{ color: "white", fontWeight: 600 }}
+                      >
+                        {(user?.username || "U").charAt(0).toUpperCase()}
+                      </Typography>
+                    </Avatar>
+                    <Box sx={{ flex: 1, minWidth: 0 }}>
+                      <Stack
+                        direction="row"
+                        alignItems="center"
+                        spacing={1}
+                        sx={{ mb: 0.25 }}
+                      >
+                        <Typography variant="caption" color="text.secondary">
+                          你 ·{" "}
+                          {entry.time.toLocaleTimeString("zh", {
+                            hour: "2-digit",
+                            minute: "2-digit",
+                          })}
+                        </Typography>
+                      </Stack>
+                      <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                        {entry.q}
+                      </Typography>
+                    </Box>
+                  </Stack>
+
+                  {/* AI 回答 */}
+                  <Stack
+                    direction="row"
+                    alignItems="flex-start"
+                    spacing={1.5}
+                    sx={{ mt: 1.5 }}
+                  >
+                    <Avatar
+                      sx={{ bgcolor: "primary.main", width: 28, height: 28 }}
+                    >
+                      <SmartToy sx={{ fontSize: 16, color: "white" }} />
+                    </Avatar>
+                    <Box sx={{ flex: 1, minWidth: 0 }}>
+                      <Stack
+                        direction="row"
+                        alignItems="center"
+                        spacing={1}
+                        sx={{ mb: 0.5 }}
+                      >
+                        <Chip
+                          size="small"
+                          label={
+                            entry.agent === "auto-routing..."
+                              ? "routing…"
+                              : entry.agent
+                          }
+                          sx={{
+                            height: 18,
+                            fontSize: "0.65rem",
+                            fontFamily: "monospace",
+                            bgcolor:
+                              entry.agent === "auto-routing..."
+                                ? "warning.light"
+                                : "#E3F2FD",
+                            color:
+                              entry.agent === "auto-routing..."
+                                ? "warning.dark"
+                                : "#1565C0",
+                          }}
+                        />
+                        {entry.error && (
+                          <Chip
+                            size="small"
+                            label="error"
+                            color="error"
+                            sx={{ height: 18, fontSize: "0.65rem" }}
+                          />
+                        )}
+                      </Stack>
+                      {entry.reply ? (
+                        <Typography
+                          variant="body2"
+                          sx={{
+                            whiteSpace: "pre-wrap",
+                            color: "text.primary",
+                            lineHeight: 1.7,
+                          }}
+                        >
+                          {entry.reply}
+                          {entry.loading && "▍"}
+                        </Typography>
+                      ) : entry.loading ? (
+                        <Stack
+                          direction="row"
+                          spacing={0.5}
+                          sx={{ pt: 0.5, alignItems: "center" }}
+                        >
+                          <CircularProgress size={12} />
+                          <Typography variant="caption" color="text.disabled">
+                            思考中…
+                          </Typography>
+                        </Stack>
+                      ) : (
+                        <Typography variant="caption" color="text.disabled">
+                          (无回复)
+                        </Typography>
+                      )}
+                    </Box>
+                  </Stack>
+                </Box>
+              ))}
+            </Box>
+          )}
+
+          {/* 无历史时显示空状态 */}
+          {quickAskHistory.length === 0 && (
+            <Box sx={{ p: 3, textAlign: "center", color: "text.disabled" }}>
+              <SmartToy sx={{ fontSize: 36, mb: 1, opacity: 0.4 }} />
+              <Typography variant="body2">
+                对话将在这里显示 · 试试点击上面的快捷话题
+              </Typography>
+            </Box>
+          )}
         </Paper>
 
         {/* 阶段48-7: 简洁 4 个 agent 卡片 - 跳转而非自动答 */}
@@ -378,10 +635,25 @@ export default function Dashboard() {
                       cursor: "pointer",
                       transition: "all 0.15s",
                       border: 1,
-                      borderColor: "divider",
+                      borderColor: askTarget === ag.en ? ag.color : "divider",
+                      bgcolor:
+                        askTarget === ag.en ? ag.bgColor : "background.paper",
                       "&:hover": { borderColor: ag.color, boxShadow: 1 },
                     }}
-                    onClick={() => navigate(ag.path)}
+                    onClick={() => {
+                      // 阶段48-10: 锁定该 agent, 把推荐示例填入嵌入式对话
+                      setAskTarget(ag.en);
+                      const example =
+                        ag.id === "health_advisor"
+                          ? `最近感觉不舒服, ${ag.name.replace(/[^\u4e00-\u9fa5]/g, "")}能帮分析一下吗?`
+                          : ag.id === "health_records"
+                            ? `帮我看看最近的检查报告有什么需要注意的`
+                            : ag.id === "medication_reminder"
+                              ? `今天的服药计划是什么? 现在该吃哪种药?`
+                              : `生成本次就诊的摘要`;
+                      setQuickAskQ(example);
+                      window.scrollTo({ top: 0, behavior: "smooth" });
+                    }}
                   >
                     <CardContent sx={{ p: 2, pb: "16px !important" }}>
                       <Stack direction="row" alignItems="center" spacing={1.5}>
@@ -845,151 +1117,7 @@ export default function Dashboard() {
         </Paper>
       </Container>
 
-      {/* 阶段48-6: 快速提问 drawer */}
-      <Drawer
-        anchor="right"
-        open={askOpen}
-        onClose={() => setAskOpen(false)}
-        PaperProps={{ sx: { width: { xs: "100%", sm: 520 } } }}
-      >
-        <Box sx={{ display: "flex", flexDirection: "column", height: "100%" }}>
-          <Stack
-            direction="row"
-            alignItems="center"
-            justifyContent="space-between"
-            sx={{ p: 2, borderBottom: "1px solid", borderColor: "divider" }}
-          >
-            <Stack direction="row" alignItems="center" spacing={1.5}>
-              <Avatar sx={{ bgcolor: "primary.main" }}>
-                <SmartToy />
-              </Avatar>
-              <Box>
-                <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
-                  智能体问答
-                </Typography>
-                <Typography variant="caption" color="text.secondary">
-                  将由 <strong>{askTarget}</strong> 接答
-                </Typography>
-              </Box>
-            </Stack>
-            <IconButton onClick={() => setAskOpen(false)}>
-              <Close />
-            </IconButton>
-          </Stack>
-          <Box sx={{ p: 2, borderBottom: "1px solid", borderColor: "divider" }}>
-            <Typography
-              variant="caption"
-              color="text.secondary"
-              sx={{ display: "block", mb: 1 }}
-            >
-              选择目标 agent:
-            </Typography>
-            <Stack
-              direction="row"
-              spacing={0.5}
-              sx={{ flexWrap: "wrap", gap: 0.5 }}
-            >
-              {AGENTS.map((ag) => (
-                <Chip
-                  key={ag.id}
-                  label={ag.name}
-                  size="small"
-                  onClick={() => setAskTarget(ag.en)}
-                  sx={{
-                    bgcolor: askTarget === ag.en ? ag.color : ag.bgColor,
-                    color: askTarget === ag.en ? "white" : ag.color,
-                    fontWeight: askTarget === ag.en ? 600 : 400,
-                  }}
-                />
-              ))}
-            </Stack>
-          </Box>
-          <Box sx={{ flex: 1, overflowY: "auto", p: 2, bgcolor: "grey.50" }}>
-            {askReply ? (
-              <Paper
-                sx={{
-                  p: 2,
-                  bgcolor: "white",
-                  borderLeft: "3px solid",
-                  borderColor: "primary.main",
-                }}
-              >
-                <Typography variant="caption" color="text.secondary">
-                  {activeAgent || askTarget} 回复:
-                </Typography>
-                <Typography
-                  variant="body2"
-                  sx={{ mt: 0.5, whiteSpace: "pre-wrap" }}
-                >
-                  {askReply}
-                </Typography>
-              </Paper>
-            ) : (
-              <Box sx={{ textAlign: "center", color: "text.disabled", py: 4 }}>
-                <SmartToy sx={{ fontSize: 48, mb: 1 }} />
-                <Typography variant="caption" display="block">
-                  在下方输入你的问题
-                </Typography>
-                <Typography
-                  variant="caption"
-                  sx={{ fontSize: "0.7rem", display: "block", mt: 0.5 }}
-                >
-                  AI 会基于你的档案 + 当前数据回答
-                </Typography>
-              </Box>
-            )}
-            {askLoading && <LinearProgress sx={{ mt: 1 }} />}
-          </Box>
-          <Box
-            sx={{
-              p: 2,
-              borderTop: "1px solid",
-              borderColor: "divider",
-              bgcolor: "white",
-            }}
-          >
-            <Stack direction="row" spacing={1} alignItems="flex-end">
-              <TextField
-                fullWidth
-                multiline
-                maxRows={3}
-                placeholder="例如: 我今天血压 145/95, 需要注意什么?"
-                value={askQ}
-                onChange={(e) => setAskQ(e.target.value)}
-                size="small"
-              />
-              <Button
-                variant="contained"
-                onClick={() => handleAskAgent(askTarget, askQ)}
-                disabled={askLoading || !askQ.trim()}
-                startIcon={<Send />}
-              >
-                问
-              </Button>
-            </Stack>
-            <Stack
-              direction="row"
-              spacing={0.5}
-              sx={{ mt: 1, flexWrap: "wrap", gap: 0.5 }}
-            >
-              {["血压高了怎么办", "我最近头疼是怎么回事", "如何改善睡眠"].map(
-                (s, i) => (
-                  <Chip
-                    key={i}
-                    label={s}
-                    size="small"
-                    variant="outlined"
-                    onClick={() => {
-                      setAskQ(s);
-                    }}
-                    sx={{ fontSize: "0.7rem", height: 22 }}
-                  />
-                ),
-              )}
-            </Stack>
-          </Box>
-        </Box>
-      </Drawer>
+      {/* 阶段48-10: Drawer 已移除 — 嵌入式对话在 Dashboard 主面板内 */}
       <AgentQuickFab />
     </Box>
   );
