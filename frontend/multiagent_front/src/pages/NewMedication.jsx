@@ -60,6 +60,7 @@ import {
 } from "@mui/icons-material";
 import { useNavigate } from "react-router-dom";
 import Header from "../components/HealthHeader";
+import AgentQuickFab from "../components/AgentQuickFab";
 import {
   getMedications,
   getMedicationReminders,
@@ -1327,6 +1328,7 @@ export default function NewMedication() {
           </Alert>
         ) : undefined}
       </Snackbar>
+      <AgentQuickFab />
     </Box>
   );
 }

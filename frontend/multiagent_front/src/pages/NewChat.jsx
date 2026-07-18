@@ -50,6 +50,7 @@ import {
   AccessTime,
 } from "@mui/icons-material";
 import Header from "../components/HealthHeader";
+import AgentQuickFab from "../components/AgentQuickFab";
 import {
   smartChat,
   getConsultationHistory,
@@ -335,6 +336,7 @@ export default function NewChat() {
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [currentConvId, setCurrentConvId] = useState(null);
   const [convTitle, setConvTitle] = useState("新对话");
+  const [streamingAgent, setStreamingAgent] = useState(""); // 当前智能体
   const scrollRef = useRef(null);
   const inputRef = useRef(null);
 
@@ -518,6 +520,7 @@ export default function NewChat() {
     setMessages((p) => [...p, userMsg, aiMsg]);
     setInput("");
     setStreaming(true);
+    setStreamingAgent("auto-routing...");
 
     // 自动从 user msg 拿 title
     if (!currentConvId && messages.length <= 1) setConvTitle(text.slice(0, 24));
@@ -556,6 +559,7 @@ export default function NewChat() {
           ),
         );
         setStreaming(false);
+        setStreamingAgent("");
         if (newConvId && newConvId !== currentConvId)
           setCurrentConvId(newConvId);
       };
@@ -586,6 +590,7 @@ export default function NewChat() {
                   ),
                 );
               } else if (event === "routing" && payload.agent) {
+                setStreamingAgent(payload.agent);
                 setMessages((p) =>
                   p.map((m) =>
                     m.id === aiMsgId
@@ -658,6 +663,7 @@ export default function NewChat() {
 
   const stopStream = () => {
     setStreaming(false);
+    setStreamingAgent("");
     setMessages((p) =>
       p.map((m) =>
         m.id === p[p.length - 1].id && m.thinking?.status === "processing"
@@ -727,8 +733,18 @@ export default function NewChat() {
             <Typography variant="caption" color="text.secondary">
               {streaming ? "思考中" : "在线"}
             </Typography>
+            {streaming && (
+              <Chip
+                label={streamingAgent || "auto-routing"}
+                size="small"
+                color="primary"
+                variant="outlined"
+                sx={{ height: 18, fontSize: "0.65rem", ml: 0.5 }}
+              />
+            )}
           </Stack>
         </Box>
+
         <Tooltip title="新对话">
           <IconButton size="small" onClick={startNew}>
             <Add fontSize="small" />
@@ -1214,6 +1230,7 @@ export default function NewChat() {
           {snack}
         </Box>
       )}
+      <AgentQuickFab />
     </Box>
   );
 }

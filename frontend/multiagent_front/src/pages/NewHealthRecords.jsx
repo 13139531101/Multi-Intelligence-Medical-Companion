@@ -58,6 +58,7 @@ import {
 } from "@mui/icons-material";
 import Header from "../components/HealthHeader";
 import FileUpload from "../components/FileUpload";
+import AgentQuickFab from "../components/AgentQuickFab";
 import {
   getHealthRecords,
   createHealthRecord,
@@ -187,6 +188,24 @@ export default function NewHealthRecords() {
   return (
     <Box sx={{ minHeight: "100vh", bgcolor: "background.default" }}>
       <Header />
+
+      {/* 阶段48-6: 智能体标识 */}
+      <Box sx={{ bgcolor: "info.main", color: "white", py: 0.75, px: 2 }}>
+        <Container
+          maxWidth="lg"
+          sx={{ display: "flex", alignItems: "center", gap: 2 }}
+        >
+          <Avatar
+            sx={{ bgcolor: "white", color: "info.main", width: 28, height: 28 }}
+          >
+            <Description sx={{ fontSize: 16 }} />
+          </Avatar>
+          <Typography variant="caption">
+            智能体 <strong>health_records</strong> 工作页面 ·
+            你上传的所有报告将自动归档为可查询的健康档案
+          </Typography>
+        </Container>
+      </Box>
 
       <Container maxWidth="lg" sx={{ py: 3 }}>
         <Stack
@@ -771,6 +790,7 @@ export default function NewHealthRecords() {
           </Button>
         </DialogActions>
       </Dialog>
+      <AgentQuickFab />
     </Box>
   );
 }
