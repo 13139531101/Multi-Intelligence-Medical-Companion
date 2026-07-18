@@ -189,20 +189,14 @@ export default function NewHealthRecords() {
     <Box sx={{ minHeight: "100vh", bgcolor: "background.default" }}>
       <Header />
 
-      {/* 阶段48-6: 智能体标识 */}
-      <Box sx={{ bgcolor: "info.main", color: "white", py: 0.75, px: 2 }}>
-        <Container
-          maxWidth="lg"
-          sx={{ display: "flex", alignItems: "center", gap: 2 }}
-        >
-          <Avatar
-            sx={{ bgcolor: "white", color: "info.main", width: 28, height: 28 }}
-          >
+      {/* 阶段48-6: 智能体标识 (青色) */}
+      <Box sx={{ bgcolor: "#00897B", color: "white", py: 0.75, px: 2 }}>
+        <Container maxWidth="lg" sx={{ display: "flex", alignItems: "center", gap: 2 }}>
+          <Avatar sx={{ bgcolor: "white", color: "#00897B", width: 28, height: 28 }}>
             <Description sx={{ fontSize: 16 }} />
           </Avatar>
           <Typography variant="caption">
-            智能体 <strong>health_records</strong> 工作页面 ·
-            你上传的所有报告将自动归档为可查询的健康档案
+            智能体 <strong>health_records</strong> 工作页面 · 上传的所有报告自动 OCR 识别并归档
           </Typography>
         </Container>
       </Box>
