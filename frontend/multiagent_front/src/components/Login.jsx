@@ -13,10 +13,8 @@ import {
   Avatar,
   Link,
   Divider,
-  Chip,
-  Stack,
 } from "@mui/material";
-import { LockOutlined, Psychology, Bolt } from "@mui/icons-material";
+import { LockOutlined, Psychology } from "@mui/icons-material";
 import { login } from "../api/healthApi";
 import { useAuth } from "../contexts/AuthContext";
 
@@ -77,44 +75,12 @@ const Login = () => {
         </Avatar>
         <Typography
           component="h1"
-          variant="h4"
+          variant="h5"
           gutterBottom
-          sx={{ fontWeight: 700 }}
+          sx={{ fontWeight: 600 }}
         >
-          PHA 智能体健康助手
+          健康助手
         </Typography>
-        <Typography variant="body2" color="text.secondary" gutterBottom>
-          4 个 AI 智能体 (advisor / records / medication / summary) 协同守护
-        </Typography>
-        <Stack direction="row" spacing={0.5} sx={{ mt: 0.5, mb: 1.5 }}>
-          <Chip
-            label="health_advisor"
-            size="small"
-            color="primary"
-            sx={{ fontFamily: "monospace" }}
-          />
-          <Chip
-            label="health_records"
-            size="small"
-            color="success"
-            sx={{ fontFamily: "monospace" }}
-          />
-          <Chip
-            label="medication"
-            size="small"
-            color="secondary"
-            sx={{ fontFamily: "monospace" }}
-          />
-          <Chip
-            label="visit_summary"
-            size="small"
-            sx={{
-              bgcolor: "#FFE0B2",
-              color: "#E65100",
-              fontFamily: "monospace",
-            }}
-          />
-        </Stack>
 
         <Card sx={{ mt: 3, width: "100%" }}>
           <CardContent>

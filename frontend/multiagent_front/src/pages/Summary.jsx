@@ -153,7 +153,7 @@ const Summary = () => {
         (a) =>
           (a.url && a.url.includes("10013")) ||
           (a.name && a.name.includes("summary")) ||
-          (a.name && a.name.includes("摘要"))
+          (a.name && a.name.includes("摘要")),
       );
 
       // If not found, fallback to the first one (for dev environment) or a default URL
@@ -251,7 +251,7 @@ const Summary = () => {
                   return { ...m, content: m.content + event.result.delta };
                 }
                 return m;
-              })
+              }),
             );
           }
 
@@ -266,8 +266,8 @@ const Summary = () => {
                 prev.map((m) =>
                   m.id === currentStreamingMessageIdRef.current
                     ? { ...m, thinking: (m.thinking || "") + thinkingText }
-                    : m
-                )
+                    : m,
+                ),
               );
             }
           }
@@ -291,8 +291,8 @@ const Summary = () => {
                     content: m.content + "\n[连接中断]",
                     isStreaming: false,
                   }
-                : m
-            )
+                : m,
+            ),
           );
         },
         () => {
@@ -302,11 +302,11 @@ const Summary = () => {
             prev.map((m) =>
               m.id === currentStreamingMessageIdRef.current
                 ? { ...m, isStreaming: false }
-                : m
-            )
+                : m,
+            ),
           );
           fetchSummaries(); // Refresh summaries list in case a new one was generated
-        }
+        },
       );
     } catch (error) {
       console.error("Send message failed:", error);
@@ -324,8 +324,8 @@ const Summary = () => {
         visitDate: item.visit_date
           ? dayjs(item.visit_date)
           : item.created_at
-          ? dayjs(item.created_at)
-          : dayjs(),
+            ? dayjs(item.created_at)
+            : dayjs(),
         doctor: item.doctor || "",
         hospital: item.hospital || "",
         department: item.department || "",
@@ -429,7 +429,7 @@ const Summary = () => {
           },
           () => {
             resolve();
-          }
+          },
         );
       });
 
@@ -455,7 +455,7 @@ const Summary = () => {
         title:
           generatedSummary.title ||
           `${aiFormData.doctor} - ${dayjs(aiFormData.visitDate).format(
-            "YYYY/MM/DD"
+            "YYYY/MM/DD",
           )}`,
         visitDate: aiFormData.visitDate,
         doctor: aiFormData.doctor,
@@ -596,17 +596,17 @@ const Summary = () => {
     setFormData((prev) => ({
       ...prev,
       tests: (prev.tests || []).map((t, i) =>
-        i === index ? { ...t, [field]: value } : t
+        i === index ? { ...t, [field]: value } : t,
       ),
     }));
   };
 
   const recentSummaries = summaries.filter(
-    (s) => dayjs().diff(dayjs(s.visitDate), "days") <= 30
+    (s) => dayjs().diff(dayjs(s.visitDate), "days") <= 30,
   );
 
   const olderSummaries = summaries.filter(
-    (s) => dayjs().diff(dayjs(s.visitDate), "days") > 30
+    (s) => dayjs().diff(dayjs(s.visitDate), "days") > 30,
   );
 
   return (
@@ -614,15 +614,15 @@ const Summary = () => {
       <Box sx={{ flexGrow: 1, bgcolor: "#f5f5f5", minHeight: "100vh" }}>
         <Header />
 
-        {/* 阶段48-6: 智能体标识 (橙色 visit_summary) */}
-        <Box sx={{ bgcolor: "#E65100", color: "white", py: 0.75, px: 2 }}>
-          <Container maxWidth="lg" sx={{ display: "flex", alignItems: "center", gap: 2 }}>
-            <Avatar sx={{ bgcolor: "white", color: "#E65100", width: 28, height: 28 }}><Assignment sx={{ fontSize: 16 }} /></Avatar>
-            <Typography variant="caption">
-              智能体 <strong>visit_summary</strong> 工作页面 · AI 自动汇总病史、诊断、医嘱
-            </Typography>
-          </Container>
-        </Box>
+        {/* 阶段48-7: 简洁 chip */}
+        <Container maxWidth="lg" sx={{ pt: 2 }}>
+          <Chip
+            icon={<Assignment fontSize="small" />}
+            label="visit_summary · 就诊摘要"
+            size="small"
+            sx={{ bgcolor: "#FFF3E0", color: "#E65100", fontWeight: 500 }}
+          />
+        </Container>
         <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }}>
           {/* 页面标题和操作 */}
           <Box
@@ -735,7 +735,7 @@ const Summary = () => {
                             </Typography>
                             <Typography variant="body2" color="text.secondary">
                               {dayjs(summary.visitDate).format(
-                                "YYYY年MM月DD日"
+                                "YYYY年MM月DD日",
                               )}
                             </Typography>
                           </Box>
@@ -900,7 +900,7 @@ const Summary = () => {
                           <Typography variant="body2" sx={{ mb: 1 }}>
                             <strong>就诊日期：</strong>
                             {dayjs(selectedSummary.visitDate).format(
-                              "YYYY年MM月DD日"
+                              "YYYY年MM月DD日",
                             )}
                           </Typography>
                           <Typography variant="body2" sx={{ mb: 1 }}>
@@ -974,7 +974,7 @@ const Summary = () => {
                                           : ""
                                       }`}
                                       secondary={`${t.status || ""} ${dayjs(
-                                        t.date || selectedSummary.visitDate
+                                        t.date || selectedSummary.visitDate,
                                       ).format("YYYY年MM月DD日")}`}
                                     />
                                   </ListItem>
@@ -1150,8 +1150,8 @@ const Summary = () => {
                                   prev.map((m) =>
                                     m.id === msg.id
                                       ? { ...m, showThinking: !m.showThinking }
-                                      : m
-                                  )
+                                      : m,
+                                  ),
                                 );
                               }}
                             >

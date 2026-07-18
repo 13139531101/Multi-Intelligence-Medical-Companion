@@ -497,141 +497,38 @@ export default function NewMedication() {
   const progress =
     stats.total > 0 ? Math.round((stats.taken / stats.total) * 100) : 0;
   const allMeds = [...meds.morning, ...meds.noon, ...meds.evening];
-  const insights = SUGGEST_AGENT_INSIGHT(meds, stats, streak);
 
   return (
     <Box sx={{ minHeight: "100vh", bgcolor: "background.default" }}>
       <Header />
 
-      {/* 阶段48-6: 智能体标识 banner (主 agent = medication_reminder) */}
-      <Box sx={{ bgcolor: "secondary.main", color: "white", py: 1, px: 2 }}>
-        <Container
-          maxWidth="lg"
-          sx={{ display: "flex", alignItems: "center", gap: 2 }}
-        >
-          <Avatar
-            sx={{
-              bgcolor: "white",
-              color: "secondary.main",
-              width: 32,
-              height: 32,
-            }}
-          >
-            <Medication sx={{ fontSize: 18 }} />
-          </Avatar>
-          <Box sx={{ flex: 1 }}>
-            <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
-              智能体 <strong>medication_reminder</strong> 工作页
-            </Typography>
-            <Typography variant="caption" sx={{ opacity: 0.9 }}>
-              协同智能体: <strong>health_advisor</strong> (用药建议、健康评分)
-            </Typography>
-          </Box>
+      {/* 阶段48-7: 简洁 chip 标识当前 agent */}
+      <Container maxWidth="lg" sx={{ pt: 2 }}>
+        <Stack direction="row" spacing={1}>
+          <Chip
+            icon={<Medication fontSize="small" />}
+            label="medication_reminder · 用药提醒"
+            size="small"
+            sx={{ bgcolor: "#F3E5F5", color: "#7B1FA2", fontWeight: 500 }}
+          />
+          <Chip
+            label="health_advisor · 健康顾问"
+            size="small"
+            variant="outlined"
+            sx={{ fontSize: "0.7rem" }}
+          />
+          <Box sx={{ flex: 1 }} />
           <Button
             size="small"
-            variant="contained"
-            color="warning"
-            startIcon={<AutoAwesome />}
             onClick={() => setAiOpen(true)}
+            startIcon={<AutoAwesome fontSize="small" />}
           >
             向 AI 提问
           </Button>
-        </Container>
-      </Box>
+        </Stack>
+      </Container>
 
       <Container maxWidth="lg" sx={{ py: 3 }}>
-        {/* 智能体建议区 (如果不是全部服完就显示) */}
-        {insights.length > 0 && (
-          <Box sx={{ mb: 3 }}>
-            <Stack
-              direction="row"
-              alignItems="center"
-              spacing={1}
-              sx={{ mb: 1.5 }}
-            >
-              <AutoAwesome sx={{ fontSize: 18, color: "primary.main" }} />
-              <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
-                智能体建议
-              </Typography>
-              <Chip
-                label={`${insights.length} 项洞察`}
-                size="small"
-                color="primary"
-              />
-            </Stack>
-            <Grid container spacing={1.5}>
-              {insights.map((it, i) => (
-                <Grid item xs={12} md={4} key={i}>
-                  <Paper
-                    variant="outlined"
-                    sx={{
-                      p: 1.5,
-                      borderLeft: `4px solid`,
-                      borderColor: it.color,
-                      cursor: it.action ? "pointer" : "default",
-                      "&:hover": it.action
-                        ? {
-                            borderColor: it.color,
-                            bgcolor: "rgba(21,101,192,0.04)",
-                          }
-                        : {},
-                    }}
-                    onClick={() => {
-                      if (it.action === "咨询 AI") {
-                        setAiOpen(true);
-                        setAiQuestion("基于我目前用药，" + it.title);
-                      }
-                    }}
-                  >
-                    <Stack direction="row" alignItems="flex-start" spacing={1}>
-                      <Avatar sx={{ bgcolor: it.color, width: 28, height: 28 }}>
-                        {it.icon === "warning" ? (
-                          <Warning sx={{ fontSize: 16, color: "white" }} />
-                        ) : (
-                          <TrendingUp sx={{ fontSize: 16, color: "white" }} />
-                        )}
-                      </Avatar>
-                      <Box sx={{ flex: 1, minWidth: 0 }}>
-                        <Typography
-                          variant="subtitle2"
-                          sx={{
-                            fontWeight: 600,
-                            fontSize: "0.85rem",
-                            color: it.color,
-                          }}
-                        >
-                          {it.title}
-                        </Typography>
-                        <Typography
-                          variant="caption"
-                          color="text.secondary"
-                          sx={{ display: "block", mt: 0.25 }}
-                        >
-                          from <strong>{it.agent}</strong>
-                        </Typography>
-                        <Typography
-                          variant="body2"
-                          sx={{ mt: 0.5, color: "text.primary" }}
-                        >
-                          {it.body}
-                        </Typography>
-                        {it.action && (
-                          <Button
-                            size="small"
-                            sx={{ mt: 0.5, fontSize: "0.75rem" }}
-                          >
-                            {it.action}
-                          </Button>
-                        )}
-                      </Box>
-                    </Stack>
-                  </Paper>
-                </Grid>
-              ))}
-            </Grid>
-          </Box>
-        )}
-
         <Stack
           direction="row"
           alignItems="center"
