@@ -227,7 +227,7 @@ export default function Dashboard() {
   }, []);
 
   const handleAskAgent = async (agentId, q) => {
-    setAskTarget(agentId || askTarget);
+    setAskTarget(agentId === "auto" ? "auto-routing..." : agentId || askTarget);
     setAskQ(q || askQ);
     setAskOpen(true);
     setAskReply("");
@@ -237,6 +237,11 @@ export default function Dashboard() {
       const token = localStorage.getItem("token") || "";
       const apiBase =
         import.meta?.env?.VITE_API_BASE || "http://localhost:13002";
+      // 阶段48-9: agentId="auto" 不传 selected_agent, 让 backend 自由 routing
+      const metadata = { from_dashboard: true };
+      if (agentId && agentId !== "auto") {
+        metadata.selected_agent = agentId;
+      }
       const resp = await fetch(apiBase + "/v2/chat/stream", {
         method: "POST",
         headers: {
@@ -245,10 +250,7 @@ export default function Dashboard() {
         },
         body: JSON.stringify({
           message: q,
-          metadata: {
-            selected_agent: agentId || askTarget,
-            from_dashboard: true,
-          },
+          metadata,
         }),
       });
       const reader = resp.body.getReader();
@@ -325,7 +327,7 @@ export default function Dashboard() {
             onChange={(e) => setQuickAskQ(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter" && quickAskQ.trim()) {
-                navigate("/v2/chat?q=" + encodeURIComponent(quickAskQ));
+                handleAskAgent("auto", quickAskQ); // host agent 自动路由
               }
             }}
             sx={{
@@ -340,8 +342,7 @@ export default function Dashboard() {
                   color="primary"
                   size="small"
                   onClick={() =>
-                    quickAskQ.trim() &&
-                    navigate("/v2/chat?q=" + encodeURIComponent(quickAskQ))
+                    quickAskQ.trim() && handleAskAgent("auto", quickAskQ)
                   }
                   disabled={!quickAskQ.trim()}
                 >

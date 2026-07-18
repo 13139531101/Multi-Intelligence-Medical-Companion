@@ -2036,6 +2036,7 @@ async def get_consultation_history(
     limit: int = 20,
     include_summary: bool = False,
     include_health_records: bool = False,
+    agent_id: Optional[str] = None,  # 阶段48-9: 按 agent 过滤历史
     user: dict = Depends(get_current_user),
 ):
     try:
@@ -2049,10 +2050,15 @@ async def get_consultation_history(
             where_clauses.append("(tags IS NULL OR NOT (tags ? 'summary'))")
         if not include_health_records:
             where_clauses.append("(tags IS NULL OR NOT (tags ? 'health_records'))")
+        if agent_id:
+            where_clauses.append("agent_id = %s")
         where_sql = " AND ".join(where_clauses)
+        params = [user_id, limit, skip]
+        if agent_id:
+            params.insert(1, agent_id)
         rows = db_manager.execute_query(
             f"SELECT * FROM consultations WHERE {where_sql} ORDER BY created_at DESC LIMIT %s OFFSET %s",
-            (user_id, limit, skip),
+            tuple(params),
         )
         # Convert datetimes and ensure consistent fields
         filtered = []
@@ -3691,20 +3697,31 @@ def _ensure_consultation_tables(dbm):
 
 @app.get("/api/consultations")
 @app.get("/consultations")
-async def list_consultations(user: dict = Depends(get_current_user)):
+async def list_consultations(agent_id: Optional[str] = None, user: dict = Depends(get_current_user)):
     uid = _get_user_id(user)
     try:
         dbm = get_db_manager()
         _ensure_consultation_tables(dbm)
-        rows = dbm.execute_query(
-            """
-            SELECT consultation_id, title, consultation_type, created_at, question, session_id, tags
-            FROM consultations
-            WHERE user_id = %s
-            ORDER BY created_at DESC
-            """,
-            (uid,)
-        )
+        if agent_id:
+            rows = dbm.execute_query(
+                """
+                SELECT consultation_id, title, consultation_type, agent_id, created_at, question, session_id, tags
+                FROM consultations
+                WHERE user_id = %s AND agent_id = %s
+                ORDER BY created_at DESC
+                """,
+                (uid, agent_id)
+            )
+        else:
+            rows = dbm.execute_query(
+                """
+                SELECT consultation_id, title, consultation_type, agent_id, created_at, question, session_id, tags
+                FROM consultations
+                WHERE user_id = %s
+                ORDER BY created_at DESC
+                """,
+                (uid,)
+            )
         items = []
         for r in rows:
             # 兼容前端字段 naming
@@ -3712,6 +3729,7 @@ async def list_consultations(user: dict = Depends(get_current_user)):
                 "id": r.get("consultation_id"),
                 "title": r.get("title") or "未命名咨询",
                 "type": r.get("consultation_type") or "general",
+                "agentId": r.get("agent_id"),  # 阶段48-9: 暴露给前端
                 "userId": uid,
                 "createdAt": str(r.get("created_at")),
                 "question": r.get("question"),
@@ -4945,9 +4963,10 @@ async def v2_chat_stream(request: Request, user: dict = Depends(get_current_user
                     title = (message or "对话")[:24]
                     try:
                         # 步骤1: 插入或更新 consultations 表 (主记录)
+                        # 阶段48-9: consultation_type 用 agent 名 + ON CONFLICT 时也更新 agent
                         dbm.execute_update(
-                            "INSERT INTO consultations (consultation_id, user_id, title, consultation_type, agent_id, status, question, answer, session_id, created_at, updated_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW()) ON CONFLICT (consultation_id) DO UPDATE SET answer = EXCLUDED.answer, updated_at = NOW()",
-                            (sess_id, user_id, title, "general", agent, "completed", message, content, sess_id),
+                            "INSERT INTO consultations (consultation_id, user_id, title, consultation_type, agent_id, status, question, answer, session_id, created_at, updated_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW()) ON CONFLICT (consultation_id) DO UPDATE SET answer = EXCLUDED.answer, consultation_type = EXCLUDED.consultation_type, agent_id = EXCLUDED.agent_id, updated_at = NOW()",
+                            (sess_id, user_id, title, agent, agent, "completed", message, content, sess_id),
                         )
                         # 步骤2: 插 chat_messages 表 (chat_messages 表无 user_id 列, 只有 consultation_id)
                         msg_id_u = f"msg_{uuid.uuid4().hex[:16]}"

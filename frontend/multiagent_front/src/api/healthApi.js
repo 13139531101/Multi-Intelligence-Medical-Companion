@@ -189,7 +189,7 @@ export const deleteHealthRecord = async (id) => {
 
 // === 健康咨询API ===
 
-// 获取咨询历史
+// 获取咨询历史 - 阶段48-9 支持按 agent_id 过滤
 export const getConsultationHistory = async (params = {}) => {
   try {
     const response = await healthApi.get("/api/consultations/history", {
@@ -199,6 +199,17 @@ export const getConsultationHistory = async (params = {}) => {
     return Array.isArray(response.data) ? response.data : [];
   } catch (error) {
     throw error.response?.data || { message: "获取咨询历史失败" };
+  }
+};
+
+// 简化接口 — 直接通过 /api/consultations?agent_id=xxx 取
+export const listConsultations = async (agentId = null) => {
+  try {
+    const params = agentId ? { agent_id: agentId } : {};
+    const response = await healthApi.get("/api/consultations", { params });
+    return Array.isArray(response.data) ? response.data : [];
+  } catch (error) {
+    throw error.response?.data || { message: "获取咨询列表失败" };
   }
 };
 

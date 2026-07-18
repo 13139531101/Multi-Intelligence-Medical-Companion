@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   Box,
   Drawer,
@@ -322,11 +322,28 @@ const WELCOME = `你好，我是 PHA 健康咨询助手。
 
 请描述你的具体情况，我会基于你的健康档案作答。`;
 
+const AGENT_LIST = [
+  { id: "all", name: "全部对话", color: "#999" },
+  { id: "health_advisor", name: "健康顾问", color: "#1565C0" },
+  { id: "health_records", name: "健康档案", color: "#00897B" },
+  { id: "medication_reminder", name: "用药提醒", color: "#7B1FA2" },
+  { id: "visit_summary", name: "就诊摘要", color: "#E65100" },
+];
+
 export default function NewChat() {
   const navigate = useNavigate();
-  const [messages, setMessages] = useState([
-    { id: 1, role: "ai", content: WELCOME, time: now(), thinking: null },
-  ]);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const agentFilter = searchParams.get("agent") || "all"; // 阶段48-9: agent 过滤
+  const initialQ = searchParams.get("q") || ""; // 阶段48-9: 首页输入跳过
+
+  const [messages, setMessages] = useState(
+    initialQ
+      ? [
+          { id: 1, role: "ai", content: WELCOME, time: now(), thinking: null },
+          { id: 2, role: "user", content: initialQ, time: now() },
+        ]
+      : [{ id: 1, role: "ai", content: WELCOME, time: now(), thinking: null }],
+  );
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
   const [thinkingOpen, setThinkingOpen] = useState({});
@@ -352,10 +369,18 @@ export default function NewChat() {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
   }, [messages]);
 
-  const fetchHistory = async () => {
+  useEffect(() => {
+    if (historyOpen) fetchHistory(agentFilter);
+  }, [agentFilter]);
+
+  const fetchHistory = async (filterAgent = agentFilter) => {
     setLoadingHistory(true);
     try {
-      const data = await getConsultationHistory({ limit: 50 });
+      const params = { limit: 50 };
+      if (filterAgent && filterAgent !== "all") {
+        params.agent_id = filterAgent;
+      }
+      const data = await getConsultationHistory(params);
       console.log(
         "[DEBUG] raw:",
         data,
@@ -691,10 +716,15 @@ export default function NewChat() {
 
       {/* 阶段48-7: 简洁 chip 标识当前 agent */}
       <Box sx={{ px: 2, pt: 1.5 }}>
-        <Stack direction="row" alignItems="center" spacing={1}>
+        <Stack
+          direction="row"
+          alignItems="center"
+          spacing={1}
+          sx={{ flexWrap: "wrap", gap: 0.5 }}
+        >
           <Chip
             icon={<SmartToy fontSize="small" />}
-            label="health_advisor · 健康顾问"
+            label="host_agent · 自动调度"
             size="small"
             sx={{ bgcolor: "#E3F2FD", color: "#1565C0", fontWeight: 500 }}
           />
@@ -706,6 +736,31 @@ export default function NewChat() {
               sx={{ height: 22, fontSize: "0.65rem", fontFamily: "monospace" }}
             />
           )}
+          {/* 阶段48-9: agent 过滤切换 */}
+          <Box sx={{ flex: 1 }} />
+          {AGENT_LIST.map((ag) => (
+            <Chip
+              key={ag.id}
+              label={ag.name}
+              size="small"
+              onClick={() => {
+                const sp = new URLSearchParams(searchParams);
+                if (ag.id === "all") sp.delete("agent");
+                else sp.set("agent", ag.id);
+                setSearchParams(sp);
+              }}
+              variant={agentFilter === ag.id ? "filled" : "outlined"}
+              sx={{
+                bgcolor: agentFilter === ag.id ? ag.color : "transparent",
+                color: agentFilter === ag.id ? "white" : ag.color,
+                borderColor: ag.color,
+                fontWeight: 500,
+                cursor: "pointer",
+                fontSize: "0.7rem",
+                height: 24,
+              }}
+            />
+          ))}
         </Stack>
       </Box>
 
