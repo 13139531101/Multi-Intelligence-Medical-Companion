@@ -40,7 +40,7 @@ authApi.interceptors.request.use(
   },
   (error) => {
     return Promise.reject(error);
-  }
+  },
 );
 
 // 为authApi添加响应拦截器
@@ -56,7 +56,7 @@ authApi.interceptors.response.use(
       window.location.href = "/login";
     }
     return Promise.reject(error);
-  }
+  },
 );
 
 // 请求拦截器 - 添加认证token
@@ -70,7 +70,7 @@ healthApi.interceptors.request.use(
   },
   (error) => {
     return Promise.reject(error);
-  }
+  },
 );
 
 // 响应拦截器 - 处理错误
@@ -86,7 +86,7 @@ healthApi.interceptors.response.use(
       window.location.href = "/login";
     }
     return Promise.reject(error);
-  }
+  },
 );
 
 // === 认证相关API ===
@@ -169,7 +169,7 @@ export const updateHealthRecord = async (id, recordData) => {
   try {
     const response = await healthApi.put(
       `/api/health-records/${id}`,
-      recordData
+      recordData,
     );
     return response.data;
   } catch (error) {
@@ -207,7 +207,7 @@ export const createConsultation = async (consultationData) => {
   try {
     const response = await healthApi.post(
       "/api/consultations/create",
-      consultationData
+      consultationData,
     );
     return response.data;
   } catch (error) {
@@ -232,7 +232,7 @@ export const sendMessage = async (consultationId, messageData) => {
 export const getConsultationMessages = async (consultationId) => {
   try {
     const response = await healthApi.get(
-      `/api/consultations/${consultationId}/messages`
+      `/api/consultations/${consultationId}/messages`,
     );
     return response.data.messages || [];
   } catch (error) {
@@ -243,7 +243,9 @@ export const getConsultationMessages = async (consultationId) => {
 // 删除咨询
 export const deleteConsultation = async (consultationId) => {
   try {
-    const response = await healthApi.delete(`/api/consultations/${consultationId}`);
+    const response = await healthApi.delete(
+      `/api/consultations/${consultationId}`,
+    );
     return response.data;
   } catch (error) {
     throw error.response?.data || { message: "删除咨询失败" };
@@ -307,7 +309,7 @@ export const setMedicationReminder = async (reminderData) => {
   try {
     const response = await healthApi.post(
       "/medication-reminders",
-      reminderData
+      reminderData,
     );
     return response.data;
   } catch (error) {
@@ -323,7 +325,7 @@ export const markReminderTaken = async (reminderId, takenTime = "") => {
       null,
       {
         params: { taken_time: takenTime },
-      }
+      },
     );
     return response.data;
   } catch (error) {
@@ -402,7 +404,7 @@ export const createSummary = async (summaryData) => {
     const payload = normalizeVisitSummaryPayload(summaryData);
     const response = await healthApi.post(
       "/api/visit-summaries/create",
-      payload
+      payload,
     );
     return response.data;
   } catch (error) {
@@ -416,7 +418,7 @@ export const updateSummary = async (id, summaryData) => {
     const payload = normalizeVisitSummaryPayload(summaryData);
     const response = await healthApi.put(
       `/api/visit-summaries/update/${id}`,
-      payload
+      payload,
     );
     return response.data;
   } catch (error) {
@@ -428,7 +430,7 @@ export const updateSummary = async (id, summaryData) => {
 export const deleteSummary = async (id) => {
   try {
     const response = await healthApi.delete(
-      `/api/visit-summaries/delete/${id}`
+      `/api/visit-summaries/delete/${id}`,
     );
     return response.data;
   } catch (error) {
@@ -442,7 +444,7 @@ export const generateAISummary = async (summaryData) => {
   try {
     const response = await healthApi.post(
       "/api/visit-summaries/generate",
-      summaryData
+      summaryData,
     );
     return response.data;
   } catch (error) {
@@ -467,13 +469,13 @@ export const uploadFile = async (file, onProgress = null) => {
           ? {
               onUploadProgress: (progressEvent) => {
                 const percentCompleted = Math.round(
-                  (progressEvent.loaded * 100) / progressEvent.total
+                  (progressEvent.loaded * 100) / progressEvent.total,
                 );
                 onProgress(percentCompleted);
               },
             }
           : {}),
-      }
+      },
     );
     return response.data;
   } catch (error) {
@@ -493,7 +495,7 @@ export const getAttachmentUrl = (fileId) => {
 export const getExtractedRecordInfo = async (recordId) => {
   try {
     const response = await healthApi.get(
-      `/api/health-records/${recordId}/extracted`
+      `/api/health-records/${recordId}/extracted`,
     );
     return response.data;
   } catch (error) {
@@ -519,13 +521,13 @@ export const uploadMultipleFiles = async (files, onProgress = null) => {
           ? {
               onUploadProgress: (progressEvent) => {
                 const percentCompleted = Math.round(
-                  (progressEvent.loaded * 100) / progressEvent.total
+                  (progressEvent.loaded * 100) / progressEvent.total,
                 );
                 onProgress(percentCompleted);
               },
             }
           : {}),
-      }
+      },
     );
     return response.data;
   } catch (error) {
@@ -611,22 +613,10 @@ export const updateHealthData = async (healthData) => {
   }
 };
 
-// 获取健康趋势 - 模拟数据
+// 获取健康趋势 - 阶段48-8: 实际计算交给 utils/healthMetrics.js
+// API 返回 null, 让前端用真实算法计算 (recList/medList/convs)
 export const getHealthTrends = async (params = {}) => {
-  try {
-    // 返回模拟的健康趋势数据
-    return [
-      { date: "2024-09-01", value: 75 },
-      { date: "2024-09-02", value: 78 },
-      { date: "2024-09-03", value: 80 },
-      { date: "2024-09-04", value: 79 },
-      { date: "2024-09-05", value: 82 },
-      { date: "2024-09-06", value: 81 },
-      { date: "2024-09-07", value: 83 },
-    ];
-  } catch (error) {
-    throw error.response?.data || { message: "获取健康趋势失败" };
-  }
+  return null; // no-op, 前端用 utils
 };
 
 // 获取服药历史 (未实现 - 给个兜底)
@@ -656,7 +646,7 @@ export const smartChat = async (message) => {
 const pollForAgentResponse = async (
   conversationId,
   maxAttempts = 30,
-  interval = 1000
+  interval = 1000,
 ) => {
   const { listMessages, getPendingMessages } = await import("../api/api");
 
@@ -667,7 +657,7 @@ const pollForAgentResponse = async (
     // 检查是否还有消息在处理中
     const pending = await getPendingMessages();
     const hasPendingForConversation = pending.some(
-      (msg) => msg.metadata?.conversation_id === conversationId
+      (msg) => msg.metadata?.conversation_id === conversationId,
     );
     if (!hasPendingForConversation) {
       // 获取消息列表

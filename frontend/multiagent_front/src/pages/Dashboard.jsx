@@ -66,6 +66,7 @@ import {
 import { useAuth } from "../contexts/AuthContext";
 import Header from "../components/HealthHeader";
 import AgentQuickFab from "../components/AgentQuickFab";
+import { buildHealthTrend } from "../utils/healthMetrics";
 
 // 阶段48-6: Dashboard = 智能体中心 (Agent Hub)
 // 4 个智能体: health_advisor / health_records / medication_reminder / visit_summary
@@ -155,6 +156,7 @@ export default function Dashboard() {
   const [askLoading, setAskLoading] = useState(false);
 
   const computeScore = (recCount, medTaken, medTotal) => {
+    // 阶段48-8: deprecated, 用 utils/healthMetrics.js 的真实算法替代
     const r = Math.min(recCount * 5, 30);
     const m = medTotal > 0 ? (medTaken / medTotal) * 70 : 0;
     return Math.round(r + m);
@@ -180,44 +182,41 @@ export default function Dashboard() {
     setRecords({ total: recList.length });
     setMed({ taken: medTaken, total: medTotal });
     setStats({
-      score: computeScore(recList.length, medTaken, medTotal),
+      score: trendResult.today.score,
       records: recList.length,
       exams: recList.filter((r) => r.record_type === "examination").length,
       allergies: recList.filter((r) => r.record_type === "allergy").length,
       reports: recList.filter((r) => r.record_type === "report").length,
     });
 
-    if (trend && Array.isArray(trend.weeks)) {
-      setTrends({
-        weeks: trend.weeks,
-        score: trend.score || computeScore(recList.length, medTaken, medTotal),
-      });
-    } else {
-      const weeks = [];
-      const today = new Date();
-      for (let i = 6; i >= 0; i--) {
-        const d = new Date(today);
-        d.setDate(d.getDate() - i);
-        weeks.push({
-          day:
-            i === 0
-              ? "今日"
-              : ["周天", "周一", "周二", "周三", "周四", "周五", "周六"][
-                  d.getDay()
-                ],
-          value:
-            50 +
-            10 +
-            Math.floor(
-              Math.sin((d.getDate() % 7) * 1.3) * 18 + Math.random() * 8,
-            ),
-        });
-      }
-      setTrends({
-        weeks,
-        score: computeScore(recList.length, medTaken, medTotal),
-      });
-    }
+    // 阶段48-8: 用真实算法替换 mock
+    const trendResult = buildHealthTrend({
+      records: recList,
+      reminders: medList,
+      consultations: Array.isArray(convs) ? convs : [],
+    });
+
+    // 把 days 转成 weeks 格式 (前端用)
+    const weeks = trendResult.days.map((d) => ({
+      day: d.label,
+      value: d.score ?? trendResult.today.score,
+      date: d.date,
+    }));
+
+    setTrends({
+      weeks,
+      score: trendResult.today.score,
+      cov: Math.round(trendResult.components.coverage),
+      comp: Math.round(trendResult.components.compliance),
+      act: Math.round(trendResult.components.activity),
+      stab: Math.round(trendResult.components.stability),
+      slope: trendResult.trend.slope,
+      r: trendResult.trend.r,
+      trendLabel: trendResult.trend.label,
+      trendColor: trendResult.trend.color,
+      historicalN: trendResult.trend.n,
+      comparison: trendResult.comparison,
+    });
     setRecentConvs(Array.isArray(convs) ? convs.slice(0, 4) : []);
     setLoading(false);
   };
@@ -569,10 +568,23 @@ export default function Dashboard() {
                     近 7 天健康趋势
                   </Typography>
                 </Stack>
-                <Chip
-                  label={`健康评分 ${trends.score} / 100`}
-                  color="primary"
-                />
+                <Stack direction="row" spacing={0.5} alignItems="center">
+                  <Chip
+                    size="small"
+                    label={trends.trendLabel || "稳定"}
+                    sx={{
+                      bgcolor: trends.trendColor || "info.main",
+                      color: "white",
+                      fontWeight: 600,
+                    }}
+                  />
+                  <Chip
+                    size="small"
+                    label={`健康评分 ${trends.score || 0} / 100`}
+                    color="primary"
+                    variant="outlined"
+                  />
+                </Stack>
               </Stack>
               <Box
                 sx={{
@@ -584,42 +596,48 @@ export default function Dashboard() {
                   mt: 2,
                 }}
               >
-                {trends.weeks.map((w, i) => (
-                  <Box key={i} sx={{ flex: 1, textAlign: "center" }}>
-                    <Typography
-                      variant="caption"
-                      sx={{ fontWeight: 600, color: "primary.main" }}
-                    >
-                      {w.value}
-                    </Typography>
-                    <Box
-                      sx={{
-                        height: `${w.value}%`,
-                        minHeight: 4,
-                        maxHeight: 100,
-                        bgcolor:
-                          w.value >= 80
-                            ? "success.main"
-                            : w.value >= 60
-                              ? "primary.main"
-                              : "warning.main",
-                        borderRadius: 1,
-                        mt: 0.5,
-                        transition: "all 0.3s",
-                      }}
-                    />
-                    <Typography
-                      variant="caption"
-                      sx={{
-                        display: "block",
-                        mt: 0.5,
-                        color: "text.secondary",
-                      }}
-                    >
-                      {w.day}
-                    </Typography>
-                  </Box>
-                ))}
+                {trends.weeks.map((w, i) => {
+                  const v = w.value;
+                  const color =
+                    v >= 80
+                      ? "success.main"
+                      : v >= 60
+                        ? "primary.main"
+                        : v >= 40
+                          ? "warning.main"
+                          : "error.main";
+                  return (
+                    <Box key={i} sx={{ flex: 1, textAlign: "center" }}>
+                      <Typography
+                        variant="caption"
+                        sx={{ fontWeight: 600, color: color }}
+                      >
+                        {Math.round(v)}
+                      </Typography>
+                      <Box
+                        sx={{
+                          height: `${Math.max(v, 4)}%`,
+                          maxHeight: 100,
+                          bgcolor: color,
+                          borderRadius: 1,
+                          mt: 0.5,
+                          transition: "all 0.3s",
+                        }}
+                      />
+                      <Typography
+                        variant="caption"
+                        sx={{
+                          display: "block",
+                          mt: 0.5,
+                          color: "text.secondary",
+                          fontSize: "0.65rem",
+                        }}
+                      >
+                        {w.day}
+                      </Typography>
+                    </Box>
+                  );
+                })}
               </Box>
               <Divider sx={{ my: 2 }} />
               <Grid container spacing={2}>
@@ -643,24 +661,45 @@ export default function Dashboard() {
                   <Typography
                     variant="body2"
                     color="text.secondary"
-                    sx={{ mb: 1 }}
+                    sx={{ mb: 0.5 }}
                   >
-                    • 档案完整度: {records.total} 项 (
-                    {Math.min(records.total * 10, 100)}%)
+                    • 档案覆盖: <strong>{trends.cov || 0}%</strong>
                   </Typography>
                   <Typography
                     variant="body2"
                     color="text.secondary"
-                    sx={{ mb: 1 }}
+                    sx={{ mb: 0.5 }}
                   >
-                    • 今日服药: {med.taken} / {med.total} (
-                    {med.total > 0
-                      ? Math.round((med.taken / med.total) * 100)
-                      : 0}
-                    %)
+                    • 服药依从: <strong>{trends.comp || 0}%</strong>
                   </Typography>
-                  <Typography variant="body2" color="text.secondary">
-                    • 连续用药: <strong>{Math.min(trends.score, 30)} 天</strong>
+                  <Typography
+                    variant="body2"
+                    color="text.secondary"
+                    sx={{ mb: 0.5 }}
+                  >
+                    • 活跃度: <strong>{trends.act || 0}%</strong>
+                  </Typography>
+                  <Typography
+                    variant="body2"
+                    color="text.secondary"
+                    sx={{ mb: 0.5 }}
+                  >
+                    • 稳定性: <strong>{trends.stab || 0}%</strong>
+                    {trends.comparison?.significant && (
+                      <Chip
+                        size="small"
+                        label={`t=${trends.comparison.t}`}
+                        sx={{ ml: 0.5, height: 16, fontSize: "0.6rem" }}
+                      />
+                    )}
+                  </Typography>
+                  <Typography
+                    variant="caption"
+                    color="text.disabled"
+                    sx={{ display: "block", mt: 1 }}
+                  >
+                    斜率 {trends.slope} · r={trends.r} · 历史{" "}
+                    {trends.historicalN || 0} 天
                   </Typography>
                 </Grid>
               </Grid>
