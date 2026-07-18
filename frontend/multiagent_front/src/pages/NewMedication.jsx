@@ -503,8 +503,8 @@ export default function NewMedication() {
     <Box sx={{ minHeight: "100vh", bgcolor: "background.default" }}>
       <Header />
 
-      {/* 阶段48-5: 顶部智能体标识 banner */}
-      <Box sx={{ bgcolor: "primary.main", color: "white", py: 1, px: 2 }}>
+      {/* 阶段48-6: 智能体标识 banner (主 agent = medication_reminder) */}
+      <Box sx={{ bgcolor: "secondary.main", color: "white", py: 1, px: 2 }}>
         <Container
           maxWidth="lg"
           sx={{ display: "flex", alignItems: "center", gap: 2 }}
@@ -512,20 +512,19 @@ export default function NewMedication() {
           <Avatar
             sx={{
               bgcolor: "white",
-              color: "primary.main",
+              color: "secondary.main",
               width: 32,
               height: 32,
             }}
           >
-            <Psychology sx={{ fontSize: 18 }} />
+            <Medication sx={{ fontSize: 18 }} />
           </Avatar>
           <Box sx={{ flex: 1 }}>
             <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
-              智能体协同工作台
+              智能体 <strong>medication_reminder</strong> 工作页
             </Typography>
             <Typography variant="caption" sx={{ opacity: 0.9 }}>
-              当前激活：<strong>medication_reminder</strong> (用药提醒) +{" "}
-              <strong>health_advisor</strong> (健康顾问)
+              协同智能体: <strong>health_advisor</strong> (用药建议、健康评分)
             </Typography>
           </Box>
           <Button
