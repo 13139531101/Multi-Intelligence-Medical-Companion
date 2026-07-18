@@ -853,36 +853,151 @@ export default function Dashboard() {
           </Grid>
         </Grid>
 
-        {/* 阶段48-6: 智能体洞察 (基于 agent 数据汇总) */}
-        {(stats?.score || 0) >= 70 ? (
-          <Alert severity="success" icon={<EventAvailable />} sx={{ mt: 3 }}>
-            <Typography variant="body2" sx={{ fontWeight: 600 }}>
-              健康评分优秀 ({stats?.score} 分)
+        {/* 阶段48-6: 智能体协同流程 + 评分说明 */}
+        <Paper
+          sx={{
+            p: 3,
+            mt: 3,
+            background: "linear-gradient(135deg, #F3F7FB 0%, #FFFFFF 100%)",
+          }}
+        >
+          <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 2 }}>
+            <AutoAwesome sx={{ color: "primary.main" }} />
+            <Typography variant="h6" sx={{ fontWeight: 600 }}>
+              智能体协同流程
             </Typography>
-            <Typography variant="caption" color="text.secondary">
-              <strong>health_advisor</strong>: 您当前的档案 +
-              服药依从性都很好，建议保持并定期复诊。
-            </Typography>
-          </Alert>
-        ) : (
-          <Alert severity="info" icon={<AutoAwesome />} sx={{ mt: 3 }}>
-            <Typography variant="body2" sx={{ fontWeight: 600 }}>
-              4 个 Agent 协同建议:
-            </Typography>
-            <Typography
-              variant="caption"
-              color="text.secondary"
-              component="div"
+            <Chip
+              label="演示"
+              size="small"
+              color="primary"
+              variant="outlined"
+            />
+          </Stack>
+          <Grid container spacing={1.5}>
+            {[
+              {
+                icon: Psychology,
+                color: "#1565C0",
+                name: "你提问",
+                desc: "用户描述问题",
+              },
+              {
+                icon: "→",
+                color: "#999",
+                name: "router",
+                desc: "Agent Router",
+              },
+              {
+                icon: SmartToy,
+                color: "#00897B",
+                name: "health_advisor",
+                desc: "健康顾问",
+              },
+              { icon: "→", color: "#999", name: "tools", desc: "工具调用" },
+              {
+                icon: Healing,
+                color: "#E65100",
+                name: "answer",
+                desc: "AI 答复",
+              },
+            ].map((step, i) => {
+              const StepIcon = typeof step.icon === "string" ? null : step.icon;
+              return (
+                <Grid item xs key={i}>
+                  <Paper
+                    variant="outlined"
+                    sx={{
+                      p: 1.5,
+                      textAlign: "center",
+                      borderColor: step.color,
+                      borderWidth: step.icon === "→" ? 0 : 1,
+                      bgcolor: step.icon === "→" ? "transparent" : "white",
+                    }}
+                  >
+                    {StepIcon ? (
+                      <Avatar
+                        sx={{
+                          bgcolor: step.color,
+                          mx: "auto",
+                          width: 36,
+                          height: 36,
+                        }}
+                      >
+                        <StepIcon sx={{ color: "white", fontSize: 20 }} />
+                      </Avatar>
+                    ) : (
+                      <Typography variant="h3" sx={{ color: "#ccc" }}>
+                        →
+                      </Typography>
+                    )}
+                    <Typography
+                      variant="caption"
+                      sx={{
+                        display: "block",
+                        mt: 0.5,
+                        fontWeight: 600,
+                        color: StepIcon ? "text.primary" : "text.disabled",
+                      }}
+                    >
+                      {step.name}
+                    </Typography>
+                    <Typography
+                      variant="caption"
+                      sx={{
+                        display: "block",
+                        color: "text.disabled",
+                        fontSize: "0.65rem",
+                      }}
+                    >
+                      {step.desc}
+                    </Typography>
+                  </Paper>
+                </Grid>
+              );
+            })}
+          </Grid>
+          <Divider sx={{ my: 2 }} />
+          <Stack
+            direction={{ xs: "column", sm: "row" }}
+            spacing={2}
+            alignItems="center"
+          >
+            <Alert
+              severity={(stats?.score || 0) >= 70 ? "success" : "info"}
+              icon={
+                (stats?.score || 0) >= 70 ? <EventAvailable /> : <AutoAwesome />
+              }
+              sx={{ flex: 1 }}
             >
-              • <strong>health_records</strong>: 上传体检报告可让评分 +
-              {Math.min(records.total * 5, 30)}
-              <br />• <strong>medication_reminder</strong>:
-              按时服药评分可立即提升至 70+
-              <br />• <strong>visit_summary</strong>:
-              建议每季度生成就诊摘要以便复诊
-            </Typography>
-          </Alert>
-        )}
+              <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                健康评分 {stats?.score || 0} / 100 · 4 Agent 协同建议:
+              </Typography>
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                component="div"
+              >
+                • <strong>health_records</strong>: 上传体检报告 +
+                {Math.min(records.total * 5, 30)} 分<br />•{" "}
+                <strong>medication_reminder</strong>: 按时服药 +
+                {med.total > 0 ? Math.round((med.taken / med.total) * 30) : 0}{" "}
+                分<br />• <strong>visit_summary</strong>: 完成就诊摘要 +10 分
+              </Typography>
+            </Alert>
+            <Button
+              variant="contained"
+              startIcon={<Bolt />}
+              onClick={() =>
+                handleAskAgent(
+                  "health_advisor",
+                  "请详细解释我的健康评分, 哪些方面可以提升?",
+                )
+              }
+            >
+              问 AI
+            </Button>
+          </Stack>
+        </Paper>
       </Container>
 
       {/* 阶段48-6: 快速提问 drawer */}
