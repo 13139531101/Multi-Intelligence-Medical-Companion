@@ -69,6 +69,7 @@ import { useAuth } from "../contexts/AuthContext";
 import Header from "../components/HealthHeader";
 import AgentQuickFab from "../components/AgentQuickFab";
 import { buildHealthTrend } from "../utils/healthMetrics";
+import ReactMarkdown from "react-markdown";
 
 // 阶段48-6: Dashboard = 智能体中心 (Agent Hub)
 // 4 个智能体: health_advisor / health_records / medication_reminder / visit_summary
@@ -305,6 +306,62 @@ export default function Dashboard() {
                   );
                   setActiveAgent(p.agent);
                 }
+              } catch {
+                /* ignore */
+              }
+            }
+          } else if (ev.includes("event: tool_call")) {
+            // 阶段48-11: 工具调用 — 推到 entry 的 steps
+            const m = ev.split("\n").find((l) => l.startsWith("data: "));
+            if (m) {
+              try {
+                const p = JSON.parse(m.slice(6));
+                setQuickAskHistory((h) =>
+                  h.map((e) =>
+                    e.id === entryId
+                      ? {
+                          ...e,
+                          steps: [
+                            ...(e.steps || []),
+                            {
+                              type: "tool_call",
+                              name: p.name,
+                              args: p.args,
+                              t: new Date(),
+                            },
+                          ],
+                        }
+                      : e,
+                  ),
+                );
+              } catch {
+                /* ignore */
+              }
+            }
+          } else if (ev.includes("event: tool_result")) {
+            // 阶段48-11: 工具返回结果
+            const m = ev.split("\n").find((l) => l.startsWith("data: "));
+            if (m) {
+              try {
+                const p = JSON.parse(m.slice(6));
+                setQuickAskHistory((h) =>
+                  h.map((e) =>
+                    e.id === entryId
+                      ? {
+                          ...e,
+                          steps: [
+                            ...(e.steps || []),
+                            {
+                              type: "tool_result",
+                              name: p.name,
+                              output: p.output,
+                              t: new Date(),
+                            },
+                          ],
+                        }
+                      : e,
+                  ),
+                );
               } catch {
                 /* ignore */
               }
@@ -565,17 +622,105 @@ export default function Dashboard() {
                         )}
                       </Stack>
                       {entry.reply ? (
-                        <Typography
-                          variant="body2"
-                          sx={{
-                            whiteSpace: "pre-wrap",
-                            color: "text.primary",
-                            lineHeight: 1.7,
-                          }}
-                        >
-                          {entry.reply}
-                          {entry.loading && "▍"}
-                        </Typography>
+                        <>
+                          {/* 阶段48-11: 工具调用步骤 (chip 列表, 可展开) */}
+                          {entry.steps && entry.steps.length > 0 && (
+                            <Box sx={{ mb: 1.5 }}>
+                              <Stack
+                                direction="row"
+                                spacing={0.5}
+                                sx={{ flexWrap: "wrap", gap: 0.5, mb: 0.5 }}
+                              >
+                                {entry.steps
+                                  .filter((s) => s.type === "tool_call")
+                                  .map((s, i) => (
+                                    <Chip
+                                      key={`tc_${i}`}
+                                      size="small"
+                                      icon={
+                                        <Science
+                                          sx={{ fontSize: "0.9rem !important" }}
+                                        />
+                                      }
+                                      label={`🔧 ${s.name}`}
+                                      sx={{
+                                        height: 20,
+                                        fontSize: "0.65rem",
+                                        bgcolor: "#FFF3E0",
+                                        color: "#E65100",
+                                        fontFamily: "monospace",
+                                      }}
+                                    />
+                                  ))}
+                              </Stack>
+                            </Box>
+                          )}
+                          {/* 阶段48-11: Markdown 渲染答案 (支持 ##, **, 列表, 表格) */}
+                          <Box
+                            sx={{
+                              color: "text.primary",
+                              lineHeight: 1.7,
+                              fontSize: "0.875rem",
+                              "& h1, & h2, & h3": {
+                                fontSize: "1.1rem",
+                                fontWeight: 600,
+                                mt: 2,
+                                mb: 1,
+                                color: "primary.main",
+                              },
+                              "& p": { my: 1 },
+                              "& ul, & ol": { pl: 2.5, my: 1 },
+                              "& li": { my: 0.5 },
+                              "& code": {
+                                bgcolor: "grey.100",
+                                px: 0.5,
+                                borderRadius: 0.5,
+                                fontSize: "0.8rem",
+                              },
+                              "& pre": {
+                                bgcolor: "grey.100",
+                                p: 1.5,
+                                borderRadius: 1,
+                                overflow: "auto",
+                              },
+                              "& blockquote": {
+                                borderLeft: "3px solid",
+                                borderColor: "warning.main",
+                                bgcolor: "warning.light",
+                                px: 1.5,
+                                py: 0.5,
+                                my: 1,
+                                color: "warning.dark",
+                                fontStyle: "italic",
+                              },
+                              "& hr": {
+                                my: 2,
+                                border: 0,
+                                borderTop: 1,
+                                borderColor: "divider",
+                              },
+                              "& table": {
+                                borderCollapse: "collapse",
+                                width: "100%",
+                                my: 1,
+                              },
+                              "& th, & td": {
+                                border: "1px solid",
+                                borderColor: "divider",
+                                px: 1,
+                                py: 0.5,
+                                fontSize: "0.75rem",
+                              },
+                              "& th": {
+                                bgcolor: "grey.50",
+                                fontWeight: 600,
+                              },
+                            }}
+                          >
+                            <ReactMarkdown>{entry.reply}</ReactMarkdown>
+                            {entry.loading && <span>▍</span>}
+                          </Box>
+                        </>
                       ) : entry.loading ? (
                         <Stack
                           direction="row"

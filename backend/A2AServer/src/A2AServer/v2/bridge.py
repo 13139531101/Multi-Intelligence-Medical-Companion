@@ -19,7 +19,7 @@ import os
 import sys
 import uuid
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, AsyncIterator
 
 logger = logging.getLogger(__name__)
 
@@ -233,3 +233,153 @@ async def v2_process_message(message) -> dict:
         return {"message": None, "error": "build message failed", "used_v2": True}
 
     return {"message": msg, "error": None, "used_v2": True, "result": result}
+
+
+async def v2_process_message_stream(message) -> AsyncIterator[dict]:
+    """
+    阶段48-11: v2 流式处理 — 真流式 yield 事件
+
+    跟 v2_process_message 不同:
+    - 不等所有都做完一次性返回
+    - 实时 yield:
+        - {"event": "routing", "agent": ..., "routing": {...}}
+        - {"event": "tool_call", "name": ..., "args": {...}}
+        - {"event": "tool_result", "name": ..., "output": ...}
+        - {"event": "chunk", "text": ...}
+        - {"event": "done", "content": ..., "agent": ...}
+
+    Args:
+        message: A2A Message
+
+    Yields:
+        dict: 事件对象
+    """
+    from A2AServer.v2 import agent_registry
+
+    query = _extract_text_from_message(message)
+    if not query:
+        yield {"event": "error", "error": "empty query"}
+        return
+
+    metadata = getattr(message, "metadata", None) or {}
+    conversation_id = (
+        metadata.get("conversation_id")
+        or getattr(message, "conversation_id", None)
+        or f"stream_{uuid.uuid4().hex[:8]}"
+    )
+    user_id = (
+        metadata.get("user_id")
+        or os.getenv("A2A_CURRENT_USER_ID")
+        or os.getenv("USER_ID")
+        or "default_user"
+    )
+
+    # 解析 metadata 参数
+    v2_mode = metadata.get("v2_mode", "single")
+    selected_agent = metadata.get("selected_agent")
+    parallel_agents = None
+    if isinstance(metadata.get("parallel_agents"), list):
+        parallel_agents = metadata["parallel_agents"]
+
+    # Phase 1: 路由 + 锁定目标
+    target_agent = None
+
+    # Layer 1: metadata.selected_agent (锁定)
+    if selected_agent:
+        try:
+            from A2AServer.v2.agent_registry import AgentRegistry
+            spec = AgentRegistry.get(selected_agent) or AgentRegistry.by_alias(selected_agent)
+            if spec is not None:
+                target_agent = spec.name
+        except Exception:
+            pass
+
+    # Layer 2: 关键词启发 (keyword matching)
+    if not target_agent:
+        try:
+            from . import host_graph
+            # 调用 layer2 函数
+            HostState = host_graph.HostState
+            fake_state = HostState(
+                query=query, conversation_id=conversation_id, user_id=user_id,
+                metadata=metadata, events=[],
+            )
+            routed = host_graph._layer2_heuristic(fake_state)
+            if routed:
+                target_agent = routed
+        except Exception as e:
+            logger.debug("[v2_stream] layer2 failed: %s", e)
+
+    # Layer 3: LLM fallback (省略 — 走 v1 HostGraph 一样)
+
+    if not target_agent:
+        target_agent = "health_advisor"  # fallback
+
+    # 阶段48-11 push routing 事件
+    yield {
+        "event": "routing",
+        "agent": target_agent,
+        "routing": {"layer": 1 if selected_agent else 2, "target": target_agent},
+        "conversation_id": conversation_id,
+    }
+
+    # Phase 2: 真流式调用 agent.stream
+    try:
+        from .agent_registry import AgentRegistry
+        from .v2_runtime import get_runtime
+
+        spec = AgentRegistry.get(target_agent)
+        if spec is None or spec.cls is None:
+            yield {"event": "error", "error": f"unknown agent: {target_agent}"}
+            return
+
+        if not get_runtime().available:
+            yield {"event": "error", "error": "LangChain 不可用"}
+            return
+
+        agent = spec.cls()
+        text = ""
+        tool_calls_log = []
+        tool_results_log = []
+
+        async for ev in agent.stream(
+            query,
+            conversation_id,
+            user_id=user_id,
+        ):
+            ev_type = ev.get("type", "?")
+            if ev_type == "tool_call":
+                tool_calls_log.append({"name": ev.get("name"), "args": ev.get("args")})
+                yield {
+                    "event": "tool_call",
+                    "name": ev.get("name"),
+                    "args": ev.get("args"),
+                }
+            elif ev_type == "tool_result":
+                tool_results_log.append({
+                    "name": ev.get("name"),
+                    "output": ev.get("output"),
+                })
+                yield {
+                    "event": "tool_result",
+                    "name": ev.get("name"),
+                    "output": ev.get("output"),
+                }
+            elif ev_type == "normal":
+                content = ev.get("content", "")
+                if content and content.strip():
+                    text += str(content)
+                    yield {"event": "chunk", "text": str(content)}
+
+        # done
+        yield {
+            "event": "done",
+            "content": text,
+            "agent": target_agent,
+            "tool_calls": tool_calls_log,
+            "tool_results": tool_results_log,
+            "conversation_id": conversation_id,
+        }
+    except Exception as e:
+        logger.exception("[v2_bridge] stream error")
+        yield {"event": "error", "error": str(e)}

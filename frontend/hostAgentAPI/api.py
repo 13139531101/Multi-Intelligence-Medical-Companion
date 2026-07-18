@@ -4938,8 +4938,10 @@ async def v2_chat_stream(request: Request, user: dict = Depends(get_current_user
 
     async def event_generator():
         try:
-            # 1) 先调 v2_process_message 拿 routing 结果
+            # 阶段48-11: 用 v2_process_message_stream 真流式, 不再等所有都做完
             from A2AServer.common.A2Atypes import Message as _AMsg
+            from A2AServer.v2.bridge import v2_process_message_stream
+
             a2a_msg = _AMsg(
                 role="user",
                 parts=[{"type": "text", "text": message}],
@@ -4949,26 +4951,44 @@ async def v2_chat_stream(request: Request, user: dict = Depends(get_current_user
                     **metadata,
                 },
             )
-            result = await v2_process_message(a2a_msg)
-            content = result.get("result", {}).get("content", "")
-            agent = result.get("result", {}).get("agent", "unknown")
-            routing = result.get("result", {}).get("routing", {})
+
+            agent_for_db = "unknown"
+            content_for_db = ""
+            tool_calls_log = []
+            tool_results_log = []
+
+            async for ev in v2_process_message_stream(a2a_msg):
+                ev_type = ev.get("event", "?")
+                if ev_type == "routing":
+                    agent_for_db = ev.get("agent", "unknown")
+                    yield f"event: routing\ndata: {_json.dumps({'agent': agent_for_db, 'routing': ev.get('routing', {}), 'conversation_id': conversation_id}, ensure_ascii=False)}\n\n"
+                elif ev_type == "tool_call":
+                    tool_calls_log.append({"name": ev.get("name"), "args": ev.get("args")})
+                    yield f"event: tool_call\ndata: {_json.dumps({'name': ev.get('name'), 'args': ev.get('args')}, ensure_ascii=False)}\n\n"
+                elif ev_type == "tool_result":
+                    tool_results_log.append({"name": ev.get("name"), "output": ev.get("output")})
+                    yield f"event: tool_result\ndata: {_json.dumps({'name': ev.get('name'), 'output': ev.get('output')}, ensure_ascii=False)}\n\n"
+                elif ev_type == "chunk":
+                    content_for_db += ev.get("text", "")
+                    yield f"event: chunk\ndata: {_json.dumps({'text': ev.get('text', '')}, ensure_ascii=False)}\n\n"
+                elif ev_type == "done":
+                    content_for_db = ev.get("content", content_for_db)
+                    agent_for_db = ev.get("agent", agent_for_db)
+                    yield f"event: done\ndata: {_json.dumps({'content': content_for_db, 'agent': agent_for_db, 'tool_calls': tool_calls_log, 'tool_results': tool_results_log, 'conversation_id': conversation_id}, ensure_ascii=False)}\n\n"
+                elif ev_type == "error":
+                    yield f"event: error\ndata: {_json.dumps({'error': ev.get('error', '')}, ensure_ascii=False)}\n\n"
 
             # 阶段48: 持久化到 consultations 表 (让历史记录里有)
             try:
                 dbm = get_db_manager()
-                if dbm and user_id:
-                    # 用 conversation_id 当 consultation_id, 没有则生成 UUID
+                if dbm and user_id and content_for_db:
                     sess_id = conversation_id if conversation_id and not conversation_id.startswith("stream_") else f"stream_{uuid.uuid4().hex[:16]}"
                     title = (message or "对话")[:24]
                     try:
-                        # 步骤1: 插入或更新 consultations 表 (主记录)
-                        # 阶段48-9: consultation_type 用 agent 名 + ON CONFLICT 时也更新 agent
                         dbm.execute_update(
                             "INSERT INTO consultations (consultation_id, user_id, title, consultation_type, agent_id, status, question, answer, session_id, created_at, updated_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW()) ON CONFLICT (consultation_id) DO UPDATE SET answer = EXCLUDED.answer, consultation_type = EXCLUDED.consultation_type, agent_id = EXCLUDED.agent_id, updated_at = NOW()",
-                            (sess_id, user_id, title, agent, agent, "completed", message, content, sess_id),
+                            (sess_id, user_id, title, agent_for_db, agent_for_db, "completed", message, content_for_db, sess_id),
                         )
-                        # 步骤2: 插 chat_messages 表 (chat_messages 表无 user_id 列, 只有 consultation_id)
                         msg_id_u = f"msg_{uuid.uuid4().hex[:16]}"
                         msg_id_a = f"msg_{uuid.uuid4().hex[:16]}"
                         dbm.execute_insert(
@@ -4977,26 +4997,13 @@ async def v2_chat_stream(request: Request, user: dict = Depends(get_current_user
                         )
                         dbm.execute_insert(
                             "INSERT INTO chat_messages (id, consultation_id, role, content, created_at) VALUES (%s, %s, %s, %s, NOW())",
-                            (msg_id_a, sess_id, "assistant", content),
+                            (msg_id_a, sess_id, "assistant", content_for_db),
                         )
                         print(f"[v2/chat/stream] saved to DB: sess={sess_id} user={user_id}", flush=True)
                     except Exception as e_save:
                         print(f"[v2/chat/stream] DB save failed: {e_save}", flush=True)
             except Exception as e_outer:
                 print(f"[v2/chat/stream] DB save outer: {e_outer}", flush=True)
-
-            # 2) 推送 routing 事件
-            yield f"event: routing\ndata: {_json.dumps({'agent': agent, 'routing': routing, 'conversation_id': conversation_id}, ensure_ascii=False)}\n\n"
-
-            # 3) 把 content 拆成块流式推送
-            chunk_size = 10
-            for i in range(0, len(content), chunk_size):
-                chunk = content[i:i + chunk_size]
-                yield f"event: chunk\ndata: {_json.dumps({'text': chunk}, ensure_ascii=False)}\n\n"
-                await asyncio.sleep(0.02)  # 20ms 间隔模拟流式
-
-            # 4) 推送 done
-            yield f"event: done\ndata: {_json.dumps({'content': content, 'agent': agent, 'conversation_id': conversation_id}, ensure_ascii=False)}\n\n"
 
         except Exception as e:
             import traceback
