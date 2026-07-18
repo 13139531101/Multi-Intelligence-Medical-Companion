@@ -326,21 +326,42 @@ export default function Dashboard() {
                 PHA 多智能体健康助手 — 4 个 AI 正在协同守护你的健康
               </Typography>
             </Box>
-            <Button
-              variant="contained"
-              color="warning"
-              size="large"
-              startIcon={<Bolt />}
-              onClick={() =>
-                handleAskAgent(
-                  "health_advisor",
-                  "你好, 总结一下我今天的健康状况",
-                )
-              }
-              sx={{ fontWeight: 600 }}
-            >
-              让 AI 总结
-            </Button>
+            <Stack direction="row" spacing={1}>
+              <Button
+                variant="outlined"
+                color="warning"
+                size="large"
+                onClick={() => {
+                  // 阶段48-6: 一键 demo - 让 4 个 agent 协同回答用户综合情况
+                  handleAskAgent(
+                    "health_advisor",
+                    "我体检总胆固醇偏高, 血压 145/95, 在吃硝苯地平和阿托伐他汀, 请给我一个完整建议",
+                  );
+                }}
+                sx={{
+                  color: "white",
+                  borderColor: "rgba(255,255,255,0.5)",
+                  fontWeight: 600,
+                }}
+              >
+                一键诊断
+              </Button>
+              <Button
+                variant="contained"
+                color="warning"
+                size="large"
+                startIcon={<Bolt />}
+                onClick={() =>
+                  handleAskAgent(
+                    "health_advisor",
+                    "你好, 总结一下我今天的健康状况",
+                  )
+                }
+                sx={{ fontWeight: 600 }}
+              >
+                让 AI 总结
+              </Button>
+            </Stack>
           </Stack>
         </Paper>
 
