@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 import os
+import json
 from typing import AsyncIterable, Any
 
 from .v2_runtime import get_runtime
@@ -261,45 +262,151 @@ class V2Agent:
                 pass
 
         try:
-            # LangGraph 1.0：astream 是异步生成器（兼容 AsyncPostgresSaver）
-            # 同步 stream() 不能用 AsyncPostgresSaver（InvalidStateError）
-            stream_iter = agent.astream(
-                {"messages": [{"role": "user", "content": query}]},
-                config=cfg,
-                stream_mode="values",
-            )
+            # 阶段48-12: stream_mode 改为 "messages" — 增量 yield, 不再传累积 state
+            # + recursion_limit 防无限循环
+            # + 去重 dedup_set 防止反复 yield 同 message id 的 tool_call
+            import time as _t
+            _stream_start = _t.time()
+            _MAX_ITER = int(os.getenv("PHA_MAX_TOOL_ITER", "6"))  # 阶段48-12
+            _MAX_STREAM_SEC = int(os.getenv("PHA_MAX_STREAM_SEC", "45"))
 
-            # 阶段35 修复: astream() 是 async_generator，必须用 async for
+            # 阶段48-12: 用 messages 模式 (LangGraph 0.3+), 每个 chunk 是一个增量 message
+            try:
+                stream_iter = agent.astream(
+                    {"messages": [{"role": "user", "content": query}]},
+                    config={**cfg, "recursion_limit": 50},
+                    stream_mode="messages",
+                )
+                logger.warning(f"[v2_agent:trace] USING messages mode, recursion_limit=50")
+                using_messages_mode = True
+            except Exception as _e_mode:
+                logger.warning(f"[v2_agent] stream_mode=messages 失败, 退回 values + 去重: {_e_mode}")
+                stream_iter = agent.astream(
+                    {"messages": [{"role": "user", "content": query}]},
+                    config=cfg,
+                    stream_mode="values",
+                )
+                using_messages_mode = False
+
+            # 阶段48-12: 去重 + 累加器
+            # - seen_tool_calls: 去重 tool_call (避免同 tc_id 多次 yield)
+            # - seen_ai_accumulators: 同 msg_id 累加, yield 增量
+            seen_tool_calls = set()
+            seen_ai_accumulators = {}  # {msg_id: accumulated_content_so_far}
+            seen_tc_accumulators = {}  # {tool_id: accumulated_args_str} 阶段48-12
+            iter_count = 0
+
             async for chunk in stream_iter:
-                messages = chunk.get("messages", []) if isinstance(chunk, dict) else []
+                iter_count += 1
+                # 超时保护
+                if _t.time() - _stream_start > _MAX_STREAM_SEC:
+                    logger.error("[v2_agent] stream 超时 (%.1fs), 强制结束", _t.time() - _stream_start)
+                    yield {"is_task_complete": True, "require_user_input": False, "content": "响应超时, 请稍后重试。", "type": "normal"}
+                    return
+
+                if using_messages_mode:
+                    # messages 模式: chunk 是 (msg, _metadata) 元组, 或者是单 msg
+                    # 阶段48-12 debug: 加日志看 chunk 类型
+                    if isinstance(chunk, tuple):
+                        msg = chunk[0]
+                    else:
+                        msg = chunk
+                    messages = [msg]
+                else:
+                    # values 模式: chunk 是完整 state (累积 messages)
+                    messages = chunk.get("messages", []) if isinstance(chunk, dict) else []
+
+                # debug 关掉
+                pass
+
                 for msg in messages:
+                    msg_id = getattr(msg, "id", None) or getattr(msg, "message_id", None) or ""
                     msg_type = getattr(msg, "type", "ai")
                     content = getattr(msg, "content", "")
                     tool_calls = getattr(msg, "tool_calls", []) or []
 
-                    # 工具调用
-                    for tc in tool_calls:
-                        yield {
-                            "type": "tool_call",
-                            "name": tc.get("name", ""),
-                            "args": tc.get("args", {}),
-                        }
+                    # 阶段48-12 重写: chunk 是 AIMessageChunk 增量, 同 msg_id 的多个 chunk 共享 run id
+                    # 累积: 对每 msg_id 累加 content (str concat), 持续 yield 增量 (diff)
+                    # 不要 in-place dedup — 让 UI 看到完整流
 
-                    # 文本输出
-                    if content:
-                        if msg_type == "ai":
+                    # 工具调用 — 按 (tool_call_id) 去重, 第一次 yield 时累加完整 args
+                    seen_tc_args: dict = getattr(msg, "_seen_tc_args", None)  # placeholder noop
+                    for tc in tool_calls:
+                        tc_id = tc.get("id") or ""
+                        tc_name = tc.get("name", "") or ""
+                        tc_args_raw = tc.get("args", "")
+
+                        # 阶段48-12: 累加 args (LLM 模型 chunk 输出 args 是 string 累加)
+                        # 跨 chunks 累加到 full_args
+                        if isinstance(tc_args_raw, str):
+                            prev_args = seen_tc_accumulators.get(tc_id or tc_name, "")
+                            if tc_args_raw.startswith(prev_args) or tc_args_raw and not prev_args:
+                                seen_tc_accumulators[tc_id or tc_name] = tc_args_raw
+                                full_args_str = tc_args_raw
+                            else:
+                                seen_tc_accumulators[tc_id or tc_name] = prev_args + tc_args_raw
+                                full_args_str = prev_args + tc_args_raw
+                            # 解析为 dict
+                            try:
+                                tc_args_parsed = json.loads(full_args_str) if full_args_str.strip() else {}
+                            except json.JSONDecodeError:
+                                tc_args_parsed = {"_raw": full_args_str}
+                        else:
+                            tc_args_parsed = tc_args_raw
+                            full_args_str = json.dumps(tc_args_raw, ensure_ascii=False)
+
+                        # 阶段48-12: 等到 args 看起来完整才 yield (含 '}' 或完整关键词)
+                        # 简化: chunk 都没 id 时直接 yield; 但有 id 时等到 full content
+                        if not tc_id:
+                            sig_key = ("tc_sig", tc_name, full_args_str)
+                            if sig_key in seen_tool_calls:
+                                continue
+                            seen_tool_calls.add(sig_key)
                             yield {
-                                "is_task_complete": False,
-                                "require_user_input": False,
-                                "content": content,
-                                "type": "normal",
+                                "type": "tool_call",
+                                "id": tc_id,
+                                "name": tc_name,
+                                "args": tc_args_parsed if tc_args_parsed else {"_raw": full_args_str},
                             }
-                        elif msg_type == "tool":
-                            yield {
-                                "type": "tool_result",
-                                "name": getattr(msg, "name", ""),
-                                "output": str(content)[:500],
-                            }
+                        else:
+                            # 用 tc_id 跟踪 — 但只在 iter 看到完整 args 才 yield
+                            sig_key = ("tc_id", tc_id)
+                            if sig_key in seen_tool_calls:
+                                continue
+                            # 只在 args 看起来完整 (含 '}' 或看到 args dict) 触发 yield
+                            if isinstance(tc.get("args"), dict):
+                                seen_tool_calls.add(sig_key)
+                                yield {
+                                    "type": "tool_call",
+                                    "id": tc_id,
+                                    "name": tc_name,
+                                    "args": tc_args_parsed,
+                                }
+                            else:
+                                # 字符串 chunk, 继续累加, 暂不 yield
+                                continue
+
+                    # ai 文本 — 直接 yield
+                    # chunk.content 已是该 chunk 的有效 token (LangChain 不会累加)
+                    if msg_type == "ai" and content:
+                        yield {
+                            "is_task_complete": False,
+                            "require_user_input": False,
+                            "content": content,
+                            "type": "normal",
+                        }
+                    elif msg_type == "tool" and content:
+                        # tool result 用 (msg_id) 唯一
+                        tool_name = getattr(msg, "name", "")
+                        tr_key = ("tr", msg_id, tool_name)
+                        if tr_key in seen_tool_calls:
+                            continue
+                        seen_tool_calls.add(tr_key)
+                        yield {
+                            "type": "tool_result",
+                            "name": tool_name,
+                            "output": str(content)[:500],
+                        }
 
             # 结束事件
             yield {

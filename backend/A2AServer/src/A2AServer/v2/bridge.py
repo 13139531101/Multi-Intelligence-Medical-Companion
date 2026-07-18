@@ -342,11 +342,37 @@ async def v2_process_message_stream(message) -> AsyncIterator[dict]:
         tool_calls_log = []
         tool_results_log = []
 
+        # 阶段48-12: 最大 stream 时间和最大 yield 次数限制, 防 LangGraph 死循环
+        import time as _t
+        _stream_started = _t.time()
+        _MAX_SEC = int(os.getenv("PHA_MAX_STREAM_SEC", "30"))
+        _MAX_YIELDS = int(os.getenv("PHA_MAX_STREAM_YIELDS", "200"))
+
+        yield_count = 0
         async for ev in agent.stream(
             query,
             conversation_id,
             user_id=user_id,
         ):
+            yield_count += 1
+            # 阶段48-12: 防卡死, 超时强制结束
+            if _t.time() - _stream_started > _MAX_SEC:
+                logger.warning(f"[v2_bridge] stream 超 {_MAX_SEC}s, 强制结束")
+                if not text and tool_results_log:
+                    text = "## 工具调用结果汇总\n\n" + "\n".join([
+                        f"**{r['name']}**: {str(r['output'])[:300]}" for r in tool_results_log
+                    ])
+                yield {"event": "chunk", "text": "\n\n_(响应超时, 已汇总工具结果)_"}
+                break
+            if yield_count > _MAX_YIELDS:
+                logger.warning(f"[v2_bridge] yields 超 {_MAX_YIELDS}, 强制结束")
+                if not text and tool_results_log:
+                    text = "## 工具调用结果汇总\n\n" + "\n".join([
+                        f"**{r['name']}**: {str(r['output'])[:300]}" for r in tool_results_log
+                    ])
+                yield {"event": "chunk", "text": "\n\n_(轮次过多, 已汇总工具结果)_"}
+                break
+
             ev_type = ev.get("type", "?")
             if ev_type == "tool_call":
                 tool_calls_log.append({"name": ev.get("name"), "args": ev.get("args")})
@@ -370,6 +396,14 @@ async def v2_process_message_stream(message) -> AsyncIterator[dict]:
                 if content and content.strip():
                     text += str(content)
                     yield {"event": "chunk", "text": str(content)}
+
+        # 阶段48-12: 如果 LLM 没给最终文本, 把工具结果组成简洁回答
+        if not text and tool_results_log:
+            text = "## 工具调用结果汇总\n\n"
+            for r in tool_results_log:
+                output = str(r['output'])[:400]
+                text += f"**{r['name']}** 返回: {output}\n\n"
+            yield {"event": "chunk", "text": text}
 
         # done
         yield {
