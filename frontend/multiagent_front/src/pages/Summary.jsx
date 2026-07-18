@@ -613,6 +613,16 @@ const Summary = () => {
     <LocalizationProvider dateAdapter={AdapterDayjs}>
       <Box sx={{ flexGrow: 1, bgcolor: "#f5f5f5", minHeight: "100vh" }}>
         <Header />
+
+        {/* 阶段48-6: 智能体标识 (橙色 visit_summary) */}
+        <Box sx={{ bgcolor: "#E65100", color: "white", py: 0.75, px: 2 }}>
+          <Container maxWidth="lg" sx={{ display: "flex", alignItems: "center", gap: 2 }}>
+            <Avatar sx={{ bgcolor: "white", color: "#E65100", width: 28, height: 28 }}><Assignment sx={{ fontSize: 16 }} /></Avatar>
+            <Typography variant="caption">
+              智能体 <strong>visit_summary</strong> 工作页面 · AI 自动汇总病史、诊断、医嘱
+            </Typography>
+          </Container>
+        </Box>
         <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }}>
           {/* 页面标题和操作 */}
           <Box
