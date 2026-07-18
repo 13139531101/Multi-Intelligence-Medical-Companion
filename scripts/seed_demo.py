@@ -41,13 +41,27 @@ def main():
     print("\n=== seed medications ===")
     today = "2026-07-17"
     meds = [
-        {"drug_name": "硝苯地平控释片", "dosage": "30mg", "frequency": "once", "start_date": "2025-03-15"},
-        {"drug_name": "阿司匹林肠溶片", "dosage": "100mg", "frequency": "once", "start_date": "2024-09-01"},
-        {"drug_name": "阿托伐他汀钙片", "dosage": "20mg", "frequency": "once", "start_date": "2025-04-20"},
-        {"drug_name": "维生素 D3", "dosage": "400IU", "frequency": "once", "start_date": "2025-05-01"},
+        {"name": "硝苯地平控释片", "dosage": "30mg", "frequency": "每日2次", "startDate": "2025-03-15", "times": ["08:00", "20:00"], "notes": "早晚各一次"},
+        {"name": "阿司匹林肠溶片", "dosage": "100mg", "frequency": "每日1次", "startDate": "2024-09-01", "times": ["08:00"], "notes": "空腹服用"},
+        {"name": "阿托伐他汀钙片", "dosage": "20mg", "frequency": "每日1次", "startDate": "2025-04-20", "times": ["21:00"], "notes": "睡前服用"},
+        {"name": "维生素 D3", "dosage": "400IU", "frequency": "每日1次", "startDate": "2025-05-01", "times": ["12:30"], "notes": "随餐服用"},
     ]
-    # check actual fields
-    print(f"skipping medications, user can add via Drawer")
+    created_meds = 0
+    for m in meds:
+        try:
+            resp = httpx.post(f"{BASE}/api/medication-reminders", json=m, headers=H, timeout=10)
+            if resp.status_code in (200, 201):
+                d = resp.json()
+                if d.get("success") != False:
+                    created_meds += 1
+                    print(f"  + {m['name']}")
+                else:
+                    print(f"  REJECTED {m['name']}: {d.get('message', '')[:80]}")
+            else:
+                print(f"  FAIL {resp.status_code}: {m['name']}")
+        except Exception as e:
+            print(f"  ERR: {e}")
+    print(f"\n=== created {created_meds}/{len(meds)} medication reminders ===\n")
 
 if __name__ == "__main__":
     main()
