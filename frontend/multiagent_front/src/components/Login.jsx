@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   Box,
   Card,
@@ -11,52 +11,55 @@ import {
   CircularProgress,
   Container,
   Avatar,
-  Link
-} from '@mui/material';
-import { LockOutlined } from '@mui/icons-material';
-import { login } from '../api/healthApi';
-import { useAuth } from '../contexts/AuthContext';
+  Link,
+  Divider,
+  Chip,
+  Stack,
+} from "@mui/material";
+import { LockOutlined, Psychology, Bolt } from "@mui/icons-material";
+import { login } from "../api/healthApi";
+import { useAuth } from "../contexts/AuthContext";
 
 const Login = () => {
   const navigate = useNavigate();
   const { login: authLogin } = useAuth();
   const [formData, setFormData] = useState({
-    username: '',
-    password: ''
+    username: "",
+    password: "",
   });
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
+  const [error, setError] = useState("");
 
   const handleChange = (e) => {
     const { name, value } = e.target;
-    setFormData(prev => ({
+    setFormData((prev) => ({
       ...prev,
-      [name]: value
+      [name]: value,
     }));
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setLoading(true);
-    setError('');
+    setError("");
 
     try {
       const response = await login(formData);
-      
+
       // 使用认证上下文保存登录状态
       authLogin(response.access_token, response.user);
-      
+
       // 跳转到仪表盘
-      navigate('/v2/dashboard');
+      navigate("/v2/dashboard");
     } catch (err) {
-      setError(err.detail || err.message || '登录失败，请检查用户名和密码');
+      setError(err.detail || err.message || "登录失败，请检查用户名和密码");
     } finally {
       setLoading(false);
     }
   };
 
   const handleRegisterClick = () => {
-    navigate('/register');
+    navigate("/register");
   };
 
   return (
@@ -64,29 +67,63 @@ const Login = () => {
       <Box
         sx={{
           marginTop: 8,
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
         }}
       >
-        <Avatar sx={{ m: 1, bgcolor: 'primary.main' }}>
-          <LockOutlined />
+        <Avatar sx={{ m: 1, bgcolor: "primary.main" }}>
+          <Psychology sx={{ fontSize: 32 }} />
         </Avatar>
-        <Typography component="h1" variant="h4" gutterBottom>
-          健康助手
+        <Typography
+          component="h1"
+          variant="h4"
+          gutterBottom
+          sx={{ fontWeight: 700 }}
+        >
+          PHA 智能体健康助手
         </Typography>
-        <Typography variant="h6" color="text.secondary" gutterBottom>
-          登录您的账户
+        <Typography variant="body2" color="text.secondary" gutterBottom>
+          4 个 AI 智能体 (advisor / records / medication / summary) 协同守护
         </Typography>
-        
-        <Card sx={{ mt: 3, width: '100%' }}>
+        <Stack direction="row" spacing={0.5} sx={{ mt: 0.5, mb: 1.5 }}>
+          <Chip
+            label="health_advisor"
+            size="small"
+            color="primary"
+            sx={{ fontFamily: "monospace" }}
+          />
+          <Chip
+            label="health_records"
+            size="small"
+            color="success"
+            sx={{ fontFamily: "monospace" }}
+          />
+          <Chip
+            label="medication"
+            size="small"
+            color="secondary"
+            sx={{ fontFamily: "monospace" }}
+          />
+          <Chip
+            label="visit_summary"
+            size="small"
+            sx={{
+              bgcolor: "#FFE0B2",
+              color: "#E65100",
+              fontFamily: "monospace",
+            }}
+          />
+        </Stack>
+
+        <Card sx={{ mt: 3, width: "100%" }}>
           <CardContent>
             {error && (
               <Alert severity="error" sx={{ mb: 2 }}>
                 {error}
               </Alert>
             )}
-            
+
             <Box component="form" onSubmit={handleSubmit} sx={{ mt: 1 }}>
               <TextField
                 margin="normal"
@@ -127,18 +164,37 @@ const Login = () => {
                     登录中...
                   </>
                 ) : (
-                  '登录'
+                  "登录"
                 )}
               </Button>
-              
-              <Box sx={{ textAlign: 'center', mt: 2 }}>
+
+              <Divider sx={{ my: 1.5 }}>
+                <Typography variant="caption" color="text.disabled">
+                  一键体验
+                </Typography>
+              </Divider>
+
+              <Button
+                fullWidth
+                variant="outlined"
+                color="warning"
+                startIcon={<Bolt />}
+                onClick={() =>
+                  setFormData({ username: "1111", password: "111111" })
+                }
+                sx={{ mb: 1 }}
+              >
+                填入 demo 账号
+              </Button>
+
+              <Box sx={{ textAlign: "center", mt: 2 }}>
                 <Typography variant="body2">
-                  还没有账户？{' '}
+                  还没有账户？{" "}
                   <Link
                     component="button"
                     variant="body2"
                     onClick={handleRegisterClick}
-                    sx={{ textDecoration: 'none' }}
+                    sx={{ textDecoration: "none" }}
                   >
                     立即注册
                   </Link>
