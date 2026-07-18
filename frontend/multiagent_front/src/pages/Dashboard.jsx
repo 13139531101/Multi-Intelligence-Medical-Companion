@@ -149,6 +149,7 @@ export default function Dashboard() {
   // 快速问答 drawer
   const [askOpen, setAskOpen] = useState(false);
   const [askQ, setAskQ] = useState("");
+  const [quickAskQ, setQuickAskQ] = useState(""); // 阶段48-7: 顶部快捷输入
   const [askTarget, setAskTarget] = useState("health_advisor");
   const [askReply, setAskReply] = useState("");
   const [askLoading, setAskLoading] = useState(false);
@@ -301,226 +302,124 @@ export default function Dashboard() {
       <Header />
 
       <Container maxWidth="lg" sx={{ py: 3 }}>
-        {/* 阶段48-6: 问候横幅 */}
+        {/* 阶段48-7: 简洁问候 + 直接输入 (无按钮自动答) */}
         <Paper
           sx={{
             p: 3,
             mb: 3,
-            background: "linear-gradient(135deg, #1565C0 0%, #0D47A1 100%)",
+            bgcolor: "primary.main",
             color: "white",
-            position: "relative",
-            overflow: "hidden",
+            boxShadow: 1,
           }}
         >
-          <Stack direction="row" alignItems="center" spacing={2}>
-            <Avatar
-              sx={{ bgcolor: "rgba(255,255,255,0.2)", width: 56, height: 56 }}
-            >
-              <Psychology sx={{ fontSize: 32 }} />
-            </Avatar>
-            <Box sx={{ flex: 1 }}>
-              <Typography variant="h5" sx={{ fontWeight: 700 }}>
-                你好, {user?.username || "用户"}
-              </Typography>
-              <Typography variant="body2" sx={{ opacity: 0.9, mt: 0.5 }}>
-                PHA 多智能体健康助手 — 4 个 AI 正在协同守护你的健康
-              </Typography>
-            </Box>
-            <Stack direction="row" spacing={1}>
-              <Button
-                variant="outlined"
-                color="warning"
-                size="large"
-                onClick={() => {
-                  // 阶段48-6: 一键 demo - 让 4 个 agent 协同回答用户综合情况
-                  handleAskAgent(
-                    "health_advisor",
-                    "我体检总胆固醇偏高, 血压 145/95, 在吃硝苯地平和阿托伐他汀, 请给我一个完整建议",
-                  );
-                }}
-                sx={{
-                  color: "white",
-                  borderColor: "rgba(255,255,255,0.5)",
-                  fontWeight: 600,
-                }}
-              >
-                一键诊断
-              </Button>
-              <Button
-                variant="contained"
-                color="warning"
-                size="large"
-                startIcon={<Bolt />}
-                onClick={() =>
-                  handleAskAgent(
-                    "health_advisor",
-                    "你好, 总结一下我今天的健康状况",
-                  )
-                }
-                sx={{ fontWeight: 600 }}
-              >
-                让 AI 总结
-              </Button>
-            </Stack>
-          </Stack>
+          <Typography variant="h5" sx={{ fontWeight: 600 }}>
+            你好, {user?.username || "用户"}
+          </Typography>
+          <Typography variant="body2" sx={{ opacity: 0.9, mt: 0.5, mb: 2 }}>
+            有任何健康问题, 直接在下面输入, 我会找最合适的 AI 帮你
+          </Typography>
+          <TextField
+            fullWidth
+            placeholder="例如: 我最近血压偏高, 需要注意什么?"
+            value={quickAskQ}
+            onChange={(e) => setQuickAskQ(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && quickAskQ.trim()) {
+                navigate("/v2/chat?q=" + encodeURIComponent(quickAskQ));
+              }
+            }}
+            sx={{
+              bgcolor: "rgba(255,255,255,0.95)",
+              borderRadius: 1,
+              "& .MuiInputBase-input": { color: "text.primary", py: 1.25 },
+            }}
+            InputProps={{
+              endAdornment: (
+                <Button
+                  variant="contained"
+                  color="primary"
+                  size="small"
+                  onClick={() =>
+                    quickAskQ.trim() &&
+                    navigate("/v2/chat?q=" + encodeURIComponent(quickAskQ))
+                  }
+                  disabled={!quickAskQ.trim()}
+                >
+                  提问
+                </Button>
+              ),
+            }}
+          />
         </Paper>
 
-        {/* 阶段48-6: 智能体 Hub - 4 个 agent 卡片 */}
-        <Box sx={{ mb: 4 }}>
-          <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 2 }}>
-            <DashboardIcon sx={{ fontSize: 20, color: "primary.main" }} />
-            <Typography variant="h6" sx={{ fontWeight: 600 }}>
-              智能体工作台
-            </Typography>
-            <Chip label="4 agents active" size="small" color="primary" />
-            {activeAgent && (
-              <Chip
-                label={`最近调用: ${activeAgent}`}
-                size="small"
-                color="success"
-                variant="outlined"
-              />
-            )}
-          </Stack>
-          <Grid container spacing={2}>
-            {AGENTS.map((ag) => {
-              const Icon = ag.icon;
-              return (
-                <Grid item xs={12} sm={6} md={3} key={ag.id}>
-                  <Card
-                    sx={{
-                      cursor: "pointer",
-                      transition: "all 0.2s",
-                      border: 2,
-                      borderColor:
-                        activeAgent === ag.en ? ag.color : "transparent",
-                      "&:hover": {
-                        transform: "translateY(-4px)",
-                        boxShadow: 6,
-                      },
-                    }}
-                    onClick={() => navigate(ag.path)}
-                  >
-                    <CardContent sx={{ p: 2.5 }}>
-                      <Stack
-                        direction="row"
-                        alignItems="center"
-                        spacing={1.5}
-                        sx={{ mb: 1.5 }}
-                      >
-                        <Avatar
-                          sx={{
-                            bgcolor: ag.bgColor,
-                            color: ag.color,
-                            width: 44,
-                            height: 44,
-                          }}
-                        >
-                          <Icon sx={{ fontSize: 24 }} />
-                        </Avatar>
-                        <Box sx={{ flex: 1, minWidth: 0 }}>
-                          <Typography
-                            variant="subtitle1"
-                            sx={{ fontWeight: 700 }}
-                          >
-                            {ag.name}
-                          </Typography>
-                          <Typography
-                            variant="caption"
-                            color="text.secondary"
-                            sx={{ fontFamily: "monospace" }}
-                          >
-                            {ag.en}
-                          </Typography>
-                        </Box>
-                      </Stack>
-                      <Typography
-                        variant="body2"
-                        color="text.secondary"
-                        sx={{ minHeight: 40 }}
-                      >
-                        {ag.desc}
-                      </Typography>
-                      <Stack
-                        direction="row"
-                        spacing={0.5}
-                        sx={{ mt: 1, flexWrap: "wrap", gap: 0.5 }}
-                      >
-                        {ag.keywords.map((k) => (
-                          <Chip
-                            key={k}
-                            label={k}
-                            size="small"
-                            sx={{ fontSize: "0.65rem", height: 20 }}
-                          />
-                        ))}
-                      </Stack>
-                      <Button
-                        fullWidth
-                        size="small"
-                        variant="text"
-                        endIcon={<ChevronRight />}
-                        sx={{ mt: 1, color: ag.color, fontWeight: 600 }}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleAskAgent(ag.en, "你好, 我需要" + ag.desc);
-                        }}
-                      >
-                        立即对话
-                      </Button>
-                    </CardContent>
-                  </Card>
-                </Grid>
-              );
-            })}
-          </Grid>
-        </Box>
-
-        {/* 阶段48-6: 快速提示 chips */}
-        <Box sx={{ mb: 4 }}>
+        {/* 阶段48-7: 简洁 4 个 agent 卡片 - 跳转而非自动答 */}
+        <Box sx={{ mb: 3 }}>
           <Stack
             direction="row"
             alignItems="center"
             spacing={1}
             sx={{ mb: 1.5 }}
           >
-            <AutoAwesome sx={{ fontSize: 18, color: "primary.main" }} />
             <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
-              快速提问
+              4 个智能体
             </Typography>
             <Typography variant="caption" color="text.secondary">
-              点击 → 自动路由到合适的 agent
+              点击卡片进入
             </Typography>
           </Stack>
-          <Stack direction="row" spacing={1} sx={{ flexWrap: "wrap", gap: 1 }}>
-            {QUICK_PROMPTS.map((q, i) => {
-              const ag = AGENTS.find((a) => a.en === q.agent);
+          <Grid container spacing={1.5}>
+            {AGENTS.map((ag) => {
+              const Icon = ag.icon;
               return (
-                <Chip
-                  key={i}
-                  label={q.text}
-                  onClick={() => handleAskAgent(q.agent, q.text)}
-                  sx={{
-                    bgcolor: ag?.bgColor,
-                    color: q.color,
-                    fontWeight: 500,
-                    "&:hover": { bgcolor: ag?.color, color: "white" },
-                    height: 32,
-                    px: 1,
-                  }}
-                />
+                <Grid item xs={6} md={3} key={ag.id}>
+                  <Card
+                    sx={{
+                      cursor: "pointer",
+                      transition: "all 0.15s",
+                      border: 1,
+                      borderColor: "divider",
+                      "&:hover": { borderColor: ag.color, boxShadow: 1 },
+                    }}
+                    onClick={() => navigate(ag.path)}
+                  >
+                    <CardContent sx={{ p: 2, pb: "16px !important" }}>
+                      <Stack direction="row" alignItems="center" spacing={1.5}>
+                        <Avatar
+                          sx={{
+                            bgcolor: ag.bgColor,
+                            color: ag.color,
+                            width: 40,
+                            height: 40,
+                          }}
+                        >
+                          <Icon sx={{ fontSize: 20 }} />
+                        </Avatar>
+                        <Box sx={{ flex: 1, minWidth: 0 }}>
+                          <Typography
+                            variant="subtitle2"
+                            sx={{ fontWeight: 600 }}
+                          >
+                            {ag.name}
+                          </Typography>
+                          <Typography
+                            variant="caption"
+                            color="text.secondary"
+                            sx={{
+                              display: "block",
+                              mt: 0.25,
+                              fontSize: "0.7rem",
+                            }}
+                          >
+                            {ag.desc.split("、")[0]}
+                          </Typography>
+                        </Box>
+                      </Stack>
+                    </CardContent>
+                  </Card>
+                </Grid>
               );
             })}
-            <Chip
-              icon={<Add fontSize="small" />}
-              label="自定义提问"
-              variant="outlined"
-              onClick={() => {
-                setAskOpen(true);
-              }}
-              sx={{ height: 32 }}
-            />
-          </Stack>
+          </Grid>
         </Box>
 
         {/* 数据卡片 (4 cards) */}
@@ -853,149 +752,54 @@ export default function Dashboard() {
           </Grid>
         </Grid>
 
-        {/* 阶段48-6: 智能体协同流程 + 评分说明 */}
-        <Paper
-          sx={{
-            p: 3,
-            mt: 3,
-            background: "linear-gradient(135deg, #F3F7FB 0%, #FFFFFF 100%)",
-          }}
-        >
-          <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 2 }}>
-            <AutoAwesome sx={{ color: "primary.main" }} />
-            <Typography variant="h6" sx={{ fontWeight: 600 }}>
-              智能体协同流程
-            </Typography>
-            <Chip
-              label="演示"
-              size="small"
-              color="primary"
-              variant="outlined"
-            />
-          </Stack>
-          <Grid container spacing={1.5}>
-            {[
-              {
-                icon: Psychology,
-                color: "#1565C0",
-                name: "你提问",
-                desc: "用户描述问题",
-              },
-              {
-                icon: "→",
-                color: "#999",
-                name: "router",
-                desc: "Agent Router",
-              },
-              {
-                icon: SmartToy,
-                color: "#00897B",
-                name: "health_advisor",
-                desc: "健康顾问",
-              },
-              { icon: "→", color: "#999", name: "tools", desc: "工具调用" },
-              {
-                icon: Healing,
-                color: "#E65100",
-                name: "answer",
-                desc: "AI 答复",
-              },
-            ].map((step, i) => {
-              const StepIcon = typeof step.icon === "string" ? null : step.icon;
-              return (
-                <Grid item xs key={i}>
-                  <Paper
-                    variant="outlined"
-                    sx={{
-                      p: 1.5,
-                      textAlign: "center",
-                      borderColor: step.color,
-                      borderWidth: step.icon === "→" ? 0 : 1,
-                      bgcolor: step.icon === "→" ? "transparent" : "white",
-                    }}
-                  >
-                    {StepIcon ? (
-                      <Avatar
-                        sx={{
-                          bgcolor: step.color,
-                          mx: "auto",
-                          width: 36,
-                          height: 36,
-                        }}
-                      >
-                        <StepIcon sx={{ color: "white", fontSize: 20 }} />
-                      </Avatar>
-                    ) : (
-                      <Typography variant="h3" sx={{ color: "#ccc" }}>
-                        →
-                      </Typography>
-                    )}
-                    <Typography
-                      variant="caption"
-                      sx={{
-                        display: "block",
-                        mt: 0.5,
-                        fontWeight: 600,
-                        color: StepIcon ? "text.primary" : "text.disabled",
-                      }}
-                    >
-                      {step.name}
-                    </Typography>
-                    <Typography
-                      variant="caption"
-                      sx={{
-                        display: "block",
-                        color: "text.disabled",
-                        fontSize: "0.65rem",
-                      }}
-                    >
-                      {step.desc}
-                    </Typography>
-                  </Paper>
-                </Grid>
-              );
-            })}
-          </Grid>
-          <Divider sx={{ my: 2 }} />
-          <Stack
-            direction={{ xs: "column", sm: "row" }}
-            spacing={2}
-            alignItems="center"
-          >
-            <Alert
-              severity={(stats?.score || 0) >= 70 ? "success" : "info"}
-              icon={
-                (stats?.score || 0) >= 70 ? <EventAvailable /> : <AutoAwesome />
-              }
-              sx={{ flex: 1 }}
-            >
-              <Typography variant="body2" sx={{ fontWeight: 600 }}>
-                健康评分 {stats?.score || 0} / 100 · 4 Agent 协同建议:
+        {/* 阶段48-7: 简洁健康评分条 */}
+        <Paper sx={{ p: 2.5, mt: 3 }}>
+          <Stack direction="row" alignItems="center" spacing={2}>
+            <Box sx={{ textAlign: "center", minWidth: 90 }}>
+              <Typography variant="caption" color="text.secondary">
+                健康评分
               </Typography>
               <Typography
-                variant="caption"
-                color="text.secondary"
-                component="div"
+                variant="h3"
+                sx={{
+                  fontWeight: 700,
+                  color:
+                    (stats?.score || 0) >= 70 ? "success.main" : "primary.main",
+                  lineHeight: 1,
+                }}
               >
-                • <strong>health_records</strong>: 上传体检报告 +
-                {Math.min(records.total * 5, 30)} 分<br />•{" "}
-                <strong>medication_reminder</strong>: 按时服药 +
-                {med.total > 0 ? Math.round((med.taken / med.total) * 30) : 0}{" "}
-                分<br />• <strong>visit_summary</strong>: 完成就诊摘要 +10 分
+                {stats?.score || 0}
               </Typography>
-            </Alert>
-            <Button
-              variant="contained"
-              startIcon={<Bolt />}
-              onClick={() =>
-                handleAskAgent(
-                  "health_advisor",
-                  "请详细解释我的健康评分, 哪些方面可以提升?",
-                )
-              }
-            >
-              问 AI
-            </Button>
+              <Typography variant="caption" color="text.disabled">
+                / 100
+              </Typography>
+            </Box>
+            <Divider orientation="vertical" flexItem sx={{ mx: 2 }} />
+            <Box sx={{ flex: 1 }}>
+              <LinearProgress
+                variant="determinate"
+                value={stats?.score || 0}
+                sx={{ height: 8, borderRadius: 4 }}
+              />
+              <Stack
+                direction="row"
+                spacing={2}
+                sx={{ mt: 1, flexWrap: "wrap", gap: 0.5 }}
+              >
+                <Typography variant="caption" color="text.secondary">
+                  档案 <strong>{records.total}</strong>
+                </Typography>
+                <Typography variant="caption" color="text.secondary">
+                  · 今日服药{" "}
+                  <strong>
+                    {med.taken}/{med.total}
+                  </strong>
+                </Typography>
+                <Typography variant="caption" color="text.secondary">
+                  · 对话 <strong>{recentConvs.length}</strong>
+                </Typography>
+              </Stack>
+            </Box>
           </Stack>
         </Paper>
       </Container>
