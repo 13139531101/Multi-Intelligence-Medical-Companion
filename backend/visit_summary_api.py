@@ -54,8 +54,19 @@ except ImportError:
         _db_pool_init_attempted = True
         try:
             dsn = os.environ.get(
-                "DATABASE_URL",
-                "postgresql://pha:pha_pass@localhost:5432/personal_health_assistant",
+                "DATABASE_URL"
+            ) or os.environ.get("PG_DSN"
+            ) or (
+                "postgresql://"
+                + (os.environ.get("MEMORY_DB_USER") or os.environ.get("DB_USER") or "pha")
+                + ":"
+                + (os.environ.get("MEMORY_DB_PASSWORD") or os.environ.get("DB_PASSWORD") or "pha_pass")
+                + "@"
+                + (os.environ.get("MEMORY_DB_HOST") or os.environ.get("DB_HOST") or "localhost")
+                + ":"
+                + (os.environ.get("DB_PORT", "5432"))
+                + "/"
+                + (os.environ.get("MEMORY_DB_NAME") or os.environ.get("DB_NAME") or "personal_health_assistant")
             )
             _db_pool = ConnectionPool(dsn, max_size=max(int(os.getenv("DB_POOL_MAX_SIZE", "20")), 1))
             return _db_pool
@@ -75,9 +86,17 @@ except ImportError:
                 yield conn
             return
         conn = psycopg.connect(
-            os.environ.get(
-                "DATABASE_URL",
-                "postgresql://pha:pha_pass@localhost:5432/personal_health_assistant",
+            os.environ.get("DATABASE_URL") or os.environ.get("PG_DSN") or (
+                "postgresql://"
+                + (os.environ.get("MEMORY_DB_USER") or os.environ.get("DB_USER") or "pha")
+                + ":"
+                + (os.environ.get("MEMORY_DB_PASSWORD") or os.environ.get("DB_PASSWORD") or "pha_pass")
+                + "@"
+                + (os.environ.get("MEMORY_DB_HOST") or os.environ.get("DB_HOST") or "localhost")
+                + ":"
+                + (os.environ.get("DB_PORT", "5432"))
+                + "/"
+                + (os.environ.get("MEMORY_DB_NAME") or os.environ.get("DB_NAME") or "personal_health_assistant")
             ),
             row_factory=dict_row,
         )

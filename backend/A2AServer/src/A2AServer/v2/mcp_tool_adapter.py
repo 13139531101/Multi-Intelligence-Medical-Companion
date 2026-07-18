@@ -30,6 +30,55 @@ logger = logging.getLogger(__name__)
 # 缓存：避免每次重新加载
 _TOOL_CACHE: dict[str, list] = {}
 
+# 阶段48-13: thread-local context 用来跨 async 边界传递 user_id
+import contextvars as _cv
+_current_user_id: _cv.ContextVar[str] = _cv.ContextVar("pha_current_user_id", default="")
+_current_conversation_id: _cv.ContextVar[str] = _cv.ContextVar("pha_current_conversation_id", default="")
+
+
+def set_user_context(user_id: str = "", conversation_id: str = "") -> None:
+    """阶段48-13: 在 tool 调用前 set user_id/conversation_id context.
+
+    让 BaseTool 包装器自动注入到 tool args.
+    v2_agent.stream 应当在进入循环前调用一次.
+    """
+    _current_user_id.set(user_id or "")
+    _current_conversation_id.set(conversation_id or "")
+
+
+def _inject_user_id_if_needed(kwargs: dict, tool_name: str) -> dict:
+    """阶段48-13: 缺 user_id 时从 context 注入. 避免 LLM 忘记传.
+
+    只在 tool 的 args_schema 里出现 'user_id' 字段时注入.
+    """
+    # 工具不要求 user_id 直接放过
+    sig = _TOOL_SIG_CACHE.get(tool_name)
+    if sig is None:
+        return kwargs
+    if "user_id" not in sig.parameters:
+        return kwargs
+
+    # 已有 user_id 且非空 → 跳过
+    cur = kwargs.get("user_id")
+    if cur and str(cur).strip():
+        return kwargs
+
+    ctx_uid = _current_user_id.get()
+    if ctx_uid:
+        new_kwargs = dict(kwargs)
+        new_kwargs["user_id"] = ctx_uid
+        return new_kwargs
+    return kwargs
+
+
+# 阶段48-13: cache tool signatures so _inject_user_id_if_needed doesn't refllect
+_TOOL_SIG_CACHE: dict[str, inspect.Signature] = {}
+
+
+def register_tool_sig(name: str, sig: inspect.Signature) -> None:
+    """_wrap_function_as_base_tool 调用注册 sig."""
+    _TOOL_SIG_CACHE[name] = sig
+
 
 def load_mcp_tools(agent_name: str, *, use_real: bool = True) -> list:
     """
@@ -143,6 +192,12 @@ def _wrap_function_as_base_tool(
     tool_is_async = is_async
     tool_sig = sig
 
+    # 阶段48-13: 注册 sig 让 _inject_user_id_if_needed 知道要不要注入 user_id
+    try:
+        register_tool_sig(name, sig)
+    except Exception:
+        pass
+
     try:
         from pydantic import Field, create_model
 
@@ -167,6 +222,8 @@ def _wrap_function_as_base_tool(
                 try:
                     # 过滤掉 LangChain 注入的多余字段
                     valid_kwargs = {k: v for k, v in kwargs.items() if k in tool_sig.parameters}
+                    # 阶段48-13: 缺 user_id 时从 context 自动注入
+                    valid_kwargs = _inject_user_id_if_needed(valid_kwargs, tool_name)
                     if not valid_kwargs and tool_sig.parameters:
                         return "Error: missing required arguments"
 
@@ -181,6 +238,8 @@ def _wrap_function_as_base_tool(
             async def _arun(self, **kwargs) -> str:
                 try:
                     valid_kwargs = {k: v for k, v in kwargs.items() if k in tool_sig.parameters}
+                    # 阶段48-13: 缺 user_id 时从 context 自动注入
+                    valid_kwargs = _inject_user_id_if_needed(valid_kwargs, tool_name)
                     if tool_is_async:
                         result = await tool_func(**valid_kwargs)
                     else:

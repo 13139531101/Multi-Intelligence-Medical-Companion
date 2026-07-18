@@ -11,13 +11,22 @@ from urllib.parse import urlparse, urlunparse
 # 创建 FastMCP 应用
 mcp = FastMCP("ReminderTool")
 
-# PostgreSQL 连接字符串
-PG_DSN = (
-    os.environ.get("PG_DSN")
-    or os.environ.get("DATABASE_URL")
-    # 默认回退到容器网络中的 postgres 服务与项目数据库
-    or "postgresql://pha:pha_pass@postgres:5432/personal_health_assistant"
-)
+# 阶段48-13: PostgreSQL 连接字符串, 优先 env var 否则从 MEMORY_DB_* 拼
+def _build_medication_dsn() -> str:
+    env_url = os.environ.get("PG_DSN") or os.environ.get("DATABASE_URL")
+    if env_url:
+        return env_url
+    host = os.environ.get("MEMORY_DB_HOST") or os.environ.get("DB_HOST") or "postgres"
+    user = os.environ.get("MEMORY_DB_USER") or os.environ.get("DB_USER") or "pha"
+    pwd = os.environ.get("MEMORY_DB_PASSWORD") or os.environ.get("DB_PASSWORD")
+    name = os.environ.get("MEMORY_DB_NAME") or os.environ.get("DB_NAME") or "personal_health_assistant"
+    port = os.environ.get("DB_PORT", "5432")
+    if pwd:
+        return f"postgresql://{user}:{pwd}@{host}:{port}/{name}"
+    return f"postgresql://{user}:{user}_pass@{host}:{port}/{name}"
+
+
+PG_DSN = _build_medication_dsn()
 
 
 def _normalize_pg_dsn(dsn: str) -> str:

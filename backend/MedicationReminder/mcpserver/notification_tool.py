@@ -11,12 +11,27 @@ from urllib.parse import urlparse, urlunparse
 mcp = FastMCP("NotificationTool")
 
 # PostgreSQL 连接字符串
-PG_DSN = (
-    os.environ.get("PG_DSN")
-    or os.environ.get("DATABASE_URL")
-    # 默认回退到容器网络中的 postgres 服务与项目数据库
-    or "postgresql://pha:pha_pass@postgres:5432/personal_health_assistant"
-)
+def _build_pg_dsn() -> str:
+    """阶段48-13: 优先用 env var, 再 fallback 默认. 容器 env 通常 PHA host 设了
+    MEMORY_DB_HOST / MEMORY_DB_USER / MEMORY_DB_PASSWORD / MEMORY_DB_NAME
+    也接受 PGPASSWORD / POSTGRES_PASSWORD. 这里只是 fallback.
+    """
+    env_url = os.environ.get("PG_DSN") or os.environ.get("DATABASE_URL")
+    if env_url:
+        return env_url
+    # 阶段48-13: 从 host 容器注入的 *_DB_* env 拼一个 URL
+    host = os.environ.get("MEMORY_DB_HOST") or os.environ.get("DB_HOST") or "postgres"
+    user = os.environ.get("MEMORY_DB_USER") or os.environ.get("DB_USER") or "pha"
+    pwd = os.environ.get("MEMORY_DB_PASSWORD") or os.environ.get("DB_PASSWORD")
+    name = os.environ.get("MEMORY_DB_NAME") or os.environ.get("DB_NAME") or "personal_health_assistant"
+    port = os.environ.get("DB_PORT", "5432")
+    if pwd:
+        return f"postgresql://{user}:{pwd}@{host}:{port}/{name}"
+    # 阶段48-13: 都拿不到就用历史默认 (会失败, 但好过硬编码密码)
+    return f"postgresql://{user}:{user}_pass@{host}:{port}/{name}"
+
+
+PG_DSN = _build_pg_dsn()
 
 
 def _normalize_pg_dsn(dsn: str) -> str:

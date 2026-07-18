@@ -82,7 +82,21 @@ def analyze_health_trends_async(user_id: str, feature: str, period: str = "90d")
         import psycopg
         from psycopg.rows import dict_row
         # Re-use logic to get DB connection
-        db_url = os.environ.get("DATABASE_URL") or "postgresql://pha:pha_pass@localhost:5432/personal_health_assistant"
+        db_url = (
+            os.environ.get("DATABASE_URL") or os.environ.get("PG_DSN")
+            or (
+                "postgresql://"
+                + (os.environ.get("MEMORY_DB_USER") or os.environ.get("DB_USER") or "pha")
+                + ":"
+                + (os.environ.get("MEMORY_DB_PASSWORD") or os.environ.get("DB_PASSWORD") or "pha_pass")
+                + "@"
+                + (os.environ.get("MEMORY_DB_HOST") or os.environ.get("DB_HOST") or "localhost")
+                + ":"
+                + (os.environ.get("DB_PORT", "5432"))
+                + "/"
+                + (os.environ.get("MEMORY_DB_NAME") or os.environ.get("DB_NAME") or "personal_health_assistant")
+            )
+        )
         conn = psycopg.connect(db_url, row_factory=dict_row)
         with conn.cursor() as cur:
             cur.execute("SELECT openid FROM users WHERE user_id = %s", (user_id,))

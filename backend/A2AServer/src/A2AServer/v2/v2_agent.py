@@ -262,6 +262,13 @@ class V2Agent:
                 pass
 
         try:
+            # 阶段48-13: set user_id context so MCP tools 自动注入
+            try:
+                from .mcp_tool_adapter import set_user_context
+                set_user_context(user_id=user_id or "", conversation_id=session_id or "")
+            except Exception:
+                pass
+
             # 阶段48-12: stream_mode 改为 "messages" — 增量 yield, 不再传累积 state
             # + recursion_limit 防无限循环
             # + 去重 dedup_set 防止反复 yield 同 message id 的 tool_call

@@ -14,7 +14,18 @@ mcp = FastMCP("DrugSafetyTool")
 PG_DSN = (
     os.environ.get("PG_DSN")
     or os.environ.get("DATABASE_URL")
-    or "postgresql://pha:pha_pass@postgres:5432/personal_health_assistant"
+    or (
+        "postgresql://"
+        + (os.environ.get("MEMORY_DB_USER") or os.environ.get("DB_USER") or "pha")
+        + ":"
+        + (os.environ.get("MEMORY_DB_PASSWORD") or os.environ.get("DB_PASSWORD") or "pha_pass")
+        + "@"
+        + (os.environ.get("MEMORY_DB_HOST") or os.environ.get("DB_HOST") or "postgres")
+        + ":"
+        + (os.environ.get("DB_PORT", "5432"))
+        + "/"
+        + (os.environ.get("MEMORY_DB_NAME") or os.environ.get("DB_NAME") or "personal_health_assistant")
+    )
 )
 
 
