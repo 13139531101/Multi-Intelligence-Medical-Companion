@@ -181,19 +181,20 @@ export default function Dashboard() {
 
     setRecords({ total: recList.length });
     setMed({ taken: medTaken, total: medTotal });
+
+    // 阶段48-8: 用真实算法替换 mock — 先算 trendResult, 因为 setStats 要用
+    const trendResult = buildHealthTrend({
+      records: recList,
+      reminders: medList,
+      consultations: Array.isArray(convs) ? convs : [],
+    });
+
     setStats({
       score: trendResult.today.score,
       records: recList.length,
       exams: recList.filter((r) => r.record_type === "examination").length,
       allergies: recList.filter((r) => r.record_type === "allergy").length,
       reports: recList.filter((r) => r.record_type === "report").length,
-    });
-
-    // 阶段48-8: 用真实算法替换 mock
-    const trendResult = buildHealthTrend({
-      records: recList,
-      reminders: medList,
-      consultations: Array.isArray(convs) ? convs : [],
     });
 
     // 把 days 转成 weeks 格式 (前端用)
