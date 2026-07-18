@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   AppBar,
   Toolbar,
@@ -29,16 +29,44 @@ import { useNavigate, useLocation } from "react-router-dom";
 import { useRecoilValue, useSetRecoilState } from "recoil";
 import { userState } from "../store/recoilState";
 import { useAuth } from "../contexts/AuthContext";
+import { getMedicationReminders } from "../api/healthApi";
 
 const HealthHeader = () => {
   const [anchorEl, setAnchorEl] = useState(null);
   const [notificationAnchor, setNotificationAnchor] = useState(null);
+  const [realNotifications, setRealNotifications] = useState([]);
   const navigate = useNavigate();
   const location = useLocation();
   const recoilUser = useRecoilValue(userState);
   const setRecoilUser = useSetRecoilState(userState);
   const { user: authUser, logout: authLogout, isAuthenticated } = useAuth();
   const user = authUser || recoilUser;
+
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    // 阶段48-6: 从 medication_reminders 拉真实数据
+    (async () => {
+      try {
+        const list = await getMedicationReminders({ today: true });
+        const arr = Array.isArray(list) ? list : list?.reminders || [];
+        const pending = arr
+          .filter((m) => !m.taken && m.status !== "taken")
+          .slice(0, 5);
+        setRealNotifications(
+          pending.map((m, i) => ({
+            id: `pending_${i}`,
+            title: `服药提醒 · ${m.time || ""}`,
+            message: `${m.drug_name || m.name || "药品"} ${m.dosage || m.dose || ""}`,
+            time: "待服用",
+            unread: true,
+            action: () => navigate("/v2/medication"),
+          })),
+        );
+      } catch (e) {
+        /* ignore */
+      }
+    })();
+  }, [isAuthenticated]);
 
   const handleProfileMenuOpen = (event) => {
     setAnchorEl(event.currentTarget);
@@ -92,31 +120,8 @@ const HealthHeader = () => {
     },
   ];
 
-  const mockNotifications = [
-    {
-      id: 1,
-      title: "用药提醒",
-      message: "该服用降压药了",
-      time: "5分钟前",
-      unread: true,
-    },
-    {
-      id: 2,
-      title: "体检提醒",
-      message: "距离下次体检还有3天",
-      time: "1小时前",
-      unread: true,
-    },
-    {
-      id: 3,
-      title: "健康建议",
-      message: "建议增加运动量",
-      time: "2小时前",
-      unread: false,
-    },
-  ];
-
-  const unreadCount = mockNotifications.filter((n) => n.unread).length;
+  const mockNotifications = []; // 阶段48-6: 改用真实数据
+  const unreadCount = realNotifications.filter((n) => n.unread).length;
 
   return (
     <AppBar position="static" sx={{ bgcolor: "primary.main" }}>
@@ -280,56 +285,62 @@ const HealthHeader = () => {
         <Box sx={{ p: 2, borderBottom: 1, borderColor: "divider" }}>
           <Typography variant="h6">通知</Typography>
         </Box>
-        {mockNotifications.map((notification) => (
-          <MenuItem
-            key={notification.id}
-            onClick={handleNotificationClose}
-            sx={{
-              whiteSpace: "normal",
-              alignItems: "flex-start",
-              py: 1.5,
-              bgcolor: notification.unread ? "action.hover" : "transparent",
-            }}
-          >
-            <Box sx={{ width: "100%" }}>
-              <Box
-                sx={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                  mb: 0.5,
-                }}
-              >
-                <Typography
-                  variant="subtitle2"
-                  sx={{ fontWeight: notification.unread ? "bold" : "normal" }}
+        {(realNotifications.length ? realNotifications : mockNotifications).map(
+          (notification) => (
+            <MenuItem
+              key={notification.id}
+              onClick={() => {
+                if (notification.action) notification.action();
+                handleNotificationClose();
+              }}
+              sx={{
+                whiteSpace: "normal",
+                alignItems: "flex-start",
+                py: 1.5,
+                bgcolor: notification.unread ? "action.hover" : "transparent",
+                cursor: notification.action ? "pointer" : "default",
+              }}
+            >
+              <Box sx={{ width: "100%" }}>
+                <Box
+                  sx={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    mb: 0.5,
+                  }}
                 >
-                  {notification.title}
+                  <Typography
+                    variant="subtitle2"
+                    sx={{ fontWeight: notification.unread ? "bold" : "normal" }}
+                  >
+                    {notification.title}
+                  </Typography>
+                  {notification.unread && (
+                    <Box
+                      sx={{
+                        width: 8,
+                        height: 8,
+                        borderRadius: "50%",
+                        bgcolor: "primary.main",
+                      }}
+                    />
+                  )}
+                </Box>
+                <Typography
+                  variant="body2"
+                  color="text.secondary"
+                  sx={{ mb: 0.5 }}
+                >
+                  {notification.message}
                 </Typography>
-                {notification.unread && (
-                  <Box
-                    sx={{
-                      width: 8,
-                      height: 8,
-                      borderRadius: "50%",
-                      bgcolor: "primary.main",
-                    }}
-                  />
-                )}
+                <Typography variant="caption" color="text.secondary">
+                  {notification.time}
+                </Typography>
               </Box>
-              <Typography
-                variant="body2"
-                color="text.secondary"
-                sx={{ mb: 0.5 }}
-              >
-                {notification.message}
-              </Typography>
-              <Typography variant="caption" color="text.secondary">
-                {notification.time}
-              </Typography>
-            </Box>
-          </MenuItem>
-        ))}
+            </MenuItem>
+          ),
+        )}
         <Divider />
         <MenuItem
           onClick={handleNotificationClose}
