@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import os
 import logging
-from typing import AsyncIterable, Any
+from typing import AsyncIterable, Any, List
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +25,16 @@ logger = logging.getLogger(__name__)
 # 真正调用 create_agent 的是 v2_agent.py；这里只测 langgraph.checkpoint 是否装好
 # （v2_agent.py 内部自己 import langchain.agents.create_agent）
 _LANGCHAIN_V2_OK = False
+# 解包装各种 middleware, 失败用 None 占位
+SummarizationMiddleware = None
+PIIMiddleware = None
+HumanInTheLoopMiddleware = None
+ToolCallLimitMiddleware = None
+ModelFallbackMiddleware = None
+ModelCallLimitMiddleware = None
+ToolRetryMiddleware = None
+ModelRetryMiddleware = None
+ContextEditingMiddleware = None
 try:
     from langgraph.checkpoint.memory import InMemorySaver
     try:
@@ -36,10 +46,49 @@ try:
         from langchain.agents.middleware import (
             SummarizationMiddleware,
             PIIMiddleware,           # 1.3.x 是 PIIMiddleware (不是 PIIRedactionMiddleware)
+            HumanInTheLoopMiddleware,
+            ToolCallLimitMiddleware,
+            ModelFallbackMiddleware,
+            ModelCallLimitMiddleware,
+            ToolRetryMiddleware,
+            ModelRetryMiddleware,
+            ContextEditingMiddleware,
         )
-    except ImportError:
-        SummarizationMiddleware = None
-        PIIMiddleware = None
+    except ImportError as e:
+        # 解封失败时每个单独 import
+        logger.debug("[v2_runtime] 个别 middleware import 失败: %s", e)
+        try:
+            from langchain.agents.middleware import SummarizationMiddleware, PIIMiddleware
+        except ImportError:
+            pass
+        try:
+            from langchain.agents.middleware import HumanInTheLoopMiddleware
+        except ImportError:
+            pass
+        try:
+            from langchain.agents.middleware import ToolCallLimitMiddleware
+        except ImportError:
+            pass
+        try:
+            from langchain.agents.middleware import ModelFallbackMiddleware
+        except ImportError:
+            pass
+        try:
+            from langchain.agents.middleware import ModelCallLimitMiddleware
+        except ImportError:
+            pass
+        try:
+            from langchain.agents.middleware import ToolRetryMiddleware
+        except ImportError:
+            pass
+        try:
+            from langchain.agents.middleware import ModelRetryMiddleware
+        except ImportError:
+            pass
+        try:
+            from langchain.agents.middleware import ContextEditingMiddleware
+        except ImportError:
+            pass
     _LANGCHAIN_V2_OK = True
 except ImportError as e:
     logger.warning(
@@ -101,49 +150,155 @@ class V2AgentRuntime:
         logger.info("[v2_runtime] Checkpointer = InMemorySaver (开发模式)")
         return self._checkpointer
 
-    def get_middlewares(self, model: str, chat_model=None):
-        """获取标准 Middleware 列表（医疗场景）
+    def get_middlewares(self, model: str, chat_model=None, agent_name: str = "default"):
+        """获取标准 Middleware 列表（医疗场景）.
+
+        阶段48-16: 加 7 种新 middleware, 总共 ~10 个.
+          - PIIMiddleware x 2 (email, url redact)
+          - SummarizationMiddleware (长上下文压缩)
+          - HumanInTheLoopMiddleware (危险操作确认)
+          - ToolCallLimitMiddleware (防 LLM 死循环)
+          - ModelCallLimitMiddleware (LLM 调轮次)
+          - ToolRetryMiddleware (tool 调用重试)
+          - ModelRetryMiddleware (LLM 重试)
+          - ModelFallbackMiddleware (DeepSeek → OpenAI fallback)
+          - ContextEditingMiddleware (长对话裁剪)
 
         Args:
-            model: model name 字符串 (用来判断 provider)
-            chat_model: 可选, chat_model 实例 (用于 SummarizationMiddleware)
+            model: model name 字符串
+            chat_model: 可选, chat_model 实例
+            agent_name: 决定哪些 tool 是 dangerous
         """
         if not _LANGCHAIN_V2_OK:
             return []
 
-        middlewares = []
+        middlewares: List = []
 
+        # ============================================================
+        # 1. PIIMiddleware - 邮箱 / URL 脱敏
+        # ============================================================
         if PIIMiddleware is not None:
-            try:
-                # 阶段48-14: PII redaction — 医疗场景要脱敏用户隐私
-                # 一个 pii_type 一个 instance, 加多个支持多种类型
-                for pii_type in ("email", "url"):
-                    try:
-                        m = PIIMiddleware(pii_type=pii_type, strategy="redact")
-                        middlewares.append(m)
-                    except Exception as e:
-                        logger.debug("[v2_runtime] PIIMiddleware[%s] 失败: %s", pii_type, e)
-            except Exception as e:
-                logger.debug("[v2_runtime] PIIMiddleware 初始化失败: %s", e)
+            for pii_type in ("email", "url"):
+                try:
+                    m = PIIMiddleware(pii_type=pii_type, strategy="redact")
+                    middlewares.append(m)
+                except Exception as e:
+                    logger.debug("[v2_runtime] PIIMiddleware[%s] 失败: %s", pii_type, e)
 
-        # 长上下文自动压缩（节省 token）
-        # SummarizationMiddleware 调 init_chat_model(model_str), 需要已装的 provider
-        # 优先用 chat_model 实例 (避免 init_chat_model 找不到 langchain_deepseek 等)
+        # ============================================================
+        # 2. SummarizationMiddleware - 长上下文自动压缩 (节省 token)
+        # ============================================================
         if SummarizationMiddleware is not None:
             try:
                 if chat_model is not None:
                     m = SummarizationMiddleware(model=chat_model)
                 else:
-                    # 直接传字符串, 失败就被 catched 跳过
                     m = SummarizationMiddleware(model=model)
                 middlewares.append(m)
             except Exception as e:
                 logger.debug("[v2_runtime] SummarizationMiddleware 不可用: %s", e)
 
+        # ============================================================
+        # 3. HumanInTheLoopMiddleware - 危险操作确认
+        # ============================================================
+        if HumanInTheLoopMiddleware is not None:
+            try:
+                from .dangerous_tools import get_interrupt_config
+                interrupt_cfg = get_interrupt_config(agent_name)
+                if interrupt_cfg:
+                    m = HumanInTheLoopMiddleware(
+                        interrupt_on=interrupt_cfg,
+                        description_prefix="[PHA 安全] 该操作需要您确认后才会执行",
+                    )
+                    middlewares.append(m)
+            except Exception as e:
+                logger.debug("[v2_runtime] HumanInTheLoop 不可用: %s", e)
+
+        # ============================================================
+        # 4. ToolCallLimitMiddleware - 防止 LLM tool 调用死循环
+        # ============================================================
+        if ToolCallLimitMiddleware is not None:
+            try:
+                # 单次 run LLM 调 tool 最多 12 次 (足够, 防止死循环)
+                m = ToolCallLimitMiddleware(thread_limit=12, exit_behavior="continue")
+                middlewares.append(m)
+            except Exception as e:
+                logger.debug("[v2_runtime] ToolCallLimit 不可用: %s", e)
+
+        # ============================================================
+        # 5. ModelCallLimitMiddleware - LLM 总轮次限制 (整个 thread)
+        # ============================================================
+        if ModelCallLimitMiddleware is not None:
+            try:
+                m = ModelCallLimitMiddleware(thread_limit=30, exit_behavior="end")
+                middlewares.append(m)
+            except Exception as e:
+                logger.debug("[v2_runtime] ModelCallLimit 不可用: %s", e)
+
+        # ============================================================
+        # 6. ToolRetryMiddleware - tool 失败自动重试 (DB 抖动)
+        # ============================================================
+        if ToolRetryMiddleware is not None:
+            try:
+                m = ToolRetryMiddleware(
+                    max_retries=2,
+                    backoff_factor=0.5,
+                    initial_delay=0.5,
+                    max_delay=8.0,
+                )
+                middlewares.append(m)
+            except Exception as e:
+                logger.debug("[v2_runtime] ToolRetry 不可用: %s", e)
+
+        # ============================================================
+        # 7. ModelRetryMiddleware - LLM 临时失败自动重试 (rate limit)
+        # ============================================================
+        if ModelRetryMiddleware is not None:
+            try:
+                m = ModelRetryMiddleware(
+                    max_retries=2,
+                    backoff_factor=0.5,
+                    initial_delay=1.0,
+                    max_delay=10.0,
+                )
+                middlewares.append(m)
+            except Exception as e:
+                logger.debug("[v2_runtime] ModelRetry 不可用: %s", e)
+
+        # ============================================================
+        # 8. ModelFallbackMiddleware - DeepSeek 挂了 → OpenAI fallback
+        # ============================================================
+        if ModelFallbackMiddleware is not None and chat_model is not None:
+            try:
+                from langchain_openai import ChatOpenAI
+                fallback = ChatOpenAI(
+                    model="gpt-4o-mini",
+                    api_key=os.getenv("OPENAI_API_KEY") or "sk-fake",
+                    base_url=os.getenv("OPENAI_API_BASE"),
+                    temperature=0,
+                )
+                m = ModelFallbackMiddleware(chat_model, fallback)
+                middlewares.append(m)
+            except Exception as e:
+                logger.debug("[v2_runtime] ModelFallback 不可用 (OPENAI_API_KEY 未设?): %s", e)
+
+        # ============================================================
+        # 9. ContextEditingMiddleware - 长对话裁剪早期消息
+        # ============================================================
+        if ContextEditingMiddleware is not None:
+            try:
+                # 默认用 ClearToolUsesEdit (跟 Anthropic default 一致)
+                m = ContextEditingMiddleware(token_count_method="approximate")
+                middlewares.append(m)
+            except Exception as e:
+                logger.debug("[v2_runtime] ContextEditing 不可用: %s", e)
+
         if middlewares:
-            logger.info("[v2_runtime] 加载 %d 个 middlewares: %s",
-                        len(middlewares),
-                        [type(m).__name__ for m in middlewares])
+            logger.info(
+                "[v2_runtime] %s 加载 %d 个 middlewares: %s",
+                agent_name, len(middlewares),
+                [type(m).__name__ for m in middlewares],
+            )
         return middlewares
 
 

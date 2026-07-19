@@ -161,7 +161,7 @@ class V2Agent:
         chat_model = self._build_chat_model()
 
         # 阶段48-14: middlewares 需要 chat_model 实例 (SummarizationMiddleware 用 model 做 summary)
-        middlewares = runtime.get_middlewares(self.model, chat_model=chat_model)
+        middlewares = runtime.get_middlewares(self.model, chat_model=chat_model, agent_name=self.name)
 
         # DeepSeek / 自定义 endpoint：用 ChatOpenAI + base_url
         # DeepSeek 兼容 OpenAI 协议，不需要 langchain-deepseek 单独包
