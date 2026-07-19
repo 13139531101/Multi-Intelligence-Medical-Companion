@@ -24,6 +24,11 @@ import {
   ListItemIcon,
   ListItemText,
   Badge,
+  Dialog, // 阶段48-16: HITL confirm dialog
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  DialogContentText,
 } from "@mui/material";
 import {
   Send,
@@ -48,6 +53,8 @@ import {
   Add,
   Close,
   AccessTime,
+  Warning, // 阶段48-16: HITL dialog
+  CheckCircle as CheckIcon,
 } from "@mui/icons-material";
 import Header from "../components/HealthHeader";
 import AgentQuickFab from "../components/AgentQuickFab";
@@ -122,6 +129,128 @@ const renderTable = (lines, startI, key) => {
         );
       })}
     </Box>
+
+    {/* 阶段48-16: HITL Confirmation Dialog */}
+    <Dialog
+      open={hitlOpen}
+      onClose={() => !hitlResolving && setHitlOpen(false)}
+      maxWidth="sm"
+      fullWidth
+    >
+      <DialogTitle sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+        <Warning color="warning" />
+        <span>需要您确认操作</span>
+      </DialogTitle>
+      <DialogContent>
+        <DialogContentText sx={{ mb: 2 }}>
+          智能体准备执行以下敏感操作。请查看详情后选择：
+        </DialogContentText>
+        {hitlData?.interrupt_data &&
+          Array.isArray(hitlData.interrupt_data) &&
+          hitlData.interrupt_data.length > 0 && (
+            <Box sx={{ mb: 2 }}>
+              {hitlData.interrupt_data.map((item, idx) => {
+                const value =
+                  typeof item === "object" && item !== null
+                    ? item.value || item
+                    : item;
+                const list = Array.isArray(value) ? value : [value];
+                return (
+                  <Box
+                    key={idx}
+                    sx={{
+                      p: 1.5,
+                      mb: 1,
+                      bgcolor: "grey.100",
+                      borderRadius: 1,
+                      border: "1px solid #ddd",
+                    }}
+                  >
+                    {list.map((req, i) => {
+                      const aReq =
+                        typeof req === "object" && req !== null
+                          ? req
+                          : { raw: String(req) };
+                      return (
+                        <Box key={i} sx={{ fontSize: "0.875rem" }}>
+                          <Typography variant="subtitle2" color="warning.dark">
+                            {aReq.name || aReq.action || "敏感操作"}
+                          </Typography>
+                          {aReq.description && (
+                            <Typography
+                              variant="body2"
+                              color="text.secondary"
+                              sx={{ my: 0.5 }}
+                            >
+                              {aReq.description}
+                            </Typography>
+                          )}
+                          {aReq.args && (
+                            <Box
+                              component="pre"
+                              sx={{
+                                fontSize: "0.75rem",
+                                bgcolor: "white",
+                                p: 1,
+                                borderRadius: 1,
+                                overflowX: "auto",
+                                maxHeight: 120,
+                              }}
+                            >
+                              {JSON.stringify(aReq.args, null, 2)}
+                            </Box>
+                          )}
+                        </Box>
+                      );
+                    })}
+                  </Box>
+                );
+              })}
+            </Box>
+          )}
+        {(!hitlData?.interrupt_data ||
+          (Array.isArray(hitlData?.interrupt_data) &&
+            hitlData.interrupt_data.length === 0)) && (
+          <DialogContentText>
+            智能体请求您确认一个敏感操作。请点击下方按钮决定。
+          </DialogContentText>
+        )}
+        {hitlResolving && (
+          <Box sx={{ display: "flex", alignItems: "center", mt: 2, gap: 1 }}>
+            <CircularProgress size={16} />
+            <Typography variant="caption">正在处理您的决定...</Typography>
+          </Box>
+        )}
+      </DialogContent>
+      <DialogActions sx={{ p: 2, gap: 1 }}>
+        <Button
+          onClick={() => hitlResume("reject")}
+          color="error"
+          variant="outlined"
+          disabled={hitlResolving}
+        >
+          ❌ 拒绝
+        </Button>
+        <Button
+          onClick={() => setHitlOpen(false)}
+          color="inherit"
+          variant="text"
+          disabled={hitlResolving}
+        >
+          稍后决定
+        </Button>
+        <Button
+          onClick={() => hitlResume("approve")}
+          color="primary"
+          variant="contained"
+          disabled={hitlResolving}
+          startIcon={<CheckIcon />}
+          autoFocus
+        >
+          ✅ 确认执行
+        </Button>
+      </DialogActions>
+    </Dialog>
   );
 };
 
@@ -354,6 +483,9 @@ export default function NewChat() {
   const [currentConvId, setCurrentConvId] = useState(null);
   const [convTitle, setConvTitle] = useState("新对话");
   const [streamingAgent, setStreamingAgent] = useState(""); // 当前智能体
+  const [hitlOpen, setHitlOpen] = useState(false); // 阶段48-16: HITL confirm dialog
+  const [hitlData, setHitlData] = useState(null); // {thread_id, interrupt_data}
+  const [hitlResolving, setHitlResolving] = useState(false);
   const scrollRef = useRef(null);
   const inputRef = useRef(null);
 
@@ -664,6 +796,15 @@ export default function NewChat() {
                   newConvId = payload.conversation_id;
                 finish();
                 return;
+              } else if (event === "interrupt") {
+                // 阶段48-16: HITL 中断 → 弹 confirm dialog
+                setStreaming(false);
+                setHitlData({
+                  thread_id: payload.thread_id,
+                  interrupt_data: payload.interrupt_data,
+                });
+                setHitlOpen(true);
+                return; // 不继续读 stream, 等 user 决定
               } else if (event === "error") {
                 throw new Error(payload.message || "stream error");
               }
@@ -699,6 +840,133 @@ export default function NewChat() {
           : m,
       ),
     );
+  };
+
+  // 阶段48-16: HITL 中断后 user click approve/reject
+  // 1) close dialog
+  // 2) POST /v2/chat/resume with thread_id + decisions
+  // 3) SSE 续接 stream, append 到当前 AI message
+  const hitlResume = async (decision) => {
+    if (!hitlData || !hitlData.thread_id) return;
+    setHitlOpen(false);
+    setHitlResolving(true);
+    setStreaming(true);
+
+    try {
+      const token =
+        (typeof window !== "undefined" &&
+          window.localStorage &&
+          window.localStorage.getItem("access_token")) ||
+        "";
+      const resp = await fetch(apiBase + "/v2/chat/resume", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: token ? `Bearer ${token}` : "",
+        },
+        body: JSON.stringify({
+          thread_id: hitlData.thread_id,
+          decisions: [
+            {
+              type: decision, // 'approve' / 'reject' / 'edit' / 'respond'
+              message: decision === "reject" ? "用户拒绝, 请告知用户" : "",
+            },
+          ],
+          conversation_id: currentConvId || `resume_${Date.now()}`,
+          target_agent: streamingAgent || "health_advisor",
+        }),
+      });
+      if (!resp.ok || !resp.body) {
+        throw new Error("resume stream unavailable");
+      }
+      // 用户看到一段"用户已确认/拒绝" prefix
+      const decisionLabel =
+        {
+          approve: "✅ 已确认执行",
+          reject: "❌ 已取消操作",
+          edit: "✏️ 已修改参数",
+          respond: "💬 已修改响应",
+        }[decision] || "已确认";
+
+      setMessages((p) => [
+        ...p,
+        {
+          id: `sys_${Date.now()}`,
+          role: "system",
+          content: `${decisionLabel} (thread ${hitlData.thread_id.slice(-8)})`,
+          time: now(),
+          thinking: null,
+        },
+      ]);
+
+      // SSE 续接
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const events = buffer.split("\n\n");
+        buffer = events.pop() || "";
+        for (const ev of events) {
+          const lines = ev.split("\n");
+          let event = "message";
+          let data = "";
+          for (const ln of lines) {
+            if (ln.startsWith("event: ")) event = ln.slice(7).trim();
+            else if (ln.startsWith("data: ")) data += ln.slice(6);
+          }
+          if (!data) continue;
+          try {
+            const payload = JSON.parse(data);
+            if (event === "chunk" && payload.text) {
+              // 追加到最近 AI 消息
+              setMessages((p) => {
+                const lastIdx = [...p]
+                  .reverse()
+                  .findIndex((x) => x.role === "ai");
+                if (lastIdx === -1) return p;
+                const realIdx = p.length - 1 - lastIdx;
+                const arr = [...p];
+                arr[realIdx] = {
+                  ...arr[realIdx],
+                  content: (arr[realIdx].content || "") + payload.text,
+                };
+                return arr;
+              });
+            } else if (event === "interrupt") {
+              // 又中断了, 弹新一轮 dialog
+              setHitlData({
+                thread_id: payload.thread_id,
+                interrupt_data: payload.interrupt_data,
+              });
+              setHitlOpen(true);
+              setStreaming(false);
+              return;
+            } else if (event === "done") {
+              setStreaming(false);
+              setHitlData(null);
+              return;
+            }
+          } catch (_) {}
+        }
+      }
+    } catch (e) {
+      console.error("HITL resume failed:", e);
+      setMessages((p) => [
+        ...p,
+        {
+          id: `err_${Date.now()}`,
+          role: "system",
+          content: `❌ 操作确认失败: ${e?.message || e}`,
+          time: now(),
+        },
+      ]);
+    } finally {
+      setHitlResolving(false);
+      setStreaming(false);
+    }
   };
 
   return (

@@ -35,6 +35,8 @@ ModelCallLimitMiddleware = None
 ToolRetryMiddleware = None
 ModelRetryMiddleware = None
 ContextEditingMiddleware = None
+TodoListMiddleware = None
+LLMToolSelectorMiddleware = None
 try:
     from langgraph.checkpoint.memory import InMemorySaver
     try:
@@ -53,6 +55,8 @@ try:
             ToolRetryMiddleware,
             ModelRetryMiddleware,
             ContextEditingMiddleware,
+            TodoListMiddleware,
+            LLMToolSelectorMiddleware,
         )
     except ImportError as e:
         # 解封失败时每个单独 import
@@ -87,6 +91,14 @@ try:
             pass
         try:
             from langchain.agents.middleware import ContextEditingMiddleware
+        except ImportError:
+            pass
+        try:
+            from langchain.agents.middleware import TodoListMiddleware
+        except ImportError:
+            pass
+        try:
+            from langchain.agents.middleware import LLMToolSelectorMiddleware
         except ImportError:
             pass
     _LANGCHAIN_V2_OK = True
@@ -292,6 +304,44 @@ class V2AgentRuntime:
                 middlewares.append(m)
             except Exception as e:
                 logger.debug("[v2_runtime] ContextEditing 不可用: %s", e)
+
+        # ============================================================
+        # 10. TodoListMiddleware - 多步任务规划 (write_todos tool)
+        # ============================================================
+        if TodoListMiddleware is not None:
+            try:
+                m = TodoListMiddleware()  # 默认 WRITE_TODOS_SYSTEM_PROMPT
+                middlewares.append(m)
+            except Exception as e:
+                logger.debug("[v2_runtime] TodoList 不可用: %s", e)
+
+        # ============================================================
+        # 11. LLMToolSelectorMiddleware - 智能选 tool 减少 LLM context
+        # ============================================================
+        # 仅当主模型是 OpenAI 时使用 (DeepSeek 不支持 strict JSON schema)
+        if LLMToolSelectorMiddleware is not None and chat_model is not None:
+            try:
+                # 检查 model provider: deepseek / qwen 不支持 strict JSON mode
+                model_str = model.lower() if isinstance(model, str) else ""
+                skip = (
+                    "deepseek" in model_str
+                    or "qwen" in model_str
+                    or "anthropic" in model_str
+                )
+                if skip:
+                    logger.debug(
+                        "[v2_runtime] LLMToolSelector 跳过: model=%s 不支持 strict JSON",
+                        model,
+                    )
+                else:
+                    # 从 ~14 tools 中, 选 ≤5 个最相关的, 减少 LLM 决策时间
+                    m = LLMToolSelectorMiddleware(
+                        model=chat_model,
+                        max_tools=5,
+                    )
+                    middlewares.append(m)
+            except Exception as e:
+                logger.debug("[v2_runtime] LLMToolSelector 不可用: %s", e)
 
         if middlewares:
             logger.info(

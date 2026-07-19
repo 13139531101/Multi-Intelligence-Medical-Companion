@@ -475,6 +475,13 @@ async def v2_process_message_stream(message) -> AsyncIterator[dict]:
                     "name": ev.get("name"),
                     "output": ev.get("output"),
                 }
+            elif ev_type == "interrupt":
+                # 阶段48-16: HITL 中断 → emit interrupt SSE, 前端弹 confirm dialog
+                yield {
+                    "event": "interrupt",
+                    "thread_id": ev.get("thread_id"),
+                    "interrupt_data": ev.get("interrupt_data"),
+                }
             elif ev_type == "normal":
                 content = ev.get("content", "")
                 if content and content.strip():
@@ -519,4 +526,58 @@ async def v2_process_message_stream(message) -> AsyncIterator[dict]:
         }
     except Exception as e:
         logger.exception("[v2_bridge] stream error")
+        yield {"event": "error", "error": str(e)}
+
+
+async def v2_process_message_resume(
+    thread_id: str,
+    decisions: list[dict],
+    conversation_id: str,
+    user_id: str | None = None,
+    target_agent: str = "auto",
+):
+    """阶段48-16: 用户确认 (approve/reject) 后, 接着跑被 interrupted 的 graph.
+
+    Args:
+        thread_id: 之前 yield 的 thread_id
+        decisions: 用户对每个 tool_call 的决策
+            e.g. [{"type": "approve"}, {"type": "reject", "message": "..."}, ...]
+        conversation_id: 同样 for thread_id
+        user_id: PHA 用户 ID
+        target_agent: 同 stream
+
+    Yields:
+        SSE 事件, 同 v2_process_message_stream
+    """
+    try:
+        from .agent_registry import AgentRegistry
+        if target_agent == "auto" or not target_agent:
+            target_agent = "health_advisor"
+        spec = AgentRegistry.get(target_agent)
+        if spec is None or spec.cls is None:
+            yield {"event": "error", "error": f"unknown agent: {target_agent}"}
+            return
+
+        agent = spec.cls()
+        async for ev in agent.resume(
+            thread_id=thread_id,
+            decisions=decisions,
+            session_id=conversation_id,
+            user_id=user_id,
+        ):
+            ev_type = ev.get("type", "?")
+            if ev_type == "tool_call":
+                yield {"event": "tool_call", "name": ev.get("name"), "args": ev.get("args")}
+            elif ev_type == "tool_result":
+                yield {"event": "tool_result", "name": ev.get("name"), "output": ev.get("output")}
+            elif ev_type == "interrupt":
+                yield {"event": "interrupt", "thread_id": ev.get("thread_id"), "interrupt_data": ev.get("interrupt_data")}
+            elif ev_type == "normal":
+                yield {"event": "chunk", "text": ev.get("content", "")}
+            elif ev_type == "complete":
+                yield {"event": "done", "thread_id": ev.get("thread_id")}
+            elif ev_type == "error":
+                yield {"event": "error", "error": ev.get("content")}
+    except Exception as e:
+        logger.exception("[v2_bridge] resume error")
         yield {"event": "error", "error": str(e)}

@@ -203,6 +203,92 @@ class V2Agent:
         )
         return agent
 
+    async def resume(
+        self,
+        thread_id: str,
+        decisions: list[dict],
+        session_id: str,
+        user_id: str | None = None,
+        user_parts: list | None = None,
+    ) -> AsyncIterable[dict[str, Any]]:
+        """阶段48-16: 阶段 HITL 中断后, 用 decisions 接着跑.
+
+        Args:
+            thread_id: graph thread_id (例如 '{user_id}:{session_id}')
+            decisions: list of {"type": "approve"|"edit"|"reject"|"respond", "args": ..., "message": ...}
+            session_id: v2 chat session (为了 yield 同 stream 一致的事件)
+            user_id: 用户 id
+            user_parts: tool call payload
+
+        Yields:
+            同 stream() 一致, 可继续吐 chunk, 并在再 interrupt 时再次 yield
+        """
+        import time as _time
+        _stream_start = _time.time()
+        _stream_error = False
+
+        agent = await self._ensure_agent()
+        if agent is None:
+            yield {"type": "error", "content": "agent 未初始化"}
+            return
+
+        try:
+            from langchain_core.messages import HumanMessage
+            from .mcp_tool_adapter import set_user_context
+            if user_id:
+                set_user_context(user_id=user_id, conversation_id=session_id or "")
+                import os as _os
+                _os.environ["PHA_USER_ID"] = user_id
+
+            cfg = {"configurable": {"thread_id": thread_id}}
+
+            from langgraph.types import Command
+            # 调用 ainvoke 时传 Command(resume=decisions)
+            result = await agent.ainvoke(
+                Command(resume={"decisions": decisions}),
+                config=cfg,
+                stream_mode="values",
+            )
+            # result 是最后一帧 state dict
+            msgs = result.get("messages", []) if isinstance(result, dict) else []
+            # 找到 last AI message
+            from langchain_core.messages import AIMessage
+            last_ai = None
+            for msg in reversed(msgs):
+                if isinstance(msg, AIMessage):
+                    last_ai = msg
+                    break
+            if last_ai and last_ai.content:
+                txt = str(last_ai.content)
+                # 模拟流式 chunk
+                for i in range(0, len(txt), 8):
+                    yield {"type": "normal", "content": txt[i:i+8]}
+
+            # 再检查 interrupt (级联)
+            last_state = await agent.aget_state(cfg)
+            interrupts = (
+                last_state.values.get("__interrupt__", [])
+                if hasattr(last_state, "values") and isinstance(last_state.values, dict)
+                else []
+            )
+            if interrupts:
+                intr = interrupts[0]
+                intr_value = getattr(intr, "value", intr)
+                yield {
+                    "type": "interrupt",
+                    "thread_id": thread_id,
+                    "interrupt_data": intr_value if isinstance(intr_value, (list, dict)) else {"raw": str(intr_value)},
+                }
+
+            yield {"type": "complete", "content": " ", "thread_id": thread_id}
+        except Exception as e:
+            logger.exception("[v2_agent:%s] resume error", self.name)
+            yield {
+                "type": "error",
+                "content": f"resume 失败: {e}",
+                "require_user_input": False,
+            }
+
     async def stream(
         self,
         query: str,
@@ -423,6 +509,42 @@ class V2Agent:
                         }
 
             # 结束事件
+            # 阶段48-16: 检测 HITL interrupt, 让前端弹出确认 dialog
+            # 检查 graph state 的 __interrupt__ 值
+            try:
+                # 用 aget_state 获取最新 state (包括被 interrupt 触发 pending 的)
+                last_state = await agent.aget_state(cfg)
+                interrupts = []
+                # 多种 interrupt sources
+                state_dict = (
+                    last_state.values if hasattr(last_state, "values") and isinstance(last_state.values, dict)
+                    else (last_state if isinstance(last_state, dict) else {})
+                )
+                if "__interrupt__" in state_dict and state_dict["__interrupt__"]:
+                    interrupts = state_dict["__interrupt__"]
+                elif hasattr(last_state, "tasks") and last_state.tasks:
+                    # 待处理任务中可能有 interrupt
+                    for task in last_state.tasks:
+                        if hasattr(task, "interrupts") and task.interrupts:
+                            interrupts.extend(task.interrupts)
+
+                if interrupts:
+                    intr = interrupts[0]
+                    if hasattr(intr, "value"):
+                        intr_value = intr.value
+                    elif isinstance(intr, dict):
+                        intr_value = intr.get("value", intr)
+                    else:
+                        intr_value = str(intr)
+                    logger.info("[v2_agent:%s] HITL interrupt detected: thread=%s", self.name, thread_id)
+                    yield {
+                        "type": "interrupt",
+                        "thread_id": thread_id,
+                        "interrupt_data": intr_value if isinstance(intr_value, (list, dict)) else {"raw": str(intr_value)},
+                    }
+            except Exception as e:
+                logger.debug("[v2_agent:%s] interrupt detect error: %s", self.name, e)
+
             yield {
                 "is_task_complete": True,
                 "require_user_input": False,

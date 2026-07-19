@@ -4968,6 +4968,9 @@ async def v2_chat_stream(request: Request, user: dict = Depends(get_current_user
                 elif ev_type == "tool_result":
                     tool_results_log.append({"name": ev.get("name"), "output": ev.get("output")})
                     yield f"event: tool_result\ndata: {_json.dumps({'name': ev.get('name'), 'output': ev.get('output')}, ensure_ascii=False)}\n\n"
+                elif ev_type == "interrupt":
+                    # 阶段48-16: HITL 中断 → 通知前端弹 confirm dialog
+                    yield f"event: interrupt\ndata: {_json.dumps({'thread_id': ev.get('thread_id'), 'interrupt_data': ev.get('interrupt_data')}, ensure_ascii=False)}\n\n"
                 elif ev_type == "chunk":
                     content_for_db += ev.get("text", "")
                     yield f"event: chunk\ndata: {_json.dumps({'text': ev.get('text', '')}, ensure_ascii=False)}\n\n"
@@ -5009,6 +5012,73 @@ async def v2_chat_stream(request: Request, user: dict = Depends(get_current_user
             import traceback
             tb = traceback.format_exc()
             logging.error(f"[v2/chat/stream] error: {e}\n{tb}")
+            yield f"event: error\ndata: {_json.dumps({'error': str(e)}, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+# 阶段48-16: HITL 中断后, 用户在 confirm dialog 中点击确认/取消, 调此 endpoint 接着跑
+@app.post("/v2/chat/resume")
+async def v2_chat_resume(request: Request, user: dict = Depends(get_current_user)):
+    """阶段48-16: HumanInTheLoop 中断后, 用 decisions 接着跑 graph.
+
+    Body:
+        thread_id: str (从之前的 interrupt event 拿)
+        decisions: list[{"type": "approve"|"edit"|"reject"|"respond", ...}]
+        conversation_id: str (用于 DB 关联)
+        target_agent: str (哪个 agent, 缺省 health_advisor)
+    """
+    from A2AServer.v2.bridge import v2_process_message_resume
+    try:
+        body = await request.json()
+        print(f"[v2/chat/resume] received body keys: {list(body.keys()) if isinstance(body, dict) else 'not dict'}", flush=True)
+    except Exception as e:
+        print(f"[v2/chat/resume] body parse failed: {e}", flush=True)
+        return {"error": "invalid json"}
+
+    thread_id = body.get("thread_id", "")
+    decisions = body.get("decisions", [])
+    conversation_id = body.get("conversation_id") or f"resume_{uuid.uuid4().hex[:8]}"
+    target_agent = body.get("target_agent", "health_advisor")
+    token_uid = str(user.get("id") or user.get("user_id") or user.get("uid") or "")
+    user_id = body.get("user_id") or token_uid or "default_user"
+
+    if not thread_id or not decisions:
+        return {"error": "thread_id and decisions required"}
+
+    async def event_generator():
+        try:
+            async for ev in v2_process_message_resume(
+                thread_id=thread_id,
+                decisions=decisions,
+                conversation_id=conversation_id,
+                user_id=user_id,
+                target_agent=target_agent,
+            ):
+                ev_type = ev.get("event", "?")
+                if ev_type == "chunk":
+                    yield f"event: chunk\ndata: {_json.dumps({'text': ev.get('text', '')}, ensure_ascii=False)}\n\n"
+                elif ev_type == "tool_call":
+                    yield f"event: tool_call\ndata: {_json.dumps({'name': ev.get('name'), 'args': ev.get('args')}, ensure_ascii=False)}\n\n"
+                elif ev_type == "tool_result":
+                    yield f"event: tool_result\ndata: {_json.dumps({'name': ev.get('name'), 'output': ev.get('output')}, ensure_ascii=False)}\n\n"
+                elif ev_type == "interrupt":
+                    yield f"event: interrupt\ndata: {_json.dumps({'thread_id': ev.get('thread_id'), 'interrupt_data': ev.get('interrupt_data')}, ensure_ascii=False)}\n\n"
+                elif ev_type == "done":
+                    yield f"event: done\ndata: {_json.dumps({'thread_id': ev.get('thread_id')}, ensure_ascii=False)}\n\n"
+                elif ev_type == "error":
+                    yield f"event: error\ndata: {_json.dumps({'error': ev.get('error', '')}, ensure_ascii=False)}\n\n"
+        except Exception as e:
+            import traceback
+            tb = traceback.format_exc()
+            logging.error(f"[v2/chat/resume] error: {e}\n{tb}")
             yield f"event: error\ndata: {_json.dumps({'error': str(e)}, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(
