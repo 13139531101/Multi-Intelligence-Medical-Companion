@@ -910,30 +910,7 @@ export default function NewChat() {
               sx={{ height: 22, fontSize: "0.65rem", fontFamily: "monospace" }}
             />
           )}
-          {/* 阶段48-9: agent 过滤切换 */}
-          {AGENT_LIST.map((ag) => (
-            <Chip
-              key={ag.id}
-              label={ag.name}
-              size="small"
-              onClick={() => {
-                const sp = new URLSearchParams(searchParams);
-                if (ag.id === "all") sp.delete("agent");
-                else sp.set("agent", ag.id);
-                setSearchParams(sp);
-              }}
-              variant={agentFilter === ag.id ? "filled" : "outlined"}
-              sx={{
-                bgcolor: agentFilter === ag.id ? ag.color : "transparent",
-                color: agentFilter === ag.id ? "white" : ag.color,
-                borderColor: ag.color,
-                fontWeight: 500,
-                cursor: "pointer",
-                fontSize: "0.7rem",
-                height: 24,
-              }}
-            />
-          ))}
+          {/* 阶段48-22 v3+: 删除冗余的 AGENT_LIST 按钮 — 已被 DomainSwitcher 取代 */}
         </Stack>
       </Box>
 
