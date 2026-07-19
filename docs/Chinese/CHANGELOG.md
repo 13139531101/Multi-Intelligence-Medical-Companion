@@ -41,6 +41,54 @@
 
 ---
 
+## [未发布] - 阶段 48-21 - 把 PHA 做精: HITL 自动收集 + 前后端 domain 切换
+
+### 新增
+
+- 后端 `/v2/manifest` 系列端点 (4 个):
+  - `GET /v2/manifest` 当前 domain + agents + port + dangerously
+  - `GET /v2/manifest/list` 所有可用 yaml
+  - `GET /v2/manifest/dangerous` 当前的危险 agent (HITL 候选)
+  - `POST /v2/manifest/switch {name}` 切换 domain (env var level)
+- 前端 `DomainSwitcher.jsx`: chip + dropdown 切换 domain, 自动 reload agents
+- 前端 `ManifestBadge.jsx`: 在 NewChat 顶部展示当前 domain + 所有 agent chip + 🔒 标 dangerous
+
+### dangerous_tools.py 自动化 (阶段48-21)
+
+- 旧: 硬编码 4 个 if/elif table (每个 agent 列具体 tool 名)
+- 新: 自动从 `manifest.dangerous_agents()` 读, 该 agent 的所有写类 tool (delete/add/save/send/log_taken/...) 自动 require HITL
+- 兼容旧 fallback
+
+### E2E 验证
+
+```
+$ curl /v2/manifest  →  PHA 4 agent, dangerously=[medication_reminder]
+$ curl -X POST /v2/manifest/switch -d '{"name":"hr.company"}'
+   → 切换到 4 个 HR agent, dangerously=[finance_advisor]
+$ curl /v2/manifest  →  HR 4 agent
+$ curl -X POST /v2/manifest/switch -d '{"name":"pha.health"}'
+   → 切回 PHA, dangerously=[medication_reminder]
+```
+
+UI 验证 (NewChat.jsx 顶部):
+
+- `[PHA]个人健康助手 🇨🇳` domain chip 显示
+- agent chips 显示 (健康顾问 / 健康档案 / 用药提醒 🔒 / 就诊摘要)
+- 点 domain chip → 下拉 4 个 yaml 切换 (带"当前"标)
+
+### 文件变更
+
+- 新: `backend/A2AServer/src/A2AServer/v2/manifest_endpoints.py`
+- 新: `frontend/multiagent_front/src/components/DomainSwitcher.jsx`
+- 新: `frontend/multiagent_front/src/components/ManifestBadge.jsx`
+- 新: `scripts/patch_api_add_manifest.py` (api.py 注册 router 用)
+- 改: `backend/A2AServer/src/A2AServer/v2/dangerous_tools.py` (重写读 manifest)
+- 改: `backend/A2AServer/src/A2AServer/v2/v2_runtime.py` (传 available_tools)
+- 改: `backend/api.py` (注册 manifest_router)
+- 改: `frontend/multiagent_front/src/pages/NewChat.jsx` (挂 DomainSwitcher + ManifestBadge)
+
+---
+
 ## [未发布] - 阶段 48-20 - 平台复用: Domain Manifest
 
 ### 核心改动

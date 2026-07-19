@@ -58,6 +58,8 @@ import {
 } from "@mui/icons-material";
 import Header from "../components/HealthHeader";
 import AgentQuickFab from "../components/AgentQuickFab";
+import DomainSwitcher from "../components/DomainSwitcher"; // 阶段48-21
+import ManifestBadge from "../components/ManifestBadge"; // 阶段48-21
 import {
   smartChat,
   getConsultationHistory,
@@ -129,128 +131,6 @@ const renderTable = (lines, startI, key) => {
         );
       })}
     </Box>
-
-    {/* 阶段48-16: HITL Confirmation Dialog */}
-    <Dialog
-      open={hitlOpen}
-      onClose={() => !hitlResolving && setHitlOpen(false)}
-      maxWidth="sm"
-      fullWidth
-    >
-      <DialogTitle sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-        <Warning color="warning" />
-        <span>需要您确认操作</span>
-      </DialogTitle>
-      <DialogContent>
-        <DialogContentText sx={{ mb: 2 }}>
-          智能体准备执行以下敏感操作。请查看详情后选择：
-        </DialogContentText>
-        {hitlData?.interrupt_data &&
-          Array.isArray(hitlData.interrupt_data) &&
-          hitlData.interrupt_data.length > 0 && (
-            <Box sx={{ mb: 2 }}>
-              {hitlData.interrupt_data.map((item, idx) => {
-                const value =
-                  typeof item === "object" && item !== null
-                    ? item.value || item
-                    : item;
-                const list = Array.isArray(value) ? value : [value];
-                return (
-                  <Box
-                    key={idx}
-                    sx={{
-                      p: 1.5,
-                      mb: 1,
-                      bgcolor: "grey.100",
-                      borderRadius: 1,
-                      border: "1px solid #ddd",
-                    }}
-                  >
-                    {list.map((req, i) => {
-                      const aReq =
-                        typeof req === "object" && req !== null
-                          ? req
-                          : { raw: String(req) };
-                      return (
-                        <Box key={i} sx={{ fontSize: "0.875rem" }}>
-                          <Typography variant="subtitle2" color="warning.dark">
-                            {aReq.name || aReq.action || "敏感操作"}
-                          </Typography>
-                          {aReq.description && (
-                            <Typography
-                              variant="body2"
-                              color="text.secondary"
-                              sx={{ my: 0.5 }}
-                            >
-                              {aReq.description}
-                            </Typography>
-                          )}
-                          {aReq.args && (
-                            <Box
-                              component="pre"
-                              sx={{
-                                fontSize: "0.75rem",
-                                bgcolor: "white",
-                                p: 1,
-                                borderRadius: 1,
-                                overflowX: "auto",
-                                maxHeight: 120,
-                              }}
-                            >
-                              {JSON.stringify(aReq.args, null, 2)}
-                            </Box>
-                          )}
-                        </Box>
-                      );
-                    })}
-                  </Box>
-                );
-              })}
-            </Box>
-          )}
-        {(!hitlData?.interrupt_data ||
-          (Array.isArray(hitlData?.interrupt_data) &&
-            hitlData.interrupt_data.length === 0)) && (
-          <DialogContentText>
-            智能体请求您确认一个敏感操作。请点击下方按钮决定。
-          </DialogContentText>
-        )}
-        {hitlResolving && (
-          <Box sx={{ display: "flex", alignItems: "center", mt: 2, gap: 1 }}>
-            <CircularProgress size={16} />
-            <Typography variant="caption">正在处理您的决定...</Typography>
-          </Box>
-        )}
-      </DialogContent>
-      <DialogActions sx={{ p: 2, gap: 1 }}>
-        <Button
-          onClick={() => hitlResume("reject")}
-          color="error"
-          variant="outlined"
-          disabled={hitlResolving}
-        >
-          ❌ 拒绝
-        </Button>
-        <Button
-          onClick={() => setHitlOpen(false)}
-          color="inherit"
-          variant="text"
-          disabled={hitlResolving}
-        >
-          稍后决定
-        </Button>
-        <Button
-          onClick={() => hitlResume("approve")}
-          color="primary"
-          variant="contained"
-          disabled={hitlResolving}
-          startIcon={<CheckIcon />}
-          autoFocus
-        >
-          ✅ 确认执行
-        </Button>
-      </DialogActions>
-    </Dialog>
   );
 };
 
@@ -464,6 +344,12 @@ export default function NewChat() {
   const [searchParams, setSearchParams] = useSearchParams();
   const agentFilter = searchParams.get("agent") || "all"; // 阶段48-9: agent 过滤
   const initialQ = searchParams.get("q") || ""; // 阶段48-9: 首页输入跳过
+  // 阶段48-21: domain manifest refresh key
+  const [manifestRefresh, setManifestRefresh] = useState(0);
+  const handleDomainChange = useCallback(
+    () => setManifestRefresh((k) => k + 1),
+    [],
+  );
 
   const [messages, setMessages] = useState(
     initialQ
@@ -996,6 +882,11 @@ export default function NewChat() {
             size="small"
             sx={{ bgcolor: "#E3F2FD", color: "#1565C0", fontWeight: 500 }}
           />
+          {/* 阶段48-21: Domain Switcher + Manifest Badge */}
+          <Box sx={{ flex: 1 }} />
+          <DomainSwitcher onDomainChange={handleDomainChange} />
+          <ManifestBadge refreshKey={manifestRefresh} />
+
           {streamingAgent && (
             <Chip
               label={`routing → ${streamingAgent}`}
@@ -1005,7 +896,6 @@ export default function NewChat() {
             />
           )}
           {/* 阶段48-9: agent 过滤切换 */}
-          <Box sx={{ flex: 1 }} />
           {AGENT_LIST.map((ag) => (
             <Chip
               key={ag.id}
@@ -1573,6 +1463,130 @@ export default function NewChat() {
           {snack}
         </Box>
       )}
+      {/* 阶段48-16: HITL Confirmation Dialog */}
+      <Dialog
+        open={hitlOpen}
+        onClose={() => !hitlResolving && setHitlOpen(false)}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+          <Warning color="warning" />
+          <span>需要您确认操作</span>
+        </DialogTitle>
+        <DialogContent>
+          <DialogContentText sx={{ mb: 2 }}>
+            智能体准备执行以下敏感操作。请查看详情后选择：
+          </DialogContentText>
+          {hitlData?.interrupt_data &&
+            Array.isArray(hitlData.interrupt_data) &&
+            hitlData.interrupt_data.length > 0 && (
+              <Box sx={{ mb: 2 }}>
+                {hitlData.interrupt_data.map((item, idx) => {
+                  const value =
+                    typeof item === "object" && item !== null
+                      ? item.value || item
+                      : item;
+                  const list = Array.isArray(value) ? value : [value];
+                  return (
+                    <Box
+                      key={idx}
+                      sx={{
+                        p: 1.5,
+                        mb: 1,
+                        bgcolor: "grey.100",
+                        borderRadius: 1,
+                        border: "1px solid #ddd",
+                      }}
+                    >
+                      {list.map((req, i) => {
+                        const aReq =
+                          typeof req === "object" && req !== null
+                            ? req
+                            : { raw: String(req) };
+                        return (
+                          <Box key={i} sx={{ fontSize: "0.875rem" }}>
+                            <Typography
+                              variant="subtitle2"
+                              color="warning.dark"
+                            >
+                              {aReq.name || aReq.action || "敏感操作"}
+                            </Typography>
+                            {aReq.description && (
+                              <Typography
+                                variant="body2"
+                                color="text.secondary"
+                                sx={{ my: 0.5 }}
+                              >
+                                {aReq.description}
+                              </Typography>
+                            )}
+                            {aReq.args && (
+                              <Box
+                                component="pre"
+                                sx={{
+                                  fontSize: "0.75rem",
+                                  bgcolor: "white",
+                                  p: 1,
+                                  borderRadius: 1,
+                                  overflowX: "auto",
+                                  maxHeight: 120,
+                                }}
+                              >
+                                {JSON.stringify(aReq.args, null, 2)}
+                              </Box>
+                            )}
+                          </Box>
+                        );
+                      })}
+                    </Box>
+                  );
+                })}
+              </Box>
+            )}
+          {(!hitlData?.interrupt_data ||
+            (Array.isArray(hitlData?.interrupt_data) &&
+              hitlData.interrupt_data.length === 0)) && (
+            <DialogContentText>
+              智能体请求您确认一个敏感操作。请点击下方按钮决定。
+            </DialogContentText>
+          )}
+          {hitlResolving && (
+            <Box sx={{ display: "flex", alignItems: "center", mt: 2, gap: 1 }}>
+              <CircularProgress size={16} />
+              <Typography variant="caption">正在处理您的决定...</Typography>
+            </Box>
+          )}
+        </DialogContent>
+        <DialogActions sx={{ p: 2, gap: 1 }}>
+          <Button
+            onClick={() => hitlResume("reject")}
+            color="error"
+            variant="outlined"
+            disabled={hitlResolving}
+          >
+            ❌ 拒绝
+          </Button>
+          <Button
+            onClick={() => setHitlOpen(false)}
+            color="inherit"
+            variant="text"
+            disabled={hitlResolving}
+          >
+            稍后决定
+          </Button>
+          <Button
+            onClick={() => hitlResume("approve")}
+            color="primary"
+            variant="contained"
+            disabled={hitlResolving}
+            startIcon={<CheckIcon />}
+            autoFocus
+          >
+            ✅ 确认执行
+          </Button>
+        </DialogActions>
+      </Dialog>
       <AgentQuickFab />
     </Box>
   );

@@ -1,6 +1,8 @@
-# PHA 平台复用指南 (阶段 48-20)
+# PHA 平台复用指南 (阶段 48-20 + 48-21)
 
 > 把 PHA 改成"多场景多智能体平台", 复用方式: **换 yaml 不改代码**.
+
+阶段 48-21 加了: **`/v2/manifest` API + 前端 Domain Switcher + dangerous_tools 自动收集**, 让用户在前端就能切 domain.
 
 ---
 
@@ -169,3 +171,67 @@ python scripts/test_domain_manifest.py   # 4 个 yaml 都能加载
   host_agent: triage_agent
   ...
 ```
+
+---
+
+## 9. 阶段 48-21: API 端点 + 前端切换
+
+### 后端端点 (FastAPI)
+
+| 端点                                                   | 用途                                                 |
+| ------------------------------------------------------ | ---------------------------------------------------- |
+| `GET /v2/manifest`                                     | 当前 domain 全字段                                   |
+| `GET /v2/manifest/list`                                | 4 个 yaml 预览 (name / display / agent_count / host) |
+| `GET /v2/manifest/dangerous`                           | 当前 domain 的 HITL 候选                             |
+| `POST /v2/manifest/switch` body=`{name: "hr.company"}` | 切换 (env var level, 不持久化)                       |
+
+### 试一下
+
+```bash
+# 当前默认
+curl http://localhost:13002/v2/manifest
+
+# 列 yaml
+curl http://localhost:13002/v2/manifest/list
+
+# 切换到 HR
+curl -X POST http://localhost:13002/v2/manifest/switch \
+  -H 'Content-Type: application/json' \
+  -d '{"name": "hr.company"}'
+```
+
+### 前端 DomainSwitcher
+
+NewChat 顶部 chip:
+
+- `[PHA]个人健康助手` — 点击 → 下拉 4 个 yaml (PHA/HR/电商/教育)
+- 当前 yaml 有 "当前" chip + checkmark
+- 切换后 ManifestBadge 自动 reload, agent chips 同步更新
+- 🔒 = dangerously agent (HITL 自动加)
+
+### dangerous_tools 自动收集
+
+旧:
+
+```python
+if agent_name == "medication_reminder":
+    return {"add_medication_reminder": True, "log_medication_taken": True, ...}
+elif agent_name == "health_records":
+    return {"delete_reminder": True, "save_health_record": True, ...}
+```
+
+新:
+
+```python
+# 1. 读 manifest.get_agent(name).dangerously
+# 2. 如果 True → 该 agent 的所有写类 tool 自动 (delete/add/save/send/log_taken/...)
+# 3. 否则 → 读旧硬编码 fallback
+```
+
+效果: HR `finance_advisor` 加了 `dangerously: true` 后, 该 agent 的所有报销/付款/审批 tool 自动 require HITL, **不用改代码**.
+
+### 注意事项
+
+- `/v2/manifest/switch` 是 process-level (写到 env var), 不是持久化. 进程重启就回默认 yaml.
+- 想持久化就要在 K8s deployment 加 env var, 或 hostapi 启动时读文件 + 写到 env var.
+- 已经 cache 的 agent (v2_agent 单例) 不会立即重载, 下一请求会刷新.

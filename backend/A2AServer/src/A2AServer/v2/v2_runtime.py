@@ -252,7 +252,16 @@ class V2AgentRuntime:
         if HumanInTheLoopMiddleware is not None:
             try:
                 from .dangerous_tools import get_interrupt_config
-                interrupt_cfg = get_interrupt_config(agent_name)
+                # 阶段48-21: 拿 agent 的 tool 名字 list 让 manifest 自动匹配危险 tool
+                tool_names: list[str] = []
+                try:
+                    from .mcp_discover import discover_mcp_tools_static, discover_phacore_tools
+                    tool_names += [t["name"] for t in discover_mcp_tools_static(agent_name)]
+                    tool_names += [t["name"] for t in discover_phacore_tools()]
+                    tool_names = list(set(tool_names))   # dedup
+                except Exception:
+                    pass
+                interrupt_cfg = get_interrupt_config(agent_name, available_tools=tool_names)
                 if interrupt_cfg:
                     # 每个 tool 配置允许的决策 + 是否需要描述 + 等待提示
                     # 4 种: approve / edit / reject / respond
