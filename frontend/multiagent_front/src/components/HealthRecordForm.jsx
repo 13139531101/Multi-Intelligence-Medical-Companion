@@ -484,7 +484,7 @@ export default function HealthRecordForm({
               variant={uploaderOpen ? "contained" : "outlined"}
               onClick={() => setUploaderOpen((v) => !v)}
             >
-              {uploaderOpen ? "收起上传" : "上传新文件"}
+              {uploaderOpen ? "收起" : "+ 上传附件"}
             </Button>
           </Stack>
 
@@ -514,7 +514,7 @@ export default function HealthRecordForm({
 
           {files.length === 0 ? (
             <Typography variant="caption" color="text.secondary">
-              暂无当前 kind 的已上传文件. 点击"上传新文件"或先用聊天上传几张.
+              暂无当前 kind 的已上传文件. 点"+ 上传附件"或先去聊天上传.
             </Typography>
           ) : (
             <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>

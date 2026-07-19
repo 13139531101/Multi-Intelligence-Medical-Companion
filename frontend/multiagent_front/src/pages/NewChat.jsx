@@ -39,7 +39,7 @@ import {
   Person,
   ExpandMore,
   CheckCircle,
-  AttachFile,
+  NoteAdd as NoteAddIcon,
   Mic,
   Info,
   MoreVert,
@@ -1268,12 +1268,13 @@ export default function NewChat() {
       >
         <Container maxWidth="md" sx={{ px: { xs: 0, sm: 2 } }}>
           <Stack direction="row" alignItems="flex-end" spacing={1}>
-            <Tooltip title="上传图片/文件 (阶段48-22 自动 OCR + attach 到 health_records)">
+            <Tooltip title="新建健康档案 / 就诊摘要 (含附件上传)">
               <IconButton
                 size="small"
                 onClick={() => setUploaderOpen((v) => !v)}
+                color={uploaderOpen ? "primary" : "default"}
               >
-                <AttachFile color={uploaderOpen ? "primary" : "inherit"} />
+                <NoteAddIcon />
               </IconButton>
             </Tooltip>
             <TextField
