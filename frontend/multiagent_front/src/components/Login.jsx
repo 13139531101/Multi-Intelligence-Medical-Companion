@@ -14,7 +14,7 @@ import {
   Link,
   Divider,
 } from "@mui/material";
-import { LockOutlined, Psychology } from "@mui/icons-material";
+import { LockOutlined, Psychology, Bolt } from "@mui/icons-material";
 import { login } from "../api/healthApi";
 import { useAuth } from "../contexts/AuthContext";
 

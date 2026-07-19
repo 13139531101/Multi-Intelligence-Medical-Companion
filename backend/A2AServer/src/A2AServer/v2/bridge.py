@@ -14,6 +14,8 @@ PHA v2 桥接器（阶段4）
 """
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 import os
 import sys
@@ -22,6 +24,88 @@ from pathlib import Path
 from typing import Any, Optional, AsyncIterator
 
 logger = logging.getLogger(__name__)
+
+
+# 阶段48-13: LLM 总结工具结果
+async def _llm_summarize_tool_results(
+    query: str,
+    tool_calls: list,
+    tool_results: list,
+    agent_name: str,
+    *,
+    timeout: float = 15.0,
+) -> str:
+    """阶段48-13: 直接调一次 LLM, 拿到工具结果后让它生成自然语言回答.
+
+    用 ChatOpenAI + LangChain, 不走 agent loop.
+    模型: PHA_SUMMARIZE_MODEL 环境变量, 默认 deepseek-chat.
+    """
+    if not tool_results:
+        return ""
+
+    try:
+        from langchain_openai import ChatOpenAI
+        from langchain_core.messages import SystemMessage, HumanMessage
+    except ImportError:
+        logger.warning("[v2_bridge] langchain_openai 不可用, 跳过 summarize")
+        return ""
+
+    api_key = os.getenv("DEEPSEEK_API_KEY") or os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        logger.warning("[v2_bridge] 无 API key, 跳过 summarize")
+        return ""
+
+    model_name = os.getenv("PHA_SUMMARIZE_MODEL", "deepseek-chat")
+    base_url = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
+
+    try:
+        llm = ChatOpenAI(
+            model=model_name,
+            api_key=api_key,
+            base_url=base_url,
+            temperature=0.3,
+        )
+
+        # 把工具结果整理
+        tools_blob = []
+        for tc, tr in zip(tool_calls, tool_results):
+            output = str(tr.get("output", ""))[:800]
+            tools_blob.append(f"**{tr.get('name', tc.get('name', '?'))}** 返回: {output}")
+        tools_text = "\n\n".join(tools_blob) if tools_blob else "(无工具调用)"
+
+        system_prompt = (
+            "你是 PHA (Personal Health Assistant) 智能体的回复生成助手。"
+            "用户的查询已经触发了一些工具调用, 工具结果已在上方。"
+            "请用自然、亲切、简短的健康顾问语气总结这些工具结果,"
+            "用 markdown 格式输出, 不要直接复制工具的 JSON 字段名, "
+            "要让用户能直接读懂。不要瞎编数据, 严格按照工具返回的事实。"
+        )
+
+        user_msg = (
+            f"用户问题: {query}\n\n"
+            f"工具调用结果:\n{tools_text}\n\n"
+            "请生成自然语言总结。"
+        )
+
+        messages = [
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=user_msg),
+        ]
+
+        # 用 asyncio.wait_for 包超时
+        coro = llm.ainvoke(messages)
+        result = await asyncio.wait_for(coro, timeout=timeout)
+        summary = result.content if hasattr(result, "content") else str(result)
+        summary = (summary or "").strip()
+        if summary:
+            logger.info(f"[v2_bridge] LLM 总结完成 (len={len(summary)})")
+        return summary
+    except asyncio.TimeoutError:
+        logger.warning(f"[v2_bridge] LLM 总结超时 ({timeout}s)")
+        return ""
+    except Exception as e:
+        logger.exception(f"[v2_bridge] LLM 总结异常: {e}")
+        return ""
 
 # ---- PHA v2 路径配置 ----
 # 阶段27 修复：兼容容器浅路径（parents[5] 在 /app/A2AServer/v2/ 下越界）
@@ -397,13 +481,32 @@ async def v2_process_message_stream(message) -> AsyncIterator[dict]:
                     text += str(content)
                     yield {"event": "chunk", "text": str(content)}
 
-        # 阶段48-12: 如果 LLM 没给最终文本, 把工具结果组成简洁回答
+        # 阶段48-13: 如果 LLM 没给最终文本, 自动调一次 LLM 总结工具结果
+        # 而不是直接 dump JSON 给用户
         if not text and tool_results_log:
-            text = "## 工具调用结果汇总\n\n"
-            for r in tool_results_log:
-                output = str(r['output'])[:400]
-                text += f"**{r['name']}** 返回: {output}\n\n"
-            yield {"event": "chunk", "text": text}
+            logger.info(f"[v2_bridge] LLM 没出最终回答, 自动调 LLM 总结工具结果 (agent={target_agent})")
+            try:
+                summary_text = await _llm_summarize_tool_results(
+                    query=query,
+                    tool_calls=tool_calls_log,
+                    tool_results=tool_results_log,
+                    agent_name=target_agent,
+                )
+                if summary_text:
+                    text = summary_text
+                    # 阶段48-13: 模拟流式 chunk 让前端能逐字看到
+                    for i in range(0, len(summary_text), 8):
+                        chunk = summary_text[i:i+8]
+                        yield {"event": "chunk", "text": chunk}
+                        # 不要 await sleep — 应该立刻 yield 所有, 不让 UI 等太久
+                else:
+                    # 阶段48-13: LLM summarize 也失败, 才用最简 fallback
+                    text = "工具调用未返回内容。"
+                    yield {"event": "chunk", "text": text}
+            except Exception as e:
+                logger.exception(f"[v2_bridge] llm_summarize 失败: {e}")
+                text = "工具调用未返回内容。"
+                yield {"event": "chunk", "text": text}
 
         # done
         yield {
