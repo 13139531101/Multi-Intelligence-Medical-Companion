@@ -81,6 +81,30 @@ class V2Agent:
         """子类重写：返回 LangChain BaseTool 列表"""
         return []
 
+    def _build_chat_model(self):
+        """阶段48-14: 构造 chat_model 实例.
+        用于 create_agent + middlewares (e.g. SummarizationMiddleware).
+        返回 None 时让 create_agent 用 str model path.
+        """
+        if self.model.startswith("deepseek"):
+            from langchain_openai import ChatOpenAI
+            return ChatOpenAI(
+                model=self.model,
+                api_key=os.getenv("DEEPSEEK_API_KEY") or os.getenv("OPENAI_API_KEY"),
+                base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
+                temperature=0,
+            )
+        elif self.model.startswith("openai:"):
+            from langchain_openai import ChatOpenAI
+            model_name = self.model.split(":", 1)[1]
+            return ChatOpenAI(
+                model=model_name,
+                api_key=os.getenv("OPENAI_API_KEY"),
+                base_url=os.getenv("OPENAI_API_BASE"),
+                temperature=0,
+            )
+        return None
+
     def _concurrent_kwargs(self) -> dict:
         """
         阶段13 集成：返回 create_agent 的并发工具 kwargs
@@ -132,36 +156,16 @@ class V2Agent:
 
         self._tools = self.get_tools()
         checkpointer = await runtime.get_checkpointer()
-        middlewares = runtime.get_middlewares(self.model)
+
+        # 阶段48-14: 构造 chat_model 实例 (用于中间件 + create_agent)
+        chat_model = self._build_chat_model()
+
+        # 阶段48-14: middlewares 需要 chat_model 实例 (SummarizationMiddleware 用 model 做 summary)
+        middlewares = runtime.get_middlewares(self.model, chat_model=chat_model)
 
         # DeepSeek / 自定义 endpoint：用 ChatOpenAI + base_url
         # DeepSeek 兼容 OpenAI 协议，不需要 langchain-deepseek 单独包
-        if self.model.startswith("deepseek"):
-            from langchain_openai import ChatOpenAI
-
-            chat_model = ChatOpenAI(
-                model=self.model,
-                api_key=os.getenv("DEEPSEEK_API_KEY") or os.getenv("OPENAI_API_KEY"),
-                base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
-                temperature=0,
-            )
-            agent = create_agent(
-                model=chat_model,
-                tools=self._tools,
-                system_prompt=self.system_prompt,
-                middleware=middlewares,
-                checkpointer=checkpointer,
-            )
-        elif self.model.startswith("openai:"):
-            from langchain_openai import ChatOpenAI
-
-            model_name = self.model.split(":", 1)[1]
-            chat_model = ChatOpenAI(
-                model=model_name,
-                api_key=os.getenv("OPENAI_API_KEY"),
-                base_url=os.getenv("OPENAI_API_BASE"),  # None 默认 OpenAI 官方
-                temperature=0,
-            )
+        if chat_model is not None:
             agent = create_agent(
                 model=chat_model,
                 tools=self._tools,
@@ -170,7 +174,7 @@ class V2Agent:
                 checkpointer=checkpointer,
             )
         else:
-            # 其它直接走 create_agent(model=str) 路径
+            # 未知模型: 直接传字符串
             agent = create_agent(
                 model=self.model,
                 tools=self._tools,

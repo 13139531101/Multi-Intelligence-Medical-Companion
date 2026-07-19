@@ -35,11 +35,11 @@ try:
     try:
         from langchain.agents.middleware import (
             SummarizationMiddleware,
-            PIIRedactionMiddleware,
+            PIIMiddleware,           # 1.3.x 是 PIIMiddleware (不是 PIIRedactionMiddleware)
         )
     except ImportError:
         SummarizationMiddleware = None
-        PIIRedactionMiddleware = None
+        PIIMiddleware = None
     _LANGCHAIN_V2_OK = True
 except ImportError as e:
     logger.warning(
@@ -101,28 +101,49 @@ class V2AgentRuntime:
         logger.info("[v2_runtime] Checkpointer = InMemorySaver (开发模式)")
         return self._checkpointer
 
-    def get_middlewares(self, model: str):
-        """获取标准 Middleware 列表（医疗场景）"""
+    def get_middlewares(self, model: str, chat_model=None):
+        """获取标准 Middleware 列表（医疗场景）
+
+        Args:
+            model: model name 字符串 (用来判断 provider)
+            chat_model: 可选, chat_model 实例 (用于 SummarizationMiddleware)
+        """
         if not _LANGCHAIN_V2_OK:
             return []
 
         middlewares = []
 
-        if PIIRedactionMiddleware is not None:
+        if PIIMiddleware is not None:
             try:
-                middlewares.append(
-                    PIIRedactionMiddleware(patterns=["email", "phone", "id_card"])
-                )
+                # 阶段48-14: PII redaction — 医疗场景要脱敏用户隐私
+                # 一个 pii_type 一个 instance, 加多个支持多种类型
+                for pii_type in ("email", "url"):
+                    try:
+                        m = PIIMiddleware(pii_type=pii_type, strategy="redact")
+                        middlewares.append(m)
+                    except Exception as e:
+                        logger.debug("[v2_runtime] PIIMiddleware[%s] 失败: %s", pii_type, e)
             except Exception as e:
-                logger.debug("[v2_runtime] PIIRedactionMiddleware 初始化失败: %s", e)
+                logger.debug("[v2_runtime] PIIMiddleware 初始化失败: %s", e)
 
         # 长上下文自动压缩（节省 token）
+        # SummarizationMiddleware 调 init_chat_model(model_str), 需要已装的 provider
+        # 优先用 chat_model 实例 (避免 init_chat_model 找不到 langchain_deepseek 等)
         if SummarizationMiddleware is not None:
             try:
-                middlewares.append(SummarizationMiddleware(model=model))
+                if chat_model is not None:
+                    m = SummarizationMiddleware(model=chat_model)
+                else:
+                    # 直接传字符串, 失败就被 catched 跳过
+                    m = SummarizationMiddleware(model=model)
+                middlewares.append(m)
             except Exception as e:
                 logger.debug("[v2_runtime] SummarizationMiddleware 不可用: %s", e)
 
+        if middlewares:
+            logger.info("[v2_runtime] 加载 %d 个 middlewares: %s",
+                        len(middlewares),
+                        [type(m).__name__ for m in middlewares])
         return middlewares
 
 
