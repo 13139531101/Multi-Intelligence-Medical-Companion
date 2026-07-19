@@ -60,7 +60,6 @@ import Header from "../components/HealthHeader";
 import AgentQuickFab from "../components/AgentQuickFab";
 import DomainSwitcher from "../components/DomainSwitcher"; // 阶段48-21
 import ManifestBadge from "../components/ManifestBadge"; // 阶段48-21
-import HealthUploader from "../components/HealthUploader"; // 阶段48-22
 import HealthRecordForm from "../components/HealthRecordForm"; // 阶段48-22 v3
 import {
   smartChat,
@@ -1323,7 +1322,7 @@ export default function NewChat() {
         </Container>
       </Paper>
 
-      {/* 阶段48-22 v3: 上传 + 新建记录 (折叠式, 出现在输入框下方) */}
+      {/* 阶段48-22 v3+: 单栏 HealthRecordForm — 上传 + 新建 在一个表单里 */}
       {uploaderOpen && (
         <Paper
           square
@@ -1333,58 +1332,17 @@ export default function NewChat() {
             py: 2,
             px: 2,
             bgcolor: "grey.50",
-            maxHeight: 600,
+            maxHeight: 700,
             overflow: "auto",
           }}
         >
-          <Container maxWidth="lg" sx={{ px: { xs: 0, sm: 2 } }}>
-            <Stack
-              direction={{ xs: "column", md: "row" }}
-              spacing={2}
-              sx={{ flexWrap: "wrap", gap: 2 }}
-            >
-              {/* 新建档案表单 (双 kind 可切) */}
-              <Box sx={{ flex: 1, minWidth: 320 }}>
-                <Typography variant="subtitle2" sx={{ mb: 1 }}>
-                  ✨ 新建档案/摘要 (含附件)
-                </Typography>
-                <HealthRecordForm
-                  userId={currentUserId}
-                  onCreated={(res, fids) => {
-                    console.log("created", res, "files:", fids);
-                    // 选填: 1 秒后清掉 info, 让用户继续创建下一个
-                    setTimeout(() => {
-                      /* keep open */
-                    }, 500);
-                  }}
-                />
-              </Box>
-
-              {/* 上传 — 健康档案 */}
-              <Box sx={{ flex: 1, minWidth: 280 }}>
-                <Typography variant="subtitle2" sx={{ mb: 1 }}>
-                  📎 健康档案附件上传 (先传, 创建时可勾选)
-                </Typography>
-                <HealthUploader
-                  userId={currentUserId}
-                  domain="pha"
-                  purpose="health_record"
-                  purposeLabel="健康档案"
-                  onUploaded={(f) => console.log("uploaded", f)}
-                />
-              </Box>
-              <Box sx={{ flex: 1, minWidth: 280 }}>
-                <Typography variant="subtitle2" sx={{ mb: 1 }}>
-                  🏥 就诊摘要上传
-                </Typography>
-                <HealthUploader
-                  userId={currentUserId}
-                  domain="pha"
-                  purpose="visit_summary"
-                  purposeLabel="就诊摘要"
-                />
-              </Box>
-            </Stack>
+          <Container maxWidth="md" sx={{ px: { xs: 0, sm: 2 } }}>
+            <HealthRecordForm
+              userId={currentUserId}
+              onCreated={(res, fids) => {
+                console.log("created record", res, "files:", fids);
+              }}
+            />
           </Container>
         </Paper>
       )}
