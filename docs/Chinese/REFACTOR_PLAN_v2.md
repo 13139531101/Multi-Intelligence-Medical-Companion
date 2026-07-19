@@ -8,6 +8,14 @@
 
 ---
 
+## 附: 子计划索引
+
+| 子计划 | 内容 | 状态 |
+|---|---|---|
+| [PHACORE_REFACTOR_PLAN.md](./PHACORE_REFACTOR_PLAN.md) | **阶段 48-19**: 把 4 个 agent 重复实现的 OCR / reminder / storage / analysis 抽到统一的 `backend/PhaCore/` 共享库, 消除 66 个 `@mcp.tool()` 工具名重复 | 📝 已立项 (待执行) |
+
+---
+
 ## 1. 重构目标
 
 | 维度       | 现状（v1）                                             | 目标（v2）                                                                  |

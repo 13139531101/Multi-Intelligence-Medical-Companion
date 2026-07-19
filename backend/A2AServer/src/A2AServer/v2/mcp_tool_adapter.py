@@ -22,6 +22,7 @@ from typing import Any
 
 from .mcp_discover import (
     discover_mcp_tools_static,
+    discover_phacore_tools,        # 阶段48-19
     load_mcp_tool_function,
 )
 
@@ -142,6 +143,106 @@ def load_mcp_tools(agent_name: str, *, use_real: bool = True, transport: str = "
         len(tools),
     )
     return tools
+
+
+# 阶段48-19: PhaCore 共享工具加载
+# PhaCore 不是独立 agent, 它的工具是被 4 个 agent re-export 的.
+def load_phacore_tools(
+    modules: tuple = ("ocr",),          # ("ocr", "reminder", "storage", ...)
+) -> list:
+    """加载 PhaCore 共享工具集中指定模块的工具.
+
+    Args:
+        modules: PhaCore 子模块名 tuple, e.g. ("ocr",) 或 ("ocr", "reminder")
+
+    Returns:
+        list of LangChain BaseTool
+
+    用法 (在 sub_agents.py):
+        class HealthRecordsV2(V2Agent):
+            def get_tools(self):
+                return (
+                    load_mcp_tools("health_records", ...) +
+                    load_phacore_tools(("ocr",))
+                )
+    """
+    cache_key = f"phacore:{','.join(modules)}"
+    if cache_key in _TOOL_CACHE:
+        return _TOOL_CACHE[cache_key]
+
+    try:
+        # 阶段48-19: 动态 import (按需), 避免 hardcoded 全部不存在
+        import importlib
+        module_map = {}
+        for mod_name in modules:
+            try:
+                mod = importlib.import_module(f"PhaCore.mcpserver.shared_{mod_name}")
+                module_map[mod_name] = mod
+            except ImportError as e:
+                logger.warning("[PhaCore] module shared_%s 不可用: %s", mod_name, e)
+        if not module_map:
+            logger.warning("[PhaCore] 没 load 任何模块, modules=%s", modules)
+            return []
+        loaded_tools = []
+        for mod_name, mod in module_map.items():
+            try:
+                # 阶段48-19: 通过 AST 知 tool 列表, 用 _extract_mcp_tools_from_source
+                # 现在直接 enumerate module 的所有 @mcp.tool() 装饰函数
+                for tool_name in _list_phacore_tool_names(mod):
+                    tool_func = getattr(mod, tool_name, None)
+                    if tool_func is None:
+                        continue
+                    lc_tool = _wrap_phacore_func_as_lc_tool(tool_func, tool_name)
+                    loaded_tools.append(lc_tool)
+            except Exception as e:
+                logger.warning("[PhaCore] %s 加载失败: %s", mod_name, e)
+
+        _TOOL_CACHE[cache_key] = loaded_tools
+        logger.info(
+            "[PhaCore] loaded %d tools from modules=%s",
+            len(loaded_tools), modules,
+        )
+        return loaded_tools
+    except Exception as e:
+        logger.warning("[PhaCore] PhaCore 包不可用: %s", e)
+        return []
+
+
+def _list_phacore_tool_names(mod) -> list[str]:
+    """list PhaCore module 里的所有 tool 函数 (mcp.tool 装饰的).
+
+    通过 introspection: 函数对象有 __wrapped__ / location hint.
+    Phase 1 简化为: 直接拿 @mcp.tool() 下的函数, fallback dir().
+    """
+    import inspect
+    # 拿到模块源代码
+    try:
+        src_file = inspect.getsourcefile(mod)
+        if not src_file:
+            return [n for n in dir(mod) if not n.startswith("_") and callable(getattr(mod, n, None)) and n not in ("get_mcp_server", "mcp") and n in ("extract_text_from_image", "validate_medical_document")]
+        src = open(src_file, encoding="utf-8").read()
+        # Reuse _extract_mcp_tools_from_source
+        tools = _extract_mcp_tools_from_source(src)
+        return [t["name"] for t in tools]
+    except Exception:
+        # Hardcoded fallback
+        return ["extract_text_from_image", "validate_medical_document"] if "shared_ocr" in str(mod) else []
+
+
+def _wrap_phacore_func_as_lc_tool(func, func_name: str):
+    """包装 PhaCore 函数成 LangChain BaseTool (轻量, 不依赖 fastmcp runtime)."""
+    from langchain_core.tools import tool as langchain_tool
+
+    desc = (func.__doc__ or "").strip() or f"PhaCore tool: {func_name}"
+
+    @langchain_tool
+    def wrapped(**kwargs):
+        """PhaCore {func_name} wrapper."""
+        return func(**kwargs)
+
+    wrapped.name = func_name
+    wrapped.description = desc
+    return wrapped
 
 
 def _load_real_mcp_tools(agent_name: str, *, transport: str = "stdio") -> list:

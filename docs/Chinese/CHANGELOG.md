@@ -2,7 +2,75 @@
 
 > 所有 v2 阶段变更记录。版本按 git tag 排序。
 >
-> **当前版本**：v2.0-stage39-4（39 阶段全完成 + 4 个新功能）
+> **当前版本**：v2.0-stage48-19（48 阶段 + PhaCore 重构立项）
+
+---
+
+## [未发布] - 阶段 48-19 - PhaCore 重构立项
+
+### 新增
+
+- **[PHACORE_REFACTOR_PLAN.md](./PHACORE_REFACTOR_PLAN.md)** — 详细计划, 6 个 Phase 解决 4 agent 工具重复问题
+- **[backend/PhaCore/](../../backend/PhaCore/)** — 新建共享工具库, README 写在 `backend/PhaCore/README.md`
+
+### 问题
+
+调研发现以下严重重复:
+
+- 66 个 `@mcp.tool()` 中, ≥10 个跨 agent 同名 (`extract_text_from_image` / `add_medication_reminder` / `mark_reminder_taken vs log_medication_taken` 等)
+- `_normalize_pg_dsn` 复制 4 份
+- `call_aliyun_ocr` 复制 2 份 (446+476 行)
+- `memory_integration_tool.py` 1180 行 × 2 份
+- `database/postgres/init` SQL 缺 `visit_summaries` 表
+
+### 重构目标
+
+| 指标                 | 重构前 | 重构后目标 |
+| -------------------- | ------ | ---------- |
+| `@mcp.tool()` 总数   | 66     | 40-45      |
+| 4 agent 代码总行数   | ~10000 | ~5000      |
+| 同名 tool (跨 agent) | ≥10    | **0**      |
+| DSN 副本             | 4      | **1**      |
+
+### 不在本轮处理
+
+- `memory_integration_tool.py` (1180 行 × 2) — 下一轮 (`AgentMemorySystem/mcpserver/`)
+- `database_config.py` 5 个不一致 — 下一轮
+
+详见 [PHACORE_REFACTOR_PLAN.md](./PHACORE_REFACTOR_PLAN.md).
+
+---
+
+## [v2.0-stage48-18] - 阶段 48-18 - 中间件 hardening
+
+### 改动
+
+- **PII** 加 5 个 (email / url / ip / credit_card / phone 自定义 regex), 全部 `apply_to_input=True, apply_to_output=True, apply_to_tool_results=True`
+- **ContextEditing** 配置 ClearToolUsesEdit(trigger=8000, keep=5, exclude_tools=ask_user_for_clarification)
+- **TodoList** 中文自定义 system_prompt (≤7 步)
+- **HumanInTheLoop** description_prefix 中文 + emoji
+
+### E2E 验证
+
+- HITL `add_medication_reminder` 中断 → approve → 51 chunks 续接完成 ✓
+- 14 middlewares 当前加载 ✓
+
+---
+
+## [v2.0-stage48-17] - 阶段 48-17 - 中间件 + HITL 前端
+
+### 新增
+
+- **TodoListMiddleware** (12 middlewares 总数)
+- **LLMToolSelectorMiddleware** (DeepSeek 模型自动跳过)
+- **HITL 前端 Dialog** (NewChat.jsx `hitlOpen`/`hitlData`/`hitlResume`)
+- 服务端 `/v2/chat/resume` SSE 端点
+- `agent.resume()` 用 `langgraph.Command(resume=...)` 续接
+
+### 改动
+
+- `bridge.py` 加 `v2_process_message_resume` 函数
+- `v2_agent.py` 末尾 `aget_state` 检测 `__interrupt__` → yield `interrupt` event
 
 ---
 

@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import List
 
 from .v2_agent import V2Agent
-from .mcp_tool_adapter import load_mcp_tools
+from .mcp_tool_adapter import load_mcp_tools, load_phacore_tools   # 阶段48-19
 
 # 阶段48-15: 读 PHA_MCP_TRANSPORT env var 决定 transport 类型
 #   - "streamable_http" (默认, 推荐) → HTTP MCP server (1 process / agent)
@@ -72,9 +72,12 @@ class HealthAdvisorV2(V2Agent):
     )
 
     def get_tools(self) -> List:
-        """加载 HealthAdvisor 的 MCP 工具（阶段2-3 接入）"""
+        """加载 HealthAdvisor 的 MCP 工具（阶段2-3 接入 + 阶段48-19: PhaCore re-export）"""
         try:
-            return load_mcp_tools("health_advisor", transport=_MCP_TRANSPORT)
+            return (
+                load_mcp_tools("health_advisor", transport=_MCP_TRANSPORT)
+                + load_phacore_tools(("ocr",))  # health_advisor 也需要 OCR (顾问阅报告)
+            )
         except Exception:
             return []
 
@@ -99,8 +102,12 @@ class HealthRecordsV2(V2Agent):
     )
 
     def get_tools(self) -> List:
+        """阶段48-19: OCR 工具从 HRM/mcpserver/ocr_tool.py 搬到 PhaCore/shared_ocr.py"""
         try:
-            return load_mcp_tools("health_records", transport=_MCP_TRANSPORT)
+            return (
+                load_mcp_tools("health_records", transport=_MCP_TRANSPORT)
+                + load_phacore_tools(("ocr",))   # OCR 是 PhaCore owner
+            )
         except Exception:
             return []
 
@@ -125,8 +132,12 @@ class MedicationReminderV2(V2Agent):
     )
 
     def get_tools(self) -> List:
+        """阶段48-19: OCR tool 从 MedReminder/mcpserver/ocr_tool.py 搬到 PhaCore/shared_ocr.py"""
         try:
-            return load_mcp_tools("medication_reminder", transport=_MCP_TRANSPORT)
+            return (
+                load_mcp_tools("medication_reminder", transport=_MCP_TRANSPORT)
+                + load_phacore_tools(("ocr",))   # re-export OCR (用于扫描药盒/处方)
+            )
         except Exception:
             return []
 
@@ -151,6 +162,7 @@ class VisitSummaryV2(V2Agent):
     )
 
     def get_tools(self) -> List:
+        """阶段48-19: 不需要 OCR (visit_summary 处理的是已抽取的 text, 不是 image)"""
         try:
             return load_mcp_tools("visit_summary", transport=_MCP_TRANSPORT)
         except Exception:

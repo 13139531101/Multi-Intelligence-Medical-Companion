@@ -53,17 +53,66 @@ AGENT_DIR_MAP = {
     "health_records": "HealthRecordsManager",
     "medication_reminder": "MedicationReminder",
     "visit_summary": "VisitSummaryGenerator",
+    # 阶段48-19: PhaCore 共享库 (跨 agent tool)
+    "PhaCore": "PhaCore",
 }
 
 
+# 阶段48-19: 把 PhaCore 共享库的 tool 文件也加进来
+PHACORE_AGENT_ALIASES = (
+    "PhaCore_shared_ocr",
+    "PhaCore_shared_reminder",
+    "PhaCore_shared_storage",
+    "PhaCore_shared_health_analysis",
+    "PhaCore_shared_notification",
+    "PhaCore_shared_a2a",
+)
+
+
 def _find_mcp_tool_files(agent_name: str) -> list[Path]:
-    """找到指定 agent 下的所有 *tool.py"""
+    """找到指定 agent 下的所有 *tool.py + PhaCore 共享文件"""
+    files: list[Path] = []
+
+    if agent_name in PHACORE_AGENT_ALIASES or agent_name == "PhaCore":
+        # PhaCore 共享库: 加载所有 shared_*.py
+        phacore_dir = _REPO_ROOT / "backend" / "PhaCore" / "mcpserver"
+        if phacore_dir.exists():
+            files.extend(sorted(phacore_dir.glob("shared_*.py")))
+        return files
+
     dir_name = AGENT_DIR_MAP.get(agent_name, agent_name)
     mcpserver_dir = _REPO_ROOT / "backend" / dir_name / "mcpserver"
     if not mcpserver_dir.exists():
         logger.debug("[mcp_discover] 目录不存在: %s", mcpserver_dir)
-        return []
-    return sorted(mcpserver_dir.glob("*_tool.py"))
+        return files
+    files.extend(sorted(mcpserver_dir.glob("*_tool.py")))
+    return files
+
+
+def discover_phacore_tools() -> list[dict]:
+    """阶段48-19: discover PhaCore 共享库的所有 tool.
+
+    只 glob 一次 PhaCore/mcpserver/shared_*.py, 给每个 tool 加 module="PhaCore".
+    """
+    all_tools: list[dict] = []
+    phacore_dir = _REPO_ROOT / "backend" / "PhaCore" / "mcpserver"
+    if not phacore_dir.exists():
+        logger.debug("[mcp_discover] PhaCore dir not found: %s", phacore_dir)
+        return all_tools
+    for f in sorted(phacore_dir.glob("shared_*.py")):
+        try:
+            src = f.read_text(encoding="utf-8")
+            tools = _extract_mcp_tools_from_source(src)
+            for t in tools:
+                # module 反映 PhaCore 子模块 (shared_ocr / shared_reminder / ...)
+                t["module"] = "PhaCore_" + f.stem.replace("shared_", "")
+                t["file"] = str(f)
+                t["agent"] = "pha_core"
+            all_tools.extend(tools)
+        except Exception as e:
+            logger.warning("[mcp_discover] PhaCore %s parse failed: %s", f, e)
+    logger.info("[mcp_discover] PhaCore shared tools: %d (from %s)", len(all_tools), phacore_dir)
+    return all_tools
 
 
 def _extract_mcp_tools_from_source(source: str) -> list[dict]:
