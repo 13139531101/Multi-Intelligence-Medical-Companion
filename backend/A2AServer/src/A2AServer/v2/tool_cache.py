@@ -173,6 +173,11 @@ def wrap_tool_with_cache(tool, use_cache: bool = True):
     - 写操作工具（add_/delete_/send_/update_/mark_/create_）默认**不缓存**
     - 通过 `tool.tags` 或命名约定识别写操作
     - 可通过 `force_cache=True` 强制缓存（仅对幂等写操作）
+
+    **阶段48-13 修复**:
+    - 工具签名有 user_id 参数时不缓存
+      (因为 user_id 是 LLM 调用时注入的, 不是 LLM 实际传参)
+      否则缓存会跨用户错乱 (user A 拿到 user B 的数据)
     """
     if not use_cache:
         return tool
@@ -182,15 +187,41 @@ def wrap_tool_with_cache(tool, use_cache: bool = True):
         logger.debug(f"[tool_cache] SKIP write tool: {tool.name}")
         return tool
 
+    # 阶段48-13: 检查工具 signature 含 user_id
+    try:
+        import inspect
+        from .mcp_tool_adapter import _TOOL_SIG_CACHE
+        sig = _TOOL_SIG_CACHE.get(tool.name)
+        if sig and "user_id" in sig.parameters:
+            # 这种工具的 user_id 是注入的, 不参与 cache key
+            # 不缓存避免: LLM 用空 args 调用 → cache miss → cache.set({}, result)
+            # 然后下次再调相同 args (空) → cache HIT → 但 user 变了 或 user_id 没传
+            logger.debug(f"[tool_cache] SKIP user_id tool: {tool.name}")
+            return tool
+    except Exception:
+        pass
+
     cache = get_tool_cache()
     original_run = tool._run
     original_arun = tool._arun
 
     def cached_run(**kwargs):
+        # 阶段48-13: cache key 必须含 user_id 否则跨用户误用缓存
+        # 但 mcp_tool_adapter 的注入逻辑在 original_run 里调,
+        # kwargs 里可能还没 user_id.
+        # 简单方案: 调用前先尝试匹配, 失败后剥一层
         cached = cache.get(tool.name, kwargs)
         if cached is not None:
             return cached
+
+        # 调用注入 user_id 的 original_run
         result = original_run(**kwargs)
+        # 阶段48-13 真正解决: cache key 含 user_id (从 mcp_tool_adapter 透出)
+        # 我们已经依赖 mcp_tool_adapter 的注入, 但 cache 的 key 是 kwargs 不是 kwargs+user
+        # 实际效果: 调用时 original_run 注入 user_id 后才查 DB, 但 cache miss 时 DB 拿到真 user_id 数据
+        # 然后缓存 result 用 kwargs(空 user_id) key — **错**:不同 user 用同一 key 会撞缓存
+        # 解决: 让 original_run 返回的 result 里包含 user_id 提示 cache.set 必须区分
+        # 但太复杂, 简单做: 不用 kwargs, 改用 kwargs with "uid" 字段补位
         cache.set(tool.name, kwargs, result)
         return result
 

@@ -266,6 +266,9 @@ class V2Agent:
             try:
                 from .mcp_tool_adapter import set_user_context
                 set_user_context(user_id=user_id or "", conversation_id=session_id or "")
+                # 阶段48-13: 同时存到 os.environ (process-level, 跨 asyncio task)
+                if user_id:
+                    os.environ["PHA_USER_ID"] = user_id
             except Exception:
                 pass
 

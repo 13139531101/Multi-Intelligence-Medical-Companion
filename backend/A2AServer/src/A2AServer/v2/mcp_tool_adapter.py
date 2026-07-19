@@ -30,6 +30,9 @@ logger = logging.getLogger(__name__)
 # 缓存：避免每次重新加载
 _TOOL_CACHE: dict[str, list] = {}
 
+# 阶段48-13: 进程级设置 (跨 asyncio task)
+import os
+
 # 阶段48-13: thread-local context 用来跨 async 边界传递 user_id
 import contextvars as _cv
 _current_user_id: _cv.ContextVar[str] = _cv.ContextVar("pha_current_user_id", default="")
@@ -41,13 +44,24 @@ def set_user_context(user_id: str = "", conversation_id: str = "") -> None:
 
     让 BaseTool 包装器自动注入到 tool args.
     v2_agent.stream 应当在进入循环前调用一次.
+
+    双向设置:
+    1. ContextVar (同 task 内)
+    2. Module-level fallback (跨 task / LangGraph tool_node)
     """
+    global _MODULE_LEVEL_USER_ID
     _current_user_id.set(user_id or "")
     _current_conversation_id.set(conversation_id or "")
+    _MODULE_LEVEL_USER_ID = user_id or ""
 
 
 def _inject_user_id_if_needed(kwargs: dict, tool_name: str) -> dict:
     """阶段48-13: 缺 user_id 时从 context 注入. 避免 LLM 忘记传.
+
+    优先级:
+    1. kwargs 已有 user_id (LLM 自己传了)
+    2. ContextVar (在同一个 asyncio task 内的 tool_node 调用)
+    3. 全局 fallback (LangGraph 跨 task 调用的情况)
 
     只在 tool 的 args_schema 里出现 'user_id' 字段时注入.
     """
@@ -63,12 +77,25 @@ def _inject_user_id_if_needed(kwargs: dict, tool_name: str) -> dict:
     if cur and str(cur).strip():
         return kwargs
 
+    # 阶段48-13: 优先用 ContextVar (同 task 内)
     ctx_uid = _current_user_id.get()
+    if not ctx_uid:
+        # 阶段48-13 fallback: LangGraph tool_node 在 worker task 里跑,
+        # ContextVar 可能没传到. 退化到 module-level
+        ctx_uid = _MODULE_LEVEL_USER_ID or ""
+    if not ctx_uid:
+        # 阶段48-13 fallback2: 进程级 (同 Python 进程内全局)
+        ctx_uid = os.environ.get("PHA_USER_ID", "")
+
     if ctx_uid:
         new_kwargs = dict(kwargs)
         new_kwargs["user_id"] = ctx_uid
         return new_kwargs
     return kwargs
+
+
+# 阶段48-13 fallback: 模块级变量, 用来跨 ContextVar 失效场景 (如 LangGraph tool_node)
+_MODULE_LEVEL_USER_ID: str = ""
 
 
 # 阶段48-13: cache tool signatures so _inject_user_id_if_needed doesn't refllect
@@ -206,6 +233,10 @@ def _wrap_function_as_base_tool(
         for param_name, param in tool_sig.parameters.items():
             annotation = param.annotation if param.annotation != inspect.Parameter.empty else str
             default = param.default if param.default != inspect.Parameter.empty else ...
+            # 阶段48-13: user_id 字段是 mcp_tool_adapter 注入的, 不是 LLM 必传的
+            # 让它 default = "" 避免 Pydantic validation 拒绝空 args
+            if param_name == "user_id":
+                default = ""
             fields[param_name] = (annotation, default)
 
         if fields:
@@ -222,7 +253,6 @@ def _wrap_function_as_base_tool(
                 try:
                     # 过滤掉 LangChain 注入的多余字段
                     valid_kwargs = {k: v for k, v in kwargs.items() if k in tool_sig.parameters}
-                    # 阶段48-13: 缺 user_id 时从 context 自动注入
                     valid_kwargs = _inject_user_id_if_needed(valid_kwargs, tool_name)
                     if not valid_kwargs and tool_sig.parameters:
                         return "Error: missing required arguments"
