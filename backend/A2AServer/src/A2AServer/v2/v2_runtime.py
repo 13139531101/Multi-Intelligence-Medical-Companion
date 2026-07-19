@@ -190,12 +190,48 @@ class V2AgentRuntime:
         # 1. PIIMiddleware - 邮箱 / URL 脱敏
         # ============================================================
         if PIIMiddleware is not None:
-            for pii_type in ("email", "url"):
+            # Built-in types: email, url, ip, mac_address, credit_card
+            # Custom regex: phone (中国手机号 + 国际格式)
+            # apply_to_output=True: LLM 输出也 redact (避免 LLM "泄露" 用户数据)
+            # apply_to_tool_results=True: tool 输出也 redact (避免数据库里查出来的 PII 被 LLM re-emit)
+            for pii_type in (
+                "email",         # 邮箱
+                "url",           # URL
+                "ip",            # IP 地址 (哈希保留反向追溯)
+                "credit_card",   # 信用卡号 (mask 保留后 4 位)
+            ):
+                strategy = "hash" if pii_type == "ip" else ("mask" if pii_type == "credit_card" else "redact")
                 try:
-                    m = PIIMiddleware(pii_type=pii_type, strategy="redact")
+                    m = PIIMiddleware(
+                        pii_type=pii_type,
+                        strategy=strategy,
+                        apply_to_input=True,
+                        apply_to_output=True,
+                        apply_to_tool_results=True,
+                    )
                     middlewares.append(m)
                 except Exception as e:
                     logger.debug("[v2_runtime] PIIMiddleware[%s] 失败: %s", pii_type, e)
+            # 自定义: phone (中国 11 位手机号 + 国际格式)
+            try:
+                # 匹配 +86 138xxxxxxx, 138xxxxxxx, 138-xxxx-xxxx 等
+                phone_regex = (
+                    r"(?:\+?86[-\s]?)?"              # 可选 +86
+                    r"1[3-9]\d{9}"                     # 中国 11 位手机
+                    r"|"
+                    r"\+\d{1,3}[-\s]?\d{3,14}"        # 国际格式
+                )
+                m = PIIMiddleware(
+                    pii_type="phone",
+                    detector=phone_regex,
+                    strategy="mask",
+                    apply_to_input=True,
+                    apply_to_output=True,
+                    apply_to_tool_results=True,
+                )
+                middlewares.append(m)
+            except Exception as e:
+                logger.debug("[v2_runtime] PIIMiddleware[phone custom] 失败: %s", e)
 
         # ============================================================
         # 2. SummarizationMiddleware - 长上下文自动压缩 (节省 token)
@@ -218,9 +254,21 @@ class V2AgentRuntime:
                 from .dangerous_tools import get_interrupt_config
                 interrupt_cfg = get_interrupt_config(agent_name)
                 if interrupt_cfg:
+                    # 每个 tool 配置允许的决策 + 是否需要描述 + 等待提示
+                    # 4 种: approve / edit / reject / respond
+                    allowed = {
+                        "delete_": ["approve", "reject"],          # 删除操作简单 confirm/cancel
+                        "send_": ["approve", "reject", "respond"], # 通知 类
+                        "default": ["approve", "edit", "reject"],  # 默认多种
+                    }
                     m = HumanInTheLoopMiddleware(
                         interrupt_on=interrupt_cfg,
-                        description_prefix="[PHA 安全] 该操作需要您确认后才会执行",
+                        description_prefix=(
+                            "🔒 [PHA 安全审核] 以下操作不可逆或影响大, 请确认:\n"
+                            "  • ✅ 同意 (approve)\n"
+                            "  • ✏️ 修改参数 (edit)\n"
+                            "  • ❌ 拒绝 (reject)\n"
+                        ),
                     )
                     middlewares.append(m)
             except Exception as e:
@@ -299,8 +347,20 @@ class V2AgentRuntime:
         # ============================================================
         if ContextEditingMiddleware is not None:
             try:
-                # 默认用 ClearToolUsesEdit (跟 Anthropic default 一致)
-                m = ContextEditingMiddleware(token_count_method="approximate")
+                # trigger=8000 tokens 时开始清理太老的 tool 输出
+                # keep=5: 保留最近 5 个 tool_use 不清
+                # clear_at_least=2000: 至少清出 2000 tokens 才执行 (避免频繁触发)
+                # clear_tool_inputs=False: 保留 tool inputs (LLM 需要看参数)
+                # exclude_tools: 永远不清理的 tool (HITL 用)
+                from langchain.agents.middleware.context_editing import ClearToolUsesEdit
+                edit = ClearToolUsesEdit(
+                    trigger=8000,
+                    clear_at_least=2000,
+                    keep=5,
+                    clear_tool_inputs=False,
+                    exclude_tools=("ask_user_for_clarification",),
+                )
+                m = ContextEditingMiddleware(edits=[edit], token_count_method="approximate")
                 middlewares.append(m)
             except Exception as e:
                 logger.debug("[v2_runtime] ContextEditing 不可用: %s", e)
@@ -310,7 +370,32 @@ class V2AgentRuntime:
         # ============================================================
         if TodoListMiddleware is not None:
             try:
-                m = TodoListMiddleware()  # 默认 WRITE_TODOS_SYSTEM_PROMPT
+                # 自定义 system_prompt: 中文 + PHA 偏好 (≤7 步, 简单任务直接做)
+                pha_todo_prompt = """## `write_todos` 任务规划工具
+
+你可以使用 `write_todos` 工具来管理和规划复杂目标。
+适用于 ≥3 步的复杂任务, 简单任务直接完成即可, **不要**强写 todos 浪费时间。
+
+### 使用规则
+
+1. **不要并行调用 write_todos** (一次只调一次)
+2. **总数限制 ≤7 步** (避免 token 浪费)
+3. **每完成一步立刻标记 completed**, 别 batch
+4. **根据新信息更新列表**: 新任务可加, 失效任务可删
+5. **每步简短 (一句话)** — "评估血压数据" / "添加提醒" / "修改用药时间"
+6. **状态**: pending (未开始) / in_progress (进行中) / completed (已完成)
+
+### 不要使用 write_todos 的场景
+
+- 单步任务 (例如: 简单问候 / 闲聊)
+- 用户只是想查信息
+- 加 1 个提醒 / 改 1 个字段 — 直接做完即可, 不必写 todo
+
+### 完成 todo 后
+
+写 todos 是工作追踪, **不是答案**。最后必须给用户真实答复 (实际数据, 计算结果, 总结等)。
+"""
+                m = TodoListMiddleware(system_prompt=pha_todo_prompt)
                 middlewares.append(m)
             except Exception as e:
                 logger.debug("[v2_runtime] TodoList 不可用: %s", e)

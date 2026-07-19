@@ -10,7 +10,7 @@ h = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 print("=== Step 1: 触发 interrupt ===")
 thread_id = None
 with httpx.stream("POST", "http://localhost:13002/v2/chat/stream",
-                  json={"message": "帮我添加一个药物提醒: 鱼油软胶囊 1000mg, 每天晚上 9 点服用"},
+                  json={"message": "添加用药提醒: 钙片 500mg, 每天早上 7 点"},
                   headers=h, timeout=90) as resp:
     for line in resp.iter_lines():
         if line.startswith("data:") and "thread_id" in line:
