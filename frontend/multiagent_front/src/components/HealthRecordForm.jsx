@@ -17,17 +17,32 @@
 
 import React, { useState, useEffect, useCallback } from "react";
 import {
-  Box, Button, Card, CardContent, Chip, FormControl, Grid, IconButton,
-  InputLabel, MenuItem, Select, Stack, TextField, Typography,
-  Alert, LinearProgress,
+  Box,
+  Button,
+  Card,
+  CardContent,
+  Chip,
+  FormControl,
+  Grid,
+  IconButton,
+  InputLabel,
+  MenuItem,
+  Select,
+  Stack,
+  TextField,
+  Typography,
+  Alert,
+  LinearProgress,
 } from "@mui/material";
 import {
-  Save as SaveIcon, Close as CloseIcon, AttachFile as AttachFileIcon,
+  Save as SaveIcon,
+  Close as CloseIcon,
+  AttachFile as AttachFileIcon,
   Refresh as RefreshIcon,
 } from "@mui/icons-material";
 import HealthUploader from "./HealthUploader";
 
-const API_BASE = (import.meta?.env?.VITE_API_BASE) || "http://localhost:13002";
+const API_BASE = import.meta?.env?.VITE_API_BASE || "http://localhost:13002";
 
 const RECORD_TYPES = [
   { value: "lab_report", label: "化验报告" },
@@ -42,7 +57,7 @@ const IMPORTANCE = ["low", "medium", "high"];
 
 export default function HealthRecordForm({
   userId,
-  onCreated,        // (record) => void
+  onCreated, // (record) => void
   onCancel,
   defaultAttachedFileIds = [],
 }) {
@@ -57,7 +72,9 @@ export default function HealthRecordForm({
     importance: "medium",
     tags: "",
   });
-  const [attachedFileIds, setAttachedFileIds] = useState(defaultAttachedFileIds);
+  const [attachedFileIds, setAttachedFileIds] = useState(
+    defaultAttachedFileIds,
+  );
   const [files, setFiles] = useState([]); // 完整的 uploaded_files 列表
   const [uploaderOpen, setUploaderOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -81,7 +98,9 @@ export default function HealthRecordForm({
     } catch {}
   }, [userId]);
 
-  useEffect(() => { refreshFiles(); }, [refreshFiles]);
+  useEffect(() => {
+    refreshFiles();
+  }, [refreshFiles]);
 
   const toggleAttach = (fid) => {
     setAttachedFileIds((prev) =>
@@ -90,61 +109,58 @@ export default function HealthRecordForm({
   };
 
   const submit = async () => {
-    setError(""); setInfo("");
+    setError("");
+    setInfo("");
     if (!form.title.trim()) {
       setError("请填标题");
       return;
     }
     setBusy(true);
     try {
-      // Step 1: 直接 DB style — POST /api/v2/create-record-and-attach (下一步实现).
-      // 这里先两步走:  POST record，然后 attach file_ids
+      // 阶段48-22 v2+: 单步合接口 /api/v2/create-record-and-attach
+      // 一步同时: 创建 record + 挂 attached_file_ids, 失败自动回滚 record
       const payload = {
-        title: form.title.trim(),
-        record_type: form.record_type,
-        record_date: form.record_date || null,
-        hospital: form.hospital || "",
-        doctor: form.doctor || "",
-        summary: form.summary || "",
-        content: form.content || "",
-        importance: form.importance,
-        tags: form.tags ? form.tags.split(",").map((s) => s.trim()).filter(Boolean) : [],
+        target_table: "health_records",
+        record: {
+          title: form.title.trim(),
+          record_type: form.record_type,
+          record_date: form.record_date || null,
+          hospital: form.hospital || "",
+          doctor: form.doctor || "",
+          summary: form.summary || "",
+          content: form.content || "",
+          importance: form.importance,
+          tags: form.tags
+            ? form.tags
+                .split(",")
+                .map((s) => s.trim())
+                .filter(Boolean)
+            : [],
+        },
+        attached_file_ids: attachedFileIds,
       };
-
-      // NB: /api/health-records 当前会 500 (proxy bug), 这里直接走 DB 一样的 endpoint
-      //    我们创建一个 v2 复合端点 — 但现阶段打调试讯号
-      const createUrl = `${API_BASE}/api/health-records?user_id=${encodeURIComponent(userId)}`;
-      const r = await fetch(createUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...getAuth() },
-        body: JSON.stringify(payload),
-      });
-
+      const r = await fetch(
+        `${API_BASE}/api/v2/create-record-and-attach?user_id=${encodeURIComponent(userId)}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...getAuth() },
+          body: JSON.stringify(payload),
+        },
+      );
       if (!r.ok) {
         const t = await r.text();
-        throw new Error(`create record failed: ${r.status} ${t.slice(0, 200)}`);
-      }
-      const rec = await r.json();
-      const rid = rec.id;
-
-      // Step 2: attach files
-      if (attachedFileIds.length > 0) {
-        const r2 = await fetch(
-          `${API_BASE}/api/v2-attach/health_records/${rid}/attach-files?user_id=${encodeURIComponent(userId)}`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json", ...getAuth() },
-            body: JSON.stringify({ file_ids: attachedFileIds, replace: true }),
-          },
+        throw new Error(
+          `one-step create failed: ${r.status} ${t.slice(0, 200)}`,
         );
-        if (!r2.ok) {
-          const t = await r2.text();
-          throw new Error(`attach files failed: ${r2.status} ${t.slice(0, 200)}`);
-        }
       }
-
-      setInfo(`创建成功 (id=${rid.slice(0,8)}…)  +${attachedFileIds.length} 附件`);
-      onCreated?.(rec, attachedFileIds);
+      const res = await r.json();
+      const warn = res.warnings?.length
+        ? `  ⚠ ${res.warnings.length} warning(s)`
+        : "";
+      setInfo(
+        `创建成功 ${warn} — ${res.attached_count} 附件挂上 (id=${res.record_id.slice(0, 8)}…)`,
+      );
+      onCreated?.(res, attachedFileIds);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -159,17 +175,29 @@ export default function HealthRecordForm({
           <Typography variant="h6">新增健康档案</Typography>
           <Box sx={{ flex: 1 }} />
           {onCancel && (
-            <IconButton size="small" onClick={onCancel}><CloseIcon /></IconButton>
+            <IconButton size="small" onClick={onCancel}>
+              <CloseIcon />
+            </IconButton>
           )}
         </Stack>
 
-        {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
-        {info && <Alert severity="success" sx={{ mb: 2 }}>{info}</Alert>}
+        {error && (
+          <Alert severity="error" sx={{ mb: 2 }}>
+            {error}
+          </Alert>
+        )}
+        {info && (
+          <Alert severity="success" sx={{ mb: 2 }}>
+            {info}
+          </Alert>
+        )}
 
         <Grid container spacing={2}>
           <Grid item xs={12} sm={8}>
             <TextField
-              fullWidth size="small" label="标题 *"
+              fullWidth
+              size="small"
+              label="标题 *"
               value={form.title}
               onChange={(e) => setForm({ ...form, title: e.target.value })}
               placeholder="例: 2024-01 体检报告"
@@ -181,10 +209,14 @@ export default function HealthRecordForm({
               <Select
                 value={form.record_type}
                 label="类型"
-                onChange={(e) => setForm({ ...form, record_type: e.target.value })}
+                onChange={(e) =>
+                  setForm({ ...form, record_type: e.target.value })
+                }
               >
                 {RECORD_TYPES.map((t) => (
-                  <MenuItem key={t.value} value={t.value}>{t.label}</MenuItem>
+                  <MenuItem key={t.value} value={t.value}>
+                    {t.label}
+                  </MenuItem>
                 ))}
               </Select>
             </FormControl>
@@ -192,10 +224,15 @@ export default function HealthRecordForm({
 
           <Grid item xs={12} sm={4}>
             <TextField
-              fullWidth size="small" type="date" label="日期"
+              fullWidth
+              size="small"
+              type="date"
+              label="日期"
               InputLabelProps={{ shrink: true }}
               value={form.record_date}
-              onChange={(e) => setForm({ ...form, record_date: e.target.value })}
+              onChange={(e) =>
+                setForm({ ...form, record_date: e.target.value })
+              }
             />
           </Grid>
           <Grid item xs={12} sm={4}>
@@ -204,10 +241,14 @@ export default function HealthRecordForm({
               <Select
                 value={form.importance}
                 label="重要性"
-                onChange={(e) => setForm({ ...form, importance: e.target.value })}
+                onChange={(e) =>
+                  setForm({ ...form, importance: e.target.value })
+                }
               >
                 {IMPORTANCE.map((v) => (
-                  <MenuItem key={v} value={v}>{v}</MenuItem>
+                  <MenuItem key={v} value={v}>
+                    {v}
+                  </MenuItem>
                 ))}
               </Select>
             </FormControl>
@@ -215,7 +256,9 @@ export default function HealthRecordForm({
 
           <Grid item xs={12} sm={4}>
             <TextField
-              fullWidth size="small" label="医院"
+              fullWidth
+              size="small"
+              label="医院"
               value={form.hospital}
               onChange={(e) => setForm({ ...form, hospital: e.target.value })}
             />
@@ -223,14 +266,18 @@ export default function HealthRecordForm({
 
           <Grid item xs={12} sm={6}>
             <TextField
-              fullWidth size="small" label="医生"
+              fullWidth
+              size="small"
+              label="医生"
               value={form.doctor}
               onChange={(e) => setForm({ ...form, doctor: e.target.value })}
             />
           </Grid>
           <Grid item xs={12} sm={6}>
             <TextField
-              fullWidth size="small" label="标签 (逗号分隔)"
+              fullWidth
+              size="small"
+              label="标签 (逗号分隔)"
               value={form.tags}
               onChange={(e) => setForm({ ...form, tags: e.target.value })}
               placeholder="体检, 高血糖"
@@ -239,18 +286,24 @@ export default function HealthRecordForm({
 
           <Grid item xs={12}>
             <TextField
-              fullWidth size="small" label="摘要"
+              fullWidth
+              size="small"
+              label="摘要"
               value={form.summary}
               onChange={(e) => setForm({ ...form, summary: e.target.value })}
-              multiline rows={2}
+              multiline
+              rows={2}
             />
           </Grid>
           <Grid item xs={12}>
             <TextField
-              fullWidth size="small" label="详细 (任意 OCR / 抄录内容)"
+              fullWidth
+              size="small"
+              label="详细 (任意 OCR / 抄录内容)"
               value={form.content}
               onChange={(e) => setForm({ ...form, content: e.target.value })}
-              multiline rows={3}
+              multiline
+              rows={3}
             />
           </Grid>
         </Grid>
@@ -263,7 +316,11 @@ export default function HealthRecordForm({
               附件 ({attachedFileIds.length} / {files.length})
             </Typography>
             <Box sx={{ flex: 1 }} />
-            <IconButton size="small" onClick={refreshFiles} title="刷新文件列表">
+            <IconButton
+              size="small"
+              onClick={refreshFiles}
+              title="刷新文件列表"
+            >
               <RefreshIcon fontSize="small" />
             </IconButton>
             <Button
@@ -276,7 +333,15 @@ export default function HealthRecordForm({
           </Stack>
 
           {uploaderOpen && (
-            <Box sx={{ mb: 2, p: 1.5, border: "1px dashed", borderColor: "divider", borderRadius: 1 }}>
+            <Box
+              sx={{
+                mb: 2,
+                p: 1.5,
+                border: "1px dashed",
+                borderColor: "divider",
+                borderRadius: 1,
+              }}
+            >
               <HealthUploader
                 userId={userId}
                 domain="pha"
@@ -305,11 +370,15 @@ export default function HealthRecordForm({
                     key={f.id}
                     label={
                       <Box>
-                        <Typography variant="caption" sx={{ display: "block", fontWeight: 500 }}>
+                        <Typography
+                          variant="caption"
+                          sx={{ display: "block", fontWeight: 500 }}
+                        >
                           {f.original_name}
                         </Typography>
                         <Typography variant="caption" sx={{ opacity: 0.7 }}>
-                          {(f.size_bytes / 1024).toFixed(1)}KB · OCR {f.ocr_status}
+                          {(f.size_bytes / 1024).toFixed(1)}KB · OCR{" "}
+                          {f.ocr_status}
                         </Typography>
                       </Box>
                     }
@@ -327,15 +396,25 @@ export default function HealthRecordForm({
 
         {busy && <LinearProgress sx={{ mt: 2 }} />}
 
-        <Stack direction="row" spacing={1} sx={{ mt: 3 }} justifyContent="flex-end">
-          {onCancel && <Button onClick={onCancel} disabled={busy}>取消</Button>}
+        <Stack
+          direction="row"
+          spacing={1}
+          sx={{ mt: 3 }}
+          justifyContent="flex-end"
+        >
+          {onCancel && (
+            <Button onClick={onCancel} disabled={busy}>
+              取消
+            </Button>
+          )}
           <Button
             variant="contained"
             startIcon={<SaveIcon />}
             onClick={submit}
             disabled={busy}
           >
-            创建档案 {attachedFileIds.length > 0 && `+${attachedFileIds.length} 附件`}
+            创建档案{" "}
+            {attachedFileIds.length > 0 && `+${attachedFileIds.length} 附件`}
           </Button>
         </Stack>
       </CardContent>

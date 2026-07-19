@@ -183,6 +183,14 @@ try:
 except Exception as _e:
     print(f"[hostapi] v2 record-attach mount failed: {_e}")
 
+# 阶段48-22 v2+: 单步合接口 create-record-and-attach (1 步到位的 API)
+try:
+    from A2AServer.v2.record_create_api import router as record_create_router
+    app.include_router(record_create_router)
+    print("[hostapi] v2 create-record-and-attach mounted: /api/v2/create-record-and-attach")
+except Exception as _e:
+    print(f"[hostapi] v2 create-record-and-attach mount failed: {_e}")
+
 @app.on_event("startup")
 async def startup_event():
     """应用启动时尝试初始化记忆系统"""
