@@ -60,6 +60,7 @@ import Header from "../components/HealthHeader";
 import AgentQuickFab from "../components/AgentQuickFab";
 import DomainSwitcher from "../components/DomainSwitcher"; // 阶段48-21
 import ManifestBadge from "../components/ManifestBadge"; // 阶段48-21
+import HealthUploader from "../components/HealthUploader"; // 阶段48-22
 import {
   smartChat,
   getConsultationHistory,
@@ -350,6 +351,20 @@ export default function NewChat() {
     () => setManifestRefresh((k) => k + 1),
     [],
   );
+
+  // 阶段48-22: 上传面板折叠状态 (由附件按钮触发)
+  const [uploaderOpen, setUploaderOpen] = useState(false);
+  const currentUserId = (() => {
+    try {
+      const auth =
+        localStorage.getItem("auth") || sessionStorage.getItem("auth");
+      if (auth) {
+        const a = JSON.parse(auth);
+        return a?.user?.user_id || a?.user_id;
+      }
+    } catch {}
+    return "user_4e3ef0b3f49d8d4433e0b4420a3bae2a"; // demo fallback
+  })();
 
   const [messages, setMessages] = useState(
     initialQ
@@ -1253,9 +1268,12 @@ export default function NewChat() {
       >
         <Container maxWidth="md" sx={{ px: { xs: 0, sm: 2 } }}>
           <Stack direction="row" alignItems="flex-end" spacing={1}>
-            <Tooltip title="附件">
-              <IconButton size="small">
-                <AttachFile />
+            <Tooltip title="上传图片/文件 (阶段48-22 自动 OCR + attach 到 health_records)">
+              <IconButton
+                size="small"
+                onClick={() => setUploaderOpen((v) => !v)}
+              >
+                <AttachFile color={uploaderOpen ? "primary" : "inherit"} />
               </IconButton>
             </Tooltip>
             <TextField
@@ -1303,6 +1321,54 @@ export default function NewChat() {
           </Stack>
         </Container>
       </Paper>
+
+      {/* 阶段48-22: 上传面板 (折叠式, 出现在输入框下方) */}
+      {uploaderOpen && (
+        <Paper
+          square
+          sx={{
+            borderTop: "1px solid",
+            borderColor: "divider",
+            py: 2,
+            px: 2,
+            bgcolor: "grey.50",
+            maxHeight: 420,
+            overflow: "auto",
+          }}
+        >
+          <Container maxWidth="md" sx={{ px: { xs: 0, sm: 2 } }}>
+            <Stack
+              direction="row"
+              spacing={2}
+              sx={{ flexWrap: "wrap", gap: 2 }}
+            >
+              <Box sx={{ flex: 1, minWidth: 280 }}>
+                <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                  📎 健康档案上传
+                </Typography>
+                <HealthUploader
+                  userId={currentUserId}
+                  domain="pha"
+                  purpose="health_record"
+                  purposeLabel="健康档案"
+                  onUploaded={(f) => console.log("uploaded", f)}
+                />
+              </Box>
+              <Box sx={{ flex: 1, minWidth: 280 }}>
+                <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                  🏥 就诊摘要上传
+                </Typography>
+                <HealthUploader
+                  userId={currentUserId}
+                  domain="pha"
+                  purpose="visit_summary"
+                  purposeLabel="就诊摘要"
+                />
+              </Box>
+            </Stack>
+          </Container>
+        </Paper>
+      )}
 
       {/* 历史记录 Drawer */}
       <Drawer
