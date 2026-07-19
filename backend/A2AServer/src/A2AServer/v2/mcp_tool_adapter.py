@@ -107,18 +107,19 @@ def register_tool_sig(name: str, sig: inspect.Signature) -> None:
     _TOOL_SIG_CACHE[name] = sig
 
 
-def load_mcp_tools(agent_name: str, *, use_real: bool = True) -> list:
+def load_mcp_tools(agent_name: str, *, use_real: bool = True, transport: str = "streamable_http") -> list:
     """
     加载指定 agent 的 MCP 工具列表
 
     Args:
         agent_name: agent 标识（health_advisor / health_records / ...）
         use_real: True 用真实 MCP 工具；False 用 stub
+        transport: 阶段48-15: 'streamable_http' (默认) / 'stdio' / 'inprocess'
 
     Returns:
         list of LangChain BaseTool
     """
-    cache_key = f"{agent_name}:{use_real}"
+    cache_key = f"{agent_name}:{use_real}:{transport}"
     if cache_key in _TOOL_CACHE:
         return _TOOL_CACHE[cache_key]
 
@@ -127,7 +128,7 @@ def load_mcp_tools(agent_name: str, *, use_real: bool = True) -> list:
         _TOOL_CACHE[cache_key] = tools
         return tools
 
-    tools = _load_real_mcp_tools(agent_name)
+    tools = _load_real_mcp_tools(agent_name, transport=transport)
     if not tools:
         logger.warning(
             "[mcp_tool_adapter] agent=%s 真实工具为空，回退 stub", agent_name
@@ -143,8 +144,531 @@ def load_mcp_tools(agent_name: str, *, use_real: bool = True) -> list:
     return tools
 
 
-def _load_real_mcp_tools(agent_name: str) -> list:
-    """从 backend/<Agent>/mcpserver 加载真实 MCP 工具"""
+def _load_real_mcp_tools(agent_name: str, *, transport: str = "stdio") -> list:
+    """从 backend/<Agent>/mcpserver 加载真实 MCP 工具.
+
+    阶段48-15: 支持 3 种 transport.
+      - transport='stdio': spawn 子进程 + JSON-RPC over stdio
+      - transport='streamable_http': HTTP/SSE (MCP 协议)
+      - transport='inprocess': legacy in-process import
+
+    默认 'stdio'. HTTP 失败时 fallback stdio, 再失败 fallback in-process.
+    """
+    if transport == "stdio":
+        stdio_tools = _load_stdio_mcp_tools(agent_name)
+        if stdio_tools:
+            return stdio_tools
+        logger.warning(
+            "[mcp_tool_adapter] agent=%s stdio 返回 0 tool, 退到 in-process",
+            agent_name,
+        )
+    elif transport == "streamable_http":
+        http_tools = _load_http_mcp_tools(agent_name)
+        if http_tools:
+            return http_tools
+        logger.warning(
+            "[mcp_tool_adapter] agent=%s http 返回 0 tool, 退到 stdio",
+            agent_name,
+        )
+        stdio_tools = _load_stdio_mcp_tools(agent_name)
+        if stdio_tools:
+            return stdio_tools
+
+    return _load_inprocess_mcp_tools(agent_name)
+
+
+def _load_stdio_mcp_tools(agent_name: str) -> list:
+    """阶段48-15: 真正的 MCP stdio transport.
+
+    每个 agent 自动跑 1 个 sub-process, 一次性 import 所有 *_tool.py,
+    JSON-RPC over stdio 通讯. LangChain 侧用 MultiServerMCPClient / load_mcp_tools.
+    """
+    try:
+        import os
+        from .mcp_discover import AGENT_DIR_MAP
+        dir_name = AGENT_DIR_MAP.get(agent_name, agent_name)
+        # 容器内固定路径; host 上用 repo_root + backend
+        backend_dir = "/app/backend"
+
+        mcpserver_dir = os.path.join(backend_dir, dir_name, "mcpserver")
+        if not os.path.isdir(mcpserver_dir):
+            logger.warning("[mcp_tool_adapter:stdio] dir not found: %s", mcpserver_dir)
+            return []
+
+        tool_files = sorted(
+            f for f in os.listdir(mcpserver_dir)
+            if f.endswith("_tool.py") and not f.startswith("_")
+        )
+        if not tool_files:
+            return []
+
+        # spawn 1 个整合 stdio server, 该 server 接受 agent_name 然后动态导入
+        # 用一个统一的入口: backend.<Agent>.mcpserver._stdio_starter
+        starter_pkg = f"{dir_name}.mcpserver._stdio_starter"
+        starter_path = os.path.join(mcpserver_dir, "_stdio_starter.py")
+        _ensure_stdio_starter(starter_path, dir_name, tool_files, mcpserver_dir)
+
+        # 启动子进程 (stdin/stdout 通讯)
+        from mcp import StdioServerParameters, stdio_client
+        from mcp.client.session import ClientSession
+        from langchain_mcp_adapters.tools import load_mcp_tools as lc_load_tools
+
+        async def _init():
+            # 把 DB / API 等关键 env vars 透传给 subprocess
+            child_env = {"PYTHONPATH": backend_dir, "PATH": os.environ.get("PATH", "")}
+            for key in (
+                "MEMORY_DB_HOST", "MEMORY_DB_PORT", "MEMORY_DB_USER",
+                "MEMORY_DB_PASSWORD", "MEMORY_DB_NAME", "MEMORY_DB_SSLMODE",
+                "DEEPSEEK_API_KEY", "OPENAI_API_KEY", "DEEPSEEK_BASE_URL",
+                "OPENAI_API_BASE", "OPENAI_BASE_URL",
+            ):
+                v = os.environ.get(key)
+                if v is not None:
+                    child_env[key] = v
+            params = StdioServerParameters(
+                command="python",
+                args=["-m", starter_pkg],
+                env=child_env,
+            )
+            async with stdio_client(params) as (read, write):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    lc_tools = await lc_load_tools(session=session)
+                    return lc_tools
+
+        # FastAPI 是同步 thread, asyncio.run 不能在已有 loop 里跑, 用 ThreadPoolExecutor
+        import asyncio, concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            tools = pool.submit(asyncio.run, _init()).result(timeout=60)
+
+        # 阶段48-15: 给 tool 加 user_id 注入包装器
+        wrapped = []
+        for t in tools:
+            try:
+                wrapped.append(_wrap_mcp_tool_with_userid(t))
+            except Exception as e:
+                logger.debug("[mcp_tool_adapter:stdio] wrap %s fail: %s", t.name, e)
+                wrapped.append(t)
+        logger.info(
+            "[mcp_tool_adapter:stdio] agent=%s loaded %d tools via stdio",
+            agent_name, len(wrapped),
+        )
+        return wrapped
+
+    except Exception as e:
+        logger.warning(
+            "[mcp_tool_adapter:stdio] agent=%s 加载失败: %s", agent_name, e,
+        )
+        return []
+
+
+# 阶段48-15: HTTP transport port 分配 (每个 agent 1 个)
+_AGENT_HTTP_PORT = {
+    "health_advisor": 9101,
+    "health_records": 9102,
+    "medication_reminder": 9103,
+    "visit_summary": 9104,
+}
+
+# 阶段48-15: 当前进程里已启动的 HTTP server (避免重复 spawn)
+_HTTP_SERVER_PROCS: dict[str, "subprocess.Popen"] = {}
+
+
+def _load_http_mcp_tools(agent_name: str) -> list:
+    """阶段48-15: 通过 Streamable HTTP 调 MCP server.
+
+    1) spawn 一个 sub-process 跑 `_http_starter.py` (它跑 mcp.run('streamable-http'))
+    2) 等 service up
+    3) 用 load_mcp_tools(connection={'transport': 'streamable_http', 'url': ...})
+    """
+    port = _AGENT_HTTP_PORT.get(agent_name)
+    if port is None:
+        logger.warning("[mcp_tool_adapter:http] agent=%s 没分配 port", agent_name)
+        return []
+
+    import os
+    from .mcp_discover import AGENT_DIR_MAP
+    dir_name = AGENT_DIR_MAP.get(agent_name, agent_name)
+    backend_dir = "/app/backend"
+    mcpserver_dir = os.path.join(backend_dir, dir_name, "mcpserver")
+    if not os.path.isdir(mcpserver_dir):
+        return []
+    tool_files = sorted(
+        f for f in os.listdir(mcpserver_dir)
+        if f.endswith("_tool.py") and not f.startswith("_")
+    )
+    if not tool_files:
+        return []
+
+    starter_path = os.path.join(mcpserver_dir, "_http_starter.py")
+    _ensure_http_starter(starter_path, dir_name, tool_files, mcpserver_dir, port)
+
+    # 确保 server 启动
+    starter_pkg = f"{dir_name}.mcpserver._http_starter"
+    if agent_name not in _HTTP_SERVER_PROCS:
+        _spawn_http_server(agent_name, starter_pkg, port, backend_dir)
+    base_url = f"http://127.0.0.1:{port}/mcp"
+
+    # 调 load_mcp_tools via HTTP
+    try:
+        from langchain_mcp_adapters.tools import load_mcp_tools as lc_load_tools
+
+        async def _init():
+            from langchain_mcp_adapters.sessions import StreamableHttpConnection
+            conn = StreamableHttpConnection(
+                transport="streamable_http",
+                url=base_url,
+            )
+            # session= 是 positional, 必须显式 key
+            tools = await lc_load_tools(None, connection=conn)
+            return tools
+
+        import asyncio, concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            tools = pool.submit(asyncio.run, _init()).result(timeout=60)
+
+        # 阶段48-15: 给 tools 包一层: 缺 user_id 时自动从 PHA_USER_ID / ContextVar 注入
+        # 这样 LLM 调 {}(空 args) 时, tool 拿到 current user_id
+        wrapped = []
+        for t in tools:
+            try:
+                wrapped.append(_wrap_mcp_tool_with_userid(t))
+            except Exception as e:
+                logger.debug("[mcp_tool_adapter:http] wrap %s fail: %s", t.name, e)
+                wrapped.append(t)
+
+        logger.info(
+            "[mcp_tool_adapter:http] agent=%s loaded %d tools via http://127.0.0.1:%d",
+            agent_name, len(wrapped), port,
+        )
+        return wrapped
+
+    except Exception as e:
+        logger.warning(
+            "[mcp_tool_adapter:http] agent=%s load失败: %s", agent_name, e,
+        )
+        return []
+
+
+def _wrap_mcp_tool_with_userid(t):
+    """阶段48-15: 给 langchain_mcp_adapters 返的 BaseTool 注入 user_id.
+
+    2 step fix:
+      1. 修改 args_schema: user_id 字段 default="" 让 Pydantic 允许空 args
+         (因为 LC-MCP 用 dynamic model 创建, user_id 没有 default)
+      2. _run 时注入 PHA_USER_ID (LLM 不会传 user_id, 我们从 context 拿)
+    """
+    sig = None
+    try:
+        underlying = None
+        if hasattr(t, "_run"):
+            underlying = t._run
+            if hasattr(underlying, "__wrapped__"):
+                underlying = underlying.__wrapped__
+            import inspect as _inspect
+            try:
+                sig = _inspect.signature(underlying)
+            except Exception:
+                sig = None
+    except Exception:
+        pass
+
+    # 2 sources: (a) args_schema 里 user_id, (b) tool 本身 user_id in signature
+    schema = getattr(t, "args_schema", None)
+    has_user_id = False
+    if schema is None:
+        has_user_id = False
+    elif isinstance(schema, dict):
+        has_user_id = "user_id" in schema.get("properties", {})
+    elif hasattr(schema, "model_fields"):
+        has_user_id = "user_id" in schema.model_fields
+
+    # If sig-based detection failed (LC-MCP wrapping), use schema-based
+    if not has_user_id and not (sig and "user_id" in sig.parameters):
+        return t
+
+    # Step 1: 改 args_schema 让 user_id optional
+    # LC-MCP 工具的 args_schema 是 dict (JSON Schema) 而不是 Pydantic Model
+    try:
+        if schema is None:
+            return t
+        # case A: dict (JSON Schema)
+        if isinstance(schema, dict):
+            if "user_id" in schema.get("properties", {}):
+                required = schema.get("required", [])
+                if "user_id" in required:
+                    schema["required"] = [r for r in required if r != "user_id"]
+                # Set default value too
+                if "default" not in schema["properties"]["user_id"]:
+                    schema["properties"]["user_id"].setdefault("default", "")
+        # case B: Pydantic model
+        elif hasattr(schema, "model_fields"):
+            if "user_id" in schema.model_fields:
+                from pydantic import Field, create_model
+                fields = {}
+                for name, field in schema.model_fields.items():
+                    if name == "user_id":
+                        fields[name] = (str, Field(default=""))
+                    else:
+                        fields[name] = (str, Field(default=field.default if field.default is not None else ...))
+                new_schema = create_model(f"Wrapped_{t.name}_args", **fields)
+                t.args_schema = new_schema
+                if hasattr(t, "args"):
+                    t.args = new_schema
+        # 强制 invalidate Pydantic cached memo
+        if hasattr(t, "_tool_call_schema_memo"):
+            try:
+                t._tool_call_schema_memo = None
+            except Exception:
+                pass
+    except Exception as e:
+        logger.debug("[userid-wrap] schema modify failed: %s", e)
+
+    # Step 2: wrap _run + arun (LangChain LC-MCP StructuredTool uses arun for async)
+    # Get both sync _run and async coroutine for full coverage
+    original_run = getattr(t, "_run", None)
+    original_arun = getattr(t, "coroutine", None) or getattr(t, "_arun", None)
+
+    def _resolve_user_id(kwargs):
+        """从 kwargs / ContextVar / module-level / env 取 user_id (优先级)."""
+        return (
+            (kwargs.get("user_id") or "").strip()
+            or _current_user_id.get()
+            or _MODULE_LEVEL_USER_ID
+            or os.environ.get("PHA_USER_ID", "")
+        )
+
+    def wrapped_run(**kwargs):
+        cur = _resolve_user_id(kwargs)
+        if cur:
+            kwargs["user_id"] = cur
+        return original_run(**kwargs)
+
+    # Wrap both sync + async
+    t._run = wrapped_run
+    if original_arun is not None:
+        async def wrapped_arun(**kwargs):
+            cur = _resolve_user_id(kwargs)
+            if cur:
+                kwargs["user_id"] = cur
+            return await original_arun(**kwargs)
+
+        try:
+            t.coroutine = wrapped_arun
+        except Exception:
+            pass
+        try:
+            t._arun = wrapped_arun
+        except Exception:
+            pass
+    return t
+
+
+def _ensure_http_starter(starter_path: str, dir_name: str, tool_files: list, mcpserver_dir: str, port: int) -> None:
+    """生成 `_http_starter.py` 类似 stdio 但 transport='streamable-http'."""
+    # 复用 _ensure_stdio_starter 的 AST 扫描逻辑
+    import ast
+    tool_func_names = []
+    for tf in tool_files:
+        tf_path = os.path.join(mcpserver_dir, tf)
+        try:
+            src = open(tf_path, "r", encoding="utf-8").read()
+            tree = ast.parse(src)
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.FunctionDef):
+                    continue
+                has_mcp_tool = False
+                for dec in node.decorator_list:
+                    if isinstance(dec, ast.Call):
+                        fn = dec.func
+                        if (isinstance(fn, ast.Attribute) and fn.attr == "tool"
+                                and isinstance(fn.value, ast.Name) and fn.value.id == "mcp"):
+                            has_mcp_tool = True
+                            break
+                    elif isinstance(dec, ast.Attribute):
+                        if dec.attr == "tool":
+                            has_mcp_tool = True
+                            break
+                if has_mcp_tool:
+                    tool_func_names.append((tf.removesuffix(".py"), node.name))
+        except Exception:
+            pass
+
+    body_lines = [
+        '"""Auto-generated HTTP MCP starter (阶段48-15).',
+        "Streamable HTTP transport on port given by agent_name mapping.",
+        '"""',
+        'import sys',
+        'import os',
+        'import importlib',
+        'sys.path.insert(0, "/app/backend")  # noqa: E402',
+        'from mcp.server.fastmcp import FastMCP',
+        '',
+        '_mcp = FastMCP("PHA-Agent-HTTP")',
+        f'_AGENT_DIR = "{dir_name}"',
+        f'_TOOL_FUNCS = {tool_func_names!r}',
+        '_PORT = int(os.environ.get("PHA_MCP_PORT", "0"))',
+        '',
+        '_imported = []',
+        'for _mod_name, _func_name in _TOOL_FUNCS:',
+        '    try:',
+        '        _mod = importlib.import_module(f"{_AGENT_DIR}.mcpserver.{_mod_name}")',
+        '        _fn = getattr(_mod, _func_name)',
+        '        _mcp.add_tool(_fn, name=_func_name, description=(_fn.__doc__ or "").split(chr(10))[0])',
+        '    except Exception as e:',
+        '        print(f"[http_starter] fail {_mod_name}.{_func_name}: {e!r}", file=sys.stderr)',
+        '',
+        'if __name__ == "__main__":',
+        '    _mcp.settings.port = _PORT',
+        '    _mcp.run(transport="streamable-http")',
+    ]
+    body = "\n".join(body_lines) + "\n"
+    if os.path.isfile(starter_path):
+        existing = open(starter_path, "r", encoding="utf-8").read()
+        if existing == body:
+            return
+    with open(starter_path, "w", encoding="utf-8") as f:
+        f.write(body)
+
+
+def _spawn_http_server(agent_name: str, starter_pkg: str, port: int, backend_dir: str) -> None:
+    """启动 1 个 HTTP MCP server sub-process. 跨 query 复用 (singleton)."""
+    import subprocess, time, os, socket, sys
+    child_env = {"PYTHONPATH": backend_dir, "PHA_MCP_PORT": str(port), "PATH": os.environ.get("PATH", "")}
+    for key in (
+        "MEMORY_DB_HOST", "MEMORY_DB_PORT", "MEMORY_DB_USER",
+        "MEMORY_DB_PASSWORD", "MEMORY_DB_NAME", "MEMORY_DB_SSLMODE",
+        "DEEPSEEK_API_KEY", "OPENAI_API_KEY", "DEEPSEEK_BASE_URL",
+        "OPENAI_API_BASE", "OPENAI_BASE_URL",
+    ):
+        v = os.environ.get(key)
+        if v is not None:
+            child_env[key] = v
+
+    cmd = [sys.executable, "-m", starter_pkg] # type: ignore
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            env=child_env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+    except Exception as e:
+        logger.warning("[mcp_tool_adapter:http] spawn fail %s: %s", agent_name, e)
+        return
+
+    # 等端口 up
+    def _port_open() -> bool:
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.5):
+                return True
+        except OSError:
+            return False
+
+    deadline = time.time() + 15
+    while time.time() < deadline:
+        if _port_open():
+            break
+        if proc.poll() is not None:
+            logger.warning(
+                "[mcp_tool_adapter:http] agent=%s process exited code=%s stderr=%s",
+                agent_name, proc.returncode, proc.stderr.read()[:200] if proc.stderr else "",
+            )
+            return
+        time.sleep(0.3)
+    else:
+        logger.warning("[mcp_tool_adapter:http] agent=%s 启动 timeout", agent_name)
+        return
+
+    _HTTP_SERVER_PROCS[agent_name] = proc
+    logger.info("[mcp_tool_adapter:http] agent=%s HTTP server up at port %d", agent_name, port)
+
+
+def _ensure_stdio_starter(starter_path: str, dir_name: str, tool_files: list, mcpserver_dir: str) -> None:
+    """生成 / 覆盖 `_stdio_starter.py`.
+
+    关键 trick: `@mcp.tool()` 装饰不影响函数本身. 我们用静态分析 (AST) 找
+    哪些函数被 `@mcp.tool()` 装饰, 然后用 `add_tool(fn, name=name)` 显式加到
+    合并 mcp 实例.
+
+    1. 创建 1 个 FastMCP 主实例
+    2. import 每个 *_tool.py → 触发它们的装饰 + 自身的 `mcp.add_tool` 注册
+       但我们的合并实例是独立的, 所以**副作用**到它们的 module-level mcp
+       实例不会落到主 mcp. 因此我们必须手动 `add_tool`.
+    3. AST 扫每个 *_tool.py 找 `@mcp.tool()` 函数名 (用同一 discover 逻辑)
+    4. mcp.run(transport='stdio')
+
+    所以 1 process 1 server = 合并主 mcp 实例有所有 agent tools.
+    """
+    # 静态扫找 tool 函数名
+    import ast
+    tool_func_names = []
+    for tf in tool_files:
+        tf_path = os.path.join(mcpserver_dir, tf)
+        try:
+            src = open(tf_path, "r", encoding="utf-8").read()
+            tree = ast.parse(src)
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.FunctionDef):
+                    continue
+                has_mcp_tool = False
+                for dec in node.decorator_list:
+                    # @mcp.tool() 或 @mcp.tool
+                    if isinstance(dec, ast.Call):
+                        fn = dec.func
+                        if (isinstance(fn, ast.Attribute) and fn.attr == "tool"
+                                and isinstance(fn.value, ast.Name) and fn.value.id == "mcp"):
+                            has_mcp_tool = True
+                            break
+                    elif isinstance(dec, ast.Attribute):
+                        if dec.attr == "tool":
+                            has_mcp_tool = True
+                            break
+                if has_mcp_tool:
+                    tool_func_names.append((tf.removesuffix(".py"), node.name))
+        except Exception:
+            pass
+
+    body_lines = [
+        '"""Auto-generated stdio MCP starter (阶段48-15).',
+        "1 process = 1 FastMCP 主实例 = 包含 agent 下所有 *_tool.py 的 @mcp.tool() 函数.",
+        '"""',
+        'import sys',
+        'import importlib',
+        'sys.path.insert(0, "/app/backend")  # noqa: E402',
+        'from mcp.server.fastmcp import FastMCP',
+        '',
+        '_mcp = FastMCP("PHA-Agent-Stdio")',
+        f'_AGENT_DIR = "{dir_name}"',
+        f'_TOOL_FUNCS = {tool_func_names!r}',   # [(tool_file_module, func_name), ...]
+        '',
+        '_imported = []',
+        'for _mod_name, _func_name in _TOOL_FUNCS:',
+        '    try:',
+        '        if _mod_name not in _imported:',
+        '            _mod = importlib.import_module(f"{_AGENT_DIR}.mcpserver.{_mod_name}")',
+        '            _imported.append(_mod_name)',
+        '        _mod = importlib.import_module(f"{_AGENT_DIR}.mcpserver.{_mod_name}")',
+        '        _fn = getattr(_mod, _func_name)',
+        '        _mcp.add_tool(_fn, name=_func_name, description=(_fn.__doc__ or "").split(chr(10))[0])',
+        '    except Exception as e:',
+        '        print(f"[stdio_starter] fail {_mod_name}.{_func_name}: {e!r}", file=sys.stderr)',
+        '',
+        'if __name__ == "__main__":',
+        '    _mcp.run(transport="stdio")',
+    ]
+    body = "\n".join(body_lines) + "\n"
+
+    if os.path.isfile(starter_path):
+        existing = open(starter_path, "r", encoding="utf-8").read()
+        if existing == body:
+            return  # 没变
+    with open(starter_path, "w", encoding="utf-8") as f:
+        f.write(body)
+
+
+def _load_inprocess_mcp_tools(agent_name: str) -> list:
+    """阶段48-15 兼容: in-process import 函数路径 (fallback)."""
     try:
         from langchain_core.tools import BaseTool
     except ImportError:

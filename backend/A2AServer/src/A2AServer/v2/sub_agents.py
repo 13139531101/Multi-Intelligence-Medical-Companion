@@ -18,6 +18,13 @@ from typing import List
 
 from .v2_agent import V2Agent
 from .mcp_tool_adapter import load_mcp_tools
+
+# 阶段48-15: 读 PHA_MCP_TRANSPORT env var 决定 transport 类型
+#   - "streamable_http" (默认, 推荐) → HTTP MCP server (1 process / agent)
+#   - "stdio" → stdio subprocess + JSON-RPC
+#   - "inprocess" → 旧的 in-process import (fallback)
+import os as _os
+_MCP_TRANSPORT = _os.environ.get("PHA_MCP_TRANSPORT", "streamable_http")
 from .agent_registry import register_agent
 
 
@@ -67,7 +74,7 @@ class HealthAdvisorV2(V2Agent):
     def get_tools(self) -> List:
         """加载 HealthAdvisor 的 MCP 工具（阶段2-3 接入）"""
         try:
-            return load_mcp_tools("health_advisor")
+            return load_mcp_tools("health_advisor", transport=_MCP_TRANSPORT)
         except Exception:
             return []
 
@@ -93,7 +100,7 @@ class HealthRecordsV2(V2Agent):
 
     def get_tools(self) -> List:
         try:
-            return load_mcp_tools("health_records")
+            return load_mcp_tools("health_records", transport=_MCP_TRANSPORT)
         except Exception:
             return []
 
@@ -119,7 +126,7 @@ class MedicationReminderV2(V2Agent):
 
     def get_tools(self) -> List:
         try:
-            return load_mcp_tools("medication_reminder")
+            return load_mcp_tools("medication_reminder", transport=_MCP_TRANSPORT)
         except Exception:
             return []
 
@@ -145,7 +152,7 @@ class VisitSummaryV2(V2Agent):
 
     def get_tools(self) -> List:
         try:
-            return load_mcp_tools("visit_summary")
+            return load_mcp_tools("visit_summary", transport=_MCP_TRANSPORT)
         except Exception:
             return []
 
