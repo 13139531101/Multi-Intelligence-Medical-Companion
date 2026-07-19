@@ -35,7 +35,6 @@ import {
 } from "@mui/material";
 import {
   Search,
-  CloudUpload,
   Add,
   Description,
   Event,
@@ -57,7 +56,7 @@ import {
   FilterList,
 } from "@mui/icons-material";
 import Header from "../components/HealthHeader";
-import FileUpload from "../components/FileUpload";
+import HealthRecordForm from "../components/HealthRecordForm"; // 阶段48-22 v3+
 import AgentQuickFab from "../components/AgentQuickFab";
 import {
   getHealthRecords,
@@ -115,7 +114,7 @@ export default function NewHealthRecords() {
   const [search, setSearch] = useState("");
   const [records, setRecords] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [uploadOpen, setUploadOpen] = useState(false);
+  // 阶段48-22 v3+: 单一入口 — 只有 'editing' (走 HealthRecordForm 内嵌的'上传附件')
   const [detail, setDetail] = useState(null);
   const [editing, setEditing] = useState(null);
   const [extracting, setExtracting] = useState({});
@@ -224,20 +223,12 @@ export default function NewHealthRecords() {
               刷新
             </Button>
             <Button
-              startIcon={<CloudUpload />}
-              variant="outlined"
-              size="small"
-              onClick={() => setUploadOpen(true)}
-            >
-              上传
-            </Button>
-            <Button
               startIcon={<Add />}
               variant="contained"
               size="small"
               onClick={() => setEditing({})}
             >
-              新增
+              新增档案
             </Button>
           </Stack>
         </Stack>
@@ -312,18 +303,11 @@ export default function NewHealthRecords() {
             {!search && (
               <Stack direction="row" spacing={1} justifyContent="center">
                 <Button
-                  variant="outlined"
-                  startIcon={<CloudUpload />}
-                  onClick={() => setUploadOpen(true)}
-                >
-                  上传
-                </Button>
-                <Button
                   variant="contained"
                   startIcon={<Add />}
                   onClick={() => setEditing({})}
                 >
-                  新增
+                  新建第一份档案
                 </Button>
               </Stack>
             )}
@@ -424,26 +408,6 @@ export default function NewHealthRecords() {
           </Stack>
         )}
       </Container>
-
-      <Dialog
-        open={uploadOpen}
-        onClose={() => setUploadOpen(false)}
-        maxWidth="sm"
-        fullWidth
-      >
-        <DialogTitle>上传医疗档案</DialogTitle>
-        <DialogContent dividers>
-          <FileUpload
-            onUploaded={() => {
-              setUploadOpen(false);
-              fetchRecords();
-            }}
-          />
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setUploadOpen(false)}>关闭</Button>
-        </DialogActions>
-      </Dialog>
 
       <Drawer
         anchor="right"
@@ -687,100 +651,112 @@ export default function NewHealthRecords() {
         )}
       </Drawer>
 
+      {/* 阶段48-22 v3+: 用 HealthRecordForm 替代老的 document.getElementById 表单 + 上传 Dialog */}
       <Dialog
         open={!!editing}
         onClose={() => setEditing(null)}
-        maxWidth="sm"
+        maxWidth="md"
         fullWidth
       >
-        <DialogTitle>{editing?.id ? "编辑档案" : "新增档案"}</DialogTitle>
+        <DialogTitle>
+          {editing?.id ? "编辑档案" : "新增档案 (含附件上传)"}
+        </DialogTitle>
         <DialogContent dividers>
-          <Stack spacing={2} sx={{ pt: 1 }}>
-            <TextField
-              label="标题"
-              fullWidth
-              size="small"
-              defaultValue={editing?.title || ""}
-              id="edit-title"
-            />
-            <TextField
-              select
-              label="类型"
-              fullWidth
-              size="small"
-              SelectProps={{ native: true }}
-              defaultValue={editing?.type || "diagnosis"}
-              id="edit-type"
-            >
-              {CATEGORIES.filter((c) => c.key !== "all").map((c) => (
-                <option key={c.key} value={c.key}>
-                  {c.label}
-                </option>
-              ))}
-            </TextField>
-            <TextField
-              label="医院"
-              fullWidth
-              size="small"
-              defaultValue={editing?.hospital || ""}
-              id="edit-hospital"
-            />
-            <TextField
-              label="科室"
-              fullWidth
-              size="small"
-              defaultValue={editing?.department || ""}
-              id="edit-department"
-            />
-            <TextField
-              label="日期"
-              type="date"
-              fullWidth
-              size="small"
-              defaultValue={editing?.date || ""}
-              id="edit-date"
-              InputLabelProps={{ shrink: true }}
-            />
-            <TextField
-              label="内容描述"
-              fullWidth
-              size="small"
-              multiline
-              rows={3}
-              defaultValue={editing?.content || ""}
-              id="edit-content"
-            />
-          </Stack>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setEditing(null)}>取消</Button>
-          <Button
-            variant="contained"
-            onClick={async () => {
-              const payload = {
-                title: document.getElementById("edit-title").value,
-                type: document.getElementById("edit-type").value,
-                hospital: document.getElementById("edit-hospital").value,
-                department: document.getElementById("edit-department").value,
-                date: document.getElementById("edit-date").value,
-                description: document.getElementById("edit-content").value,
-              };
-              try {
-                if (editing?.id) {
-                  await updateHealthRecord(editing.id, payload);
-                } else {
-                  await createHealthRecord(payload);
-                }
+          {/* 注: 编辑模式还在老路径; 新建用 HealthRecordForm 含附件上传 */}
+          {editing?.id ? (
+            <Stack spacing={2} sx={{ pt: 1 }}>
+              <TextField
+                label="标题"
+                fullWidth
+                size="small"
+                defaultValue={editing?.title || ""}
+                id="edit-title"
+              />
+              <TextField
+                select
+                label="类型"
+                fullWidth
+                size="small"
+                SelectProps={{ native: true }}
+                defaultValue={editing?.type || "diagnosis"}
+                id="edit-type"
+              >
+                {CATEGORIES.filter((c) => c.key !== "all").map((c) => (
+                  <option key={c.key} value={c.key}>
+                    {c.label}
+                  </option>
+                ))}
+              </TextField>
+              <TextField
+                label="医院"
+                fullWidth
+                size="small"
+                defaultValue={editing?.hospital || ""}
+                id="edit-hospital"
+              />
+              <TextField
+                label="科室"
+                fullWidth
+                size="small"
+                defaultValue={editing?.department || ""}
+                id="edit-department"
+              />
+              <TextField
+                label="日期"
+                type="date"
+                fullWidth
+                size="small"
+                defaultValue={editing?.date || ""}
+                id="edit-date"
+                InputLabelProps={{ shrink: true }}
+              />
+              <TextField
+                label="内容描述"
+                fullWidth
+                size="small"
+                multiline
+                rows={3}
+                defaultValue={editing?.content || ""}
+                id="edit-content"
+              />
+            </Stack>
+          ) : (
+            <HealthRecordForm
+              onCreated={() => {
                 setEditing(null);
                 fetchRecords();
-              } catch (e) {
-                alert("保存失败: " + (e?.message || ""));
-              }
-            }}
-          >
-            保存
-          </Button>
-        </DialogActions>
+              }}
+              onCancel={() => setEditing(null)}
+            />
+          )}
+        </DialogContent>
+        {editing?.id && (
+          <DialogActions>
+            <Button onClick={() => setEditing(null)}>取消</Button>
+            <Button
+              variant="contained"
+              onClick={async () => {
+                const payload = {
+                  title: document.getElementById("edit-title").value,
+                  type: document.getElementById("edit-type").value,
+                  hospital: document.getElementById("edit-hospital").value,
+                  department: document.getElementById("edit-department").value,
+                  date: document.getElementById("edit-date").value,
+                  description: document.getElementById("edit-content").value,
+                };
+                try {
+                  await updateHealthRecord(editing.id, payload);
+                  setEditing(null);
+                  fetchRecords();
+                } catch (e) {
+                  alert("保存失败: " + (e?.message || ""));
+                }
+              }}
+            >
+              保存
+            </Button>
+          </DialogActions>
+        )}
       </Dialog>
       <AgentQuickFab />
     </Box>
