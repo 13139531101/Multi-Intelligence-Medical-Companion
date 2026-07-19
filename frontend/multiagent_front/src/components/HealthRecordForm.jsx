@@ -22,7 +22,6 @@ import {
   IconButton,
   InputLabel,
   MenuItem,
-  SegmentedControl,
   Select,
   Stack,
   TextField,
@@ -38,8 +37,6 @@ import {
   Close as CloseIcon,
   AttachFile as AttachFileIcon,
   Refresh as RefreshIcon,
-  SwapHoriz as SwapIcon,
-  ArrowForward as ArrowIcon,
 } from "@mui/icons-material";
 import HealthUploader from "./HealthUploader";
 
