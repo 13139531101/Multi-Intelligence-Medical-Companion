@@ -115,6 +115,10 @@ def _verify_files_ownership(file_ids: List[str], user_id: str) -> List[str]:
 
 
 def _replace_metadata_attached_ids(target_table: str, record_id: str, file_ids: List[str]):
+    if target_table == "visit_summaries":
+        # visit_summaries 没有 metadata 列, 重写 notes 段 — 这里简化: 删除旧 attached_file_ids 段并 push 新的
+        _replace_notes_attached_ids(record_id, file_ids)
+        return
     with get_db() as conn:
         with conn.cursor() as cur:
             cur.execute(f"""
@@ -128,7 +132,31 @@ def _replace_metadata_attached_ids(target_table: str, record_id: str, file_ids: 
             """, (json.dumps(file_ids), record_id))
 
 
+def _replace_notes_attached_ids(record_id: str, file_ids: List[str]):
+    import json
+    marker = "__attached_file_ids__:"
+    payload = json.dumps(file_ids, ensure_ascii=False)
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT notes FROM visit_summaries WHERE id=%s", (record_id,))
+            r = cur.fetchone()
+            notes = r.get("notes") or ""
+            # 删除旧的 marker 段 (从 marker 到末尾 / 下一行 marker)
+            idx = notes.find(marker)
+            if idx >= 0:
+                notes = notes[:idx]
+            new_notes = (notes + ("" if (not notes or notes.endswith("\n")) else "\n") + marker + payload).strip("\n")
+            cur.execute(
+                "UPDATE visit_summaries SET notes=%s, updated_at=now() WHERE id=%s",
+                (new_notes, record_id),
+            )
+
+
 def _merge_metadata_attached_ids(target_table: str, record_id: str, new_ids: List[str]):
+    # 阶段48-22 v3: visit_summaries 没有 metadata 列, 用 notes (text) 兜底
+    if target_table == "visit_summaries":
+        _merge_notes_attached_ids(record_id, new_ids)
+        return
     with get_db() as conn:
         with conn.cursor() as cur:
             cur.execute(f"""
@@ -151,7 +179,40 @@ def _merge_metadata_attached_ids(target_table: str, record_id: str, new_ids: Lis
             """, (new_ids, record_id))
 
 
+def _merge_notes_attached_ids(record_id: str, new_ids: List[str]):
+    """阶段48-22 v3: visit_summaries 没有 metadata 列, 把 attached_file_ids 写到 notes (JSON 行).
+    因为 notes 是 text, 用固定前缀占位:  '__attached_file_ids__:[...]'
+    """
+    import json
+    marker = "__attached_file_ids__:"
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT notes FROM visit_summaries WHERE id=%s", (record_id,))
+            r = cur.fetchone()
+            existing_ids: List[str] = []
+            if r and r.get("notes"):
+                m = r["notes"]
+                idx = m.find(marker)
+                if idx >= 0:
+                    end = m.find("\n", idx)
+                    payload = m[idx + len(marker):end if end > 0 else len(m)]
+                    try:
+                        existing_ids = json.loads(payload)
+                    except Exception:
+                        existing_ids = []
+            merged = list({*existing_ids, *new_ids})
+            new_notes = m if False else None  # 别处填  # noqa
+            cur.execute("""
+                UPDATE visit_summaries SET
+                    notes = (COALESCE(notes, '') || CASE WHEN COALESCE(notes,'') = '' THEN '' ELSE E'\n' END) || %s || %s,
+                    updated_at = now()
+                WHERE id = %s
+            """, (marker, json.dumps(merged, ensure_ascii=False), record_id))
+
+
 def _read_metadata_attached_ids(target_table: str, record_id: str) -> List[str]:
+    if target_table == "visit_summaries":
+        return _read_notes_attached_ids(record_id)
     with get_db() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -161,11 +222,33 @@ def _read_metadata_attached_ids(target_table: str, record_id: str) -> List[str]:
             r = cur.fetchone()
     if not r or not r["afids"]:
         return []
-    # afids 是 JSONB array-of-string
     try:
         if isinstance(r["afids"], str):
             return json.loads(r["afids"])
         return list(r["afids"])
+    except Exception:
+        return []
+
+
+def _read_notes_attached_ids(record_id: str) -> List[str]:
+    import json
+    marker = "__attached_file_ids__:"
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT notes FROM visit_summaries WHERE id=%s", (record_id,))
+            r = cur.fetchone()
+    if not r or not r.get("notes"):
+        return []
+    notes = r["notes"]
+    idx = notes.find(marker)
+    if idx < 0:
+        return []
+    payload = notes[idx + len(marker):].strip()
+    end = payload.find("\n")
+    if end > 0:
+        payload = payload[:end]
+    try:
+        return list(json.loads(payload))
     except Exception:
         return []
 

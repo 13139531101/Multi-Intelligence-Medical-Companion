@@ -1,21 +1,16 @@
-// 阶段48-22 v2: HealthRecordForm — 创建健康档案时显式挂附件
+// 阶段48-22 v3: HealthRecordForm — 单组件双 kind (health_record + visit_summary)
 //
-// 流程:
-//   1. 填表 (title, type, date, hospital, importance, summary...)
-//   2. 在 "附件" 一栏可手动上传 (HealthUploader) — 拿到 file_id
-//   3. 选择要挂的 file_ids (多选卡片)
-//   4. 提交:
-//        a) 直接复用已有的 health_records POST (api/health-records) — 不行 (proxy 500)
-//        b) Fallback: 走我们的 v2 attach: 先上传到 uploaded_files,
-//           然后 V2 INSERT via api service / dashboard service
-//      本组件提供 v3: POST 一步包了所有 — 调一个新 endpoint
+// 设计决策: 不拆成两个独立组件 — 表单 UX 高度相似, 拆了会让用户多一次选组件.
+// 单一组件接受 kind prop, 内部按 kind 切换字段集, 提交时调同一个 /api/v2/create-record-and-attach,
+// 后端根据 target_table 选择对应 schema.
 //
-// 实际流程 (v3 简化版):
-//   - 上传文件 (HealthUploader) → file_ids[]
-//   - 点击 "创建档案并挂附件" → POST /api/v2/create-record-and-attach
-//     (下一阶段会加) 现在先调两步:  POST → insert file_ids into metadata via /api/v2-attach/{rid}/attach-files
+// UX 流程 (不变):
+//   1. 选择 "新建什么" — 健康档案 vs 就诊摘要 (顶部 segmented)
+//   2. 填表 (按 kind 切换字段)
+//   3. 上传附件 / 多选
+//   4. 点击 "创建" — 1 步到位的 submit (含 idempotency-key)
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
 import {
   Box,
   Button,
@@ -27,18 +22,24 @@ import {
   IconButton,
   InputLabel,
   MenuItem,
+  SegmentedControl,
   Select,
   Stack,
   TextField,
+  ToggleButton,
+  ToggleButtonGroup,
   Typography,
   Alert,
   LinearProgress,
+  Divider,
 } from "@mui/material";
 import {
   Save as SaveIcon,
   Close as CloseIcon,
   AttachFile as AttachFileIcon,
   Refresh as RefreshIcon,
+  SwapHoriz as SwapIcon,
+  ArrowForward as ArrowIcon,
 } from "@mui/icons-material";
 import HealthUploader from "./HealthUploader";
 
@@ -54,32 +55,48 @@ const RECORD_TYPES = [
 ];
 
 const IMPORTANCE = ["low", "medium", "high"];
+const PRESCRIPTION_LABEL_HINT =
+  '处方 (JSON 数组, 例如 [{"drug":"二甲双胍","dose":"0.5g"}])';
+
+const KIND_META = {
+  health_record: {
+    label: "健康档案",
+    table: "health_records",
+    dateField: { key: "record_date", label: "日期" },
+    titleHint: "例: 2024-01 体检报告",
+  },
+  visit_summary: {
+    label: "就诊摘要",
+    table: "visit_summaries",
+    dateField: { key: "visit_date", label: "就诊日期" },
+    titleHint: "例: 2024-01-15 协和内分泌门诊",
+  },
+};
+
+const SUMMARY_MAX = 1000;
 
 export default function HealthRecordForm({
   userId,
-  onCreated, // (record) => void
+  kind = "health_record", // 'health_record' | 'visit_summary'
+  onCreated,
   onCancel,
   defaultAttachedFileIds = [],
+  onKindChange, // (newKind) => void   可选, 让父组件切换时拿到通知
 }) {
-  const [form, setForm] = useState({
-    title: "",
-    record_type: "lab_report",
-    record_date: new Date().toISOString().slice(0, 10),
-    hospital: "",
-    doctor: "",
-    summary: "",
-    content: "",
-    importance: "medium",
-    tags: "",
-  });
+  const [activeKind, setActiveKind] = useState(kind);
+  const [form, setForm] = useState(() => buildInitialForm(activeKind));
   const [attachedFileIds, setAttachedFileIds] = useState(
     defaultAttachedFileIds,
   );
-  const [files, setFiles] = useState([]); // 完整的 uploaded_files 列表
+  const [files, setFiles] = useState([]);
   const [uploaderOpen, setUploaderOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [info, setInfo] = useState("");
+  // 阶段48-22 v3: idempotency-key 防双击重复提交
+  const idempotencyKey = useMemo(() => crypto.randomUUID(), []); // 一个表单实例对应一个 key
+
+  const meta = KIND_META[activeKind];
 
   const getAuth = () => {
     if (typeof window === "undefined") return {};
@@ -91,16 +108,33 @@ export default function HealthRecordForm({
     if (!userId) return;
     try {
       const r = await fetch(
-        `${API_BASE}/v2/upload/files?user_id=${encodeURIComponent(userId)}&purpose=health_record&limit=50`,
+        `${API_BASE}/v2/upload/files?user_id=${encodeURIComponent(userId)}&limit=50`,
         { headers: getAuth() },
       );
-      if (r.ok) setFiles((await r.json()) || []);
+      if (r.ok) {
+        const all = (await r.json()) || [];
+        // 只展示目的匹配当前 kind 的文件 (purpose 跟 kind 对齐)
+        // 健康档案 ↔ purpose=health_record,  就诊摘要 ↔ purpose=visit_summary
+        const expectedPurpose = activeKind;
+        setFiles(all.filter((f) => f.purpose === expectedPurpose));
+      }
     } catch {}
-  }, [userId]);
+  }, [userId, activeKind]);
 
   useEffect(() => {
     refreshFiles();
   }, [refreshFiles]);
+
+  // 切换 kind 时重置表单
+  const switchKind = (newKind) => {
+    if (newKind === activeKind) return;
+    setActiveKind(newKind);
+    setForm(buildInitialForm(newKind));
+    setAttachedFileIds([]);
+    setError("");
+    setInfo("");
+    onKindChange?.(newKind);
+  };
 
   const toggleAttach = (fid) => {
     setAttachedFileIds((prev) =>
@@ -117,33 +151,20 @@ export default function HealthRecordForm({
     }
     setBusy(true);
     try {
-      // 阶段48-22 v2+: 单步合接口 /api/v2/create-record-and-attach
-      // 一步同时: 创建 record + 挂 attached_file_ids, 失败自动回滚 record
       const payload = {
-        target_table: "health_records",
-        record: {
-          title: form.title.trim(),
-          record_type: form.record_type,
-          record_date: form.record_date || null,
-          hospital: form.hospital || "",
-          doctor: form.doctor || "",
-          summary: form.summary || "",
-          content: form.content || "",
-          importance: form.importance,
-          tags: form.tags
-            ? form.tags
-                .split(",")
-                .map((s) => s.trim())
-                .filter(Boolean)
-            : [],
-        },
+        target_table: meta.table,
+        record: buildRecordPayload(activeKind, form),
         attached_file_ids: attachedFileIds,
       };
       const r = await fetch(
         `${API_BASE}/api/v2/create-record-and-attach?user_id=${encodeURIComponent(userId)}`,
         {
           method: "POST",
-          headers: { "Content-Type": "application/json", ...getAuth() },
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": idempotencyKey, // 防重复
+            ...getAuth(),
+          },
           body: JSON.stringify(payload),
         },
       );
@@ -158,7 +179,7 @@ export default function HealthRecordForm({
         ? `  ⚠ ${res.warnings.length} warning(s)`
         : "";
       setInfo(
-        `创建成功 ${warn} — ${res.attached_count} 附件挂上 (id=${res.record_id.slice(0, 8)}…)`,
+        `创建成功${warn} — ${meta.label} +${res.attached_count} 附件 (id=${res.record_id.slice(0, 8)}…)`,
       );
       onCreated?.(res, attachedFileIds);
     } catch (e) {
@@ -172,7 +193,9 @@ export default function HealthRecordForm({
     <Card variant="outlined">
       <CardContent>
         <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 2 }}>
-          <Typography variant="h6">新增健康档案</Typography>
+          <Typography variant="h6">
+            新增{activeKind === "visit_summary" ? "就诊摘要" : "健康档案"}
+          </Typography>
           <Box sx={{ flex: 1 }} />
           {onCancel && (
             <IconButton size="small" onClick={onCancel}>
@@ -180,6 +203,19 @@ export default function HealthRecordForm({
             </IconButton>
           )}
         </Stack>
+
+        {/* Kind switcher */}
+        <Box sx={{ mb: 2 }}>
+          <ToggleButtonGroup
+            value={activeKind}
+            exclusive
+            onChange={(_, v) => v && switchKind(v)}
+            size="small"
+          >
+            <ToggleButton value="health_record">📋 健康档案</ToggleButton>
+            <ToggleButton value="visit_summary">🏥 就诊摘要</ToggleButton>
+          </ToggleButtonGroup>
+        </Box>
 
         {error && (
           <Alert severity="error" sx={{ mb: 2 }}>
@@ -192,6 +228,7 @@ export default function HealthRecordForm({
           </Alert>
         )}
 
+        {/* 表单字段 — 关键差异: visit_summary 多 4 个临床字段 */}
         <Grid container spacing={2}>
           <Grid item xs={12} sm={8}>
             <TextField
@@ -200,26 +237,45 @@ export default function HealthRecordForm({
               label="标题 *"
               value={form.title}
               onChange={(e) => setForm({ ...form, title: e.target.value })}
-              placeholder="例: 2024-01 体检报告"
+              placeholder={meta.titleHint}
             />
           </Grid>
           <Grid item xs={12} sm={4}>
-            <FormControl fullWidth size="small">
-              <InputLabel>类型</InputLabel>
-              <Select
-                value={form.record_type}
-                label="类型"
-                onChange={(e) =>
-                  setForm({ ...form, record_type: e.target.value })
-                }
-              >
-                {RECORD_TYPES.map((t) => (
-                  <MenuItem key={t.value} value={t.value}>
-                    {t.label}
-                  </MenuItem>
-                ))}
-              </Select>
-            </FormControl>
+            {activeKind === "health_record" ? (
+              <FormControl fullWidth size="small">
+                <InputLabel>类型</InputLabel>
+                <Select
+                  value={form.record_type}
+                  label="类型"
+                  onChange={(e) =>
+                    setForm({ ...form, record_type: e.target.value })
+                  }
+                >
+                  {RECORD_TYPES.map((t) => (
+                    <MenuItem key={t.value} value={t.value}>
+                      {t.label}
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+            ) : (
+              <FormControl fullWidth size="small">
+                <InputLabel>重要性</InputLabel>
+                <Select
+                  value={form.importance || "medium"}
+                  label="重要性"
+                  onChange={(e) =>
+                    setForm({ ...form, importance: e.target.value })
+                  }
+                >
+                  {IMPORTANCE.map((v) => (
+                    <MenuItem key={v} value={v}>
+                      {v}
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+            )}
           </Grid>
 
           <Grid item xs={12} sm={4}>
@@ -227,33 +283,14 @@ export default function HealthRecordForm({
               fullWidth
               size="small"
               type="date"
-              label="日期"
+              label={meta.dateField.label}
               InputLabelProps={{ shrink: true }}
-              value={form.record_date}
+              value={form[meta.dateField.key]}
               onChange={(e) =>
-                setForm({ ...form, record_date: e.target.value })
+                setForm({ ...form, [meta.dateField.key]: e.target.value })
               }
             />
           </Grid>
-          <Grid item xs={12} sm={4}>
-            <FormControl fullWidth size="small">
-              <InputLabel>重要性</InputLabel>
-              <Select
-                value={form.importance}
-                label="重要性"
-                onChange={(e) =>
-                  setForm({ ...form, importance: e.target.value })
-                }
-              >
-                {IMPORTANCE.map((v) => (
-                  <MenuItem key={v} value={v}>
-                    {v}
-                  </MenuItem>
-                ))}
-              </Select>
-            </FormControl>
-          </Grid>
-
           <Grid item xs={12} sm={4}>
             <TextField
               fullWidth
@@ -263,8 +300,7 @@ export default function HealthRecordForm({
               onChange={(e) => setForm({ ...form, hospital: e.target.value })}
             />
           </Grid>
-
-          <Grid item xs={12} sm={6}>
+          <Grid item xs={12} sm={4}>
             <TextField
               fullWidth
               size="small"
@@ -273,17 +309,131 @@ export default function HealthRecordForm({
               onChange={(e) => setForm({ ...form, doctor: e.target.value })}
             />
           </Grid>
-          <Grid item xs={12} sm={6}>
-            <TextField
-              fullWidth
-              size="small"
-              label="标签 (逗号分隔)"
-              value={form.tags}
-              onChange={(e) => setForm({ ...form, tags: e.target.value })}
-              placeholder="体检, 高血糖"
-            />
-          </Grid>
 
+          {activeKind === "health_record" && (
+            <Grid item xs={12} sm={6}>
+              <TextField
+                fullWidth
+                size="small"
+                label="标签 (逗号分隔)"
+                value={form.tags}
+                onChange={(e) => setForm({ ...form, tags: e.target.value })}
+                placeholder="体检, 高血糖"
+              />
+            </Grid>
+          )}
+          {activeKind === "health_record" && (
+            <Grid item xs={12} sm={6}>
+              <FormControl fullWidth size="small">
+                <InputLabel>重要性</InputLabel>
+                <Select
+                  value={form.importance}
+                  label="重要性"
+                  onChange={(e) =>
+                    setForm({ ...form, importance: e.target.value })
+                  }
+                >
+                  {IMPORTANCE.map((v) => (
+                    <MenuItem key={v} value={v}>
+                      {v}
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+            </Grid>
+          )}
+
+          {/* visit_summary 专属字段 */}
+          {activeKind === "visit_summary" && (
+            <>
+              <Grid item xs={12}>
+                <Divider sx={{ my: 0.5 }}>
+                  <Chip label="临床字段" size="small" />
+                </Divider>
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <TextField
+                  fullWidth
+                  size="small"
+                  label="主诉"
+                  value={form.chief_complaint}
+                  onChange={(e) =>
+                    setForm({ ...form, chief_complaint: e.target.value })
+                  }
+                />
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <TextField
+                  fullWidth
+                  size="small"
+                  label="症状"
+                  value={form.symptoms}
+                  onChange={(e) =>
+                    setForm({ ...form, symptoms: e.target.value })
+                  }
+                />
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <TextField
+                  fullWidth
+                  size="small"
+                  label="检查"
+                  value={form.examination}
+                  onChange={(e) =>
+                    setForm({ ...form, examination: e.target.value })
+                  }
+                />
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <TextField
+                  fullWidth
+                  size="small"
+                  label="初步诊断"
+                  value={form.diagnosis}
+                  onChange={(e) =>
+                    setForm({ ...form, diagnosis: e.target.value })
+                  }
+                />
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <TextField
+                  fullWidth
+                  size="small"
+                  label="治疗方案"
+                  value={form.treatment}
+                  onChange={(e) =>
+                    setForm({ ...form, treatment: e.target.value })
+                  }
+                />
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <TextField
+                  fullWidth
+                  size="small"
+                  label="随访"
+                  value={form.follow_up}
+                  onChange={(e) =>
+                    setForm({ ...form, follow_up: e.target.value })
+                  }
+                />
+              </Grid>
+              <Grid item xs={12}>
+                <TextField
+                  fullWidth
+                  size="small"
+                  label={PRESCRIPTION_LABEL_HINT}
+                  value={form.prescription}
+                  onChange={(e) =>
+                    setForm({ ...form, prescription: e.target.value })
+                  }
+                  multiline
+                  rows={2}
+                />
+              </Grid>
+            </>
+          )}
+
+          {/* 通用摘要 */}
           <Grid item xs={12}>
             <TextField
               fullWidth
@@ -293,15 +443,24 @@ export default function HealthRecordForm({
               onChange={(e) => setForm({ ...form, summary: e.target.value })}
               multiline
               rows={2}
+              inputProps={{ maxLength: SUMMARY_MAX }}
+              helperText={`${(form.summary || "").length}/${SUMMARY_MAX}`}
             />
           </Grid>
           <Grid item xs={12}>
             <TextField
               fullWidth
               size="small"
-              label="详细 (任意 OCR / 抄录内容)"
-              value={form.content}
-              onChange={(e) => setForm({ ...form, content: e.target.value })}
+              label="详细 / OCR 文字 / 备注"
+              value={form.content || form.notes || ""}
+              onChange={(e) =>
+                setForm({
+                  ...form,
+                  ...(activeKind === "health_record"
+                    ? { content: e.target.value }
+                    : { notes: e.target.value }),
+                })
+              }
               multiline
               rows={3}
             />
@@ -345,8 +504,8 @@ export default function HealthRecordForm({
               <HealthUploader
                 userId={userId}
                 domain="pha"
-                purpose="health_record"
-                purposeLabel="健康档案"
+                purpose={activeKind}
+                purposeLabel={KIND_META[activeKind].label}
                 showList={false}
                 onUploaded={(f) => {
                   setFiles((p) => [f, ...p]);
@@ -356,10 +515,9 @@ export default function HealthRecordForm({
             </Box>
           )}
 
-          {/* 文件多选 */}
           {files.length === 0 ? (
             <Typography variant="caption" color="text.secondary">
-              暂无已上传文件. 点击"上传新文件"或先用聊天上传几张.
+              暂无当前 kind 的已上传文件. 点击"上传新文件"或先用聊天上传几张.
             </Typography>
           ) : (
             <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
@@ -413,11 +571,81 @@ export default function HealthRecordForm({
             onClick={submit}
             disabled={busy}
           >
-            创建档案{" "}
+            创建{meta.label}{" "}
             {attachedFileIds.length > 0 && `+${attachedFileIds.length} 附件`}
           </Button>
         </Stack>
       </CardContent>
     </Card>
   );
+}
+
+// ===== Helpers =====
+function buildInitialForm(kind) {
+  const today = new Date().toISOString().slice(0, 10);
+  const base = {
+    title: "",
+    hospital: "",
+    doctor: "",
+    summary: "",
+  };
+  if (kind === "health_record") {
+    return {
+      ...base,
+      record_type: "lab_report",
+      record_date: today,
+      importance: "medium",
+      tags: "",
+      content: "",
+    };
+  }
+  // visit_summary
+  return {
+    ...base,
+    visit_date: today,
+    chief_complaint: "",
+    symptoms: "",
+    examination: "",
+    diagnosis: "",
+    treatment: "",
+    prescription: "[]",
+    follow_up: "",
+    notes: "",
+  };
+}
+
+function buildRecordPayload(kind, form) {
+  if (kind === "health_record") {
+    return {
+      title: form.title.trim(),
+      record_type: form.record_type,
+      record_date: form.record_date || null,
+      hospital: form.hospital || "",
+      doctor: form.doctor || "",
+      summary: form.summary || "",
+      content: form.content || "",
+      importance: form.importance || "medium",
+      tags: form.tags
+        ? form.tags
+            .split(",")
+            .map((s) => s.trim())
+            .filter(Boolean)
+        : [],
+    };
+  }
+  // visit_summary
+  return {
+    title: form.title.trim(),
+    visit_date: form.visit_date || null,
+    doctor: form.doctor || "",
+    hospital: form.hospital || "",
+    chief_complaint: form.chief_complaint || "",
+    symptoms: form.symptoms || "",
+    examination: form.examination || "",
+    diagnosis: form.diagnosis || "",
+    treatment: form.treatment || "",
+    prescription: form.prescription || "[]",
+    follow_up: form.follow_up || "",
+    notes: form.notes || "",
+  };
 }
