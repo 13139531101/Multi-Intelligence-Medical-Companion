@@ -37,7 +37,58 @@
 - `memory_integration_tool.py` (1180 行 × 2) — 下一轮 (`AgentMemorySystem/mcpserver/`)
 - `database_config.py` 5 个不一致 — 下一轮
 
-详见 [PHACORE_REFACTOR_PLAN.md](./PHACORE_REFACTOR_PLAN.md).
+# 详见 [PHACORE_REFACTOR_PLAN.md](./PHACORE_REFACTOR_PLAN.md).
+
+---
+
+## [未发布] - 阶段 48-20 - 平台复用: Domain Manifest
+
+### 核心改动
+
+PHA 现在不只是"健康助手", 是**多领域多智能体平台**. 用 1 个 yaml 描述整个 agent 拓扑, 切换场景 0 代码改动.
+
+### 新增
+
+- **`backend/A2AServer/src/A2AServer/v2/domain_manifest.py`** - Domain Manifest 加载器
+  - `DomainManifest / AgentSpec / HostConfig / ServiceDiscovery` dataclass
+  - `load_default()`: 优先级 env > 默认 yaml > 硬编码 fallback
+  - `DomainManifest.from_yaml(path)`: 通用 loader
+- **4 个示例 yaml** in `examples/domain_configs/`:
+  - `pha.health.yaml` - 默认 (PHA 健康)
+  - `hr.company.yaml` - 企业 HR/IT/财务
+  - `ecommerce.support.yaml` - 电商客服
+  - `edu.tutor.yaml` - 多角色教学辅导
+- **`docs/Chinese/PLATFORM_REUSE_GUIDE.md`** - 完整复用指南
+
+### 修改: 拆除硬编码
+
+- `bridge.py` fallback agent: `health_advisor` (硬编码) → `load_default().host_agent_name` (从 yaml)
+- `did_wba.py`: svc_port map 5 个硬编码 → 从 manifest `service_discovery` 读
+- `did_wba.py`: DID 列表 5 个硬编码 → 从 manifest `agents` 读
+
+### 兼容性
+
+- 找不到 yaml 时, 用硬编码 PHA 默认 (向前兼容 stage 48-19 之前)
+- 即使 manifest 加载失败, fallback 仍指向 `health_advisor`
+
+### E2E 验证
+
+```
+$ python scripts/test_domain_manifest.py
+PHA: personal_health_assistant (4 agents)
+HR:  enterprise_assistant    (4 agents: concierge / hr_advisor / it_support / finance_advisor)
+电商: ecommerce_support       (4 agents: triage / pre_sales / logistics / after_sales)
+教育: edu_tutor               (4 agents: guide / lecturer / ta / recommender)
+```
+
+backend health: ✓ `auth: 200`
+
+### TODO
+
+- 前端 `NewChat.jsx` 拉 `GET /v2/manifest` 显示 domain
+- `dangerous_tools.py` 自动收集 (从 `manifest.dangerous_agents()`)
+- K8s Helm chart 动态生成
+- manifest schema validator
 
 ---
 

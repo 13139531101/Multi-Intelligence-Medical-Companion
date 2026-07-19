@@ -1,0 +1,84 @@
+# PHA Default Domain Manifest (健康助手)
+# 这是 PHA 默认配置 - 复用 PHA 现有 4 个 agent
+# 切换到新场景只需创建新的 yaml, 设环境变量即可切换
+
+domain:
+  name: "personal_health_assistant"
+  display_name: "个人健康助手"
+  description: "AI 健康多智能体平台"
+  version: "0.1.0"
+
+# host_graph 配置: LangGraph 入口 agent
+host:
+  name: "health_advisor"               # fallback agent 名
+  fallback_keywords: ["怎么办", "怎么", "为什么"]
+  classify_model: "deepseek-chat"
+
+# agent 列表 - 完全用 yaml, 不用 @register_agent 硬编码
+agents:
+  - name: "health_advisor"
+    display_name: "健康顾问"
+    description: "AI 问诊、健康教育、症状分析"
+    keywords:
+      - "头疼"
+      - "发烧"
+      - "症状"
+      - "血压"
+      - "血糖"
+    tools_module: "health_advisor"      # 阶段48-19 PhaCore 仍生效
+    phacore_modules: ["ocr"]
+    aliases: ["健康顾问"]
+    dangerously: false
+    port: 9101
+
+  - name: "health_records"
+    display_name: "健康档案管理员"
+    description: "检查报告 OCR、存储、检索"
+    keywords: ["档案", "记录", "体检", "报告", "record"]
+    tools_module: "health_records"
+    phacore_modules: ["ocr"]
+    aliases: ["健康档案管理员", "健康档案"]
+    dangerously: false
+    port: 9102
+
+  - name: "medication_reminder"
+    display_name: "用药提醒助手"
+    description: "药品安全、用药计划、提醒通知"
+    keywords: ["药", "提醒", "medication", "服药"]
+    tools_module: "medication_reminder"
+    phacore_modules: ["ocr"]
+    aliases: ["用药提醒助手"]
+    dangerously: true                  # ⚠️ 高危 - 加提醒等需 HITL
+    port: 9103
+
+  - name: "visit_summary"
+    display_name: "就诊摘要生成器"
+    description: "就诊记录整理、报告生成"
+    keywords: ["摘要", "总结", "就诊", "summary"]
+    tools_module: "visit_summary"
+    phacore_modules: []
+    aliases: ["就诊摘要"]
+    dangerously: false
+    port: 9104
+
+# 跨 agent 服务发现: K8s svc / docker-compose port
+service_discovery:
+  default_port_offset: 10010          # K8s service port offset
+  services:
+    health_advisor:    10011
+    health_records:    10010
+    medication_reminder: 10012
+    visit_summary:     10013
+
+# A2A / DID 配置
+did:
+  domain: "pha.local"
+  prefix: "did:wba"
+
+# 模板选择 - 不同场景使用不同子集
+mcp_transport: "streamable_http"
+
+# skill / tool 黑名单 + 白名单
+tool_filter:
+  # 禁掉检查 PDF 等高开销 tools (optional)
+  blacklist: []

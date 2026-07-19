@@ -1,0 +1,85 @@
+# E-commerce Support Template - 售前/售后/物流/工单 多智能体
+
+domain:
+  name: "ecommerce_support"
+  display_name: "电商智能客服"
+  description: "售前咨询 / 售后处理 / 物流查询 / 工单升级"
+  version: "0.1.0"
+
+host:
+  name: "triage_agent"
+  fallback_keywords: ["你好", "在吗", "客服"]
+  classify_model: "deepseek-chat"
+
+agents:
+  - name: "triage_agent"
+    display_name: "智能分诊"
+    description: "判断售前/售后/物流 类问题"
+    keywords: ["咨询", "询问", "想"]
+    tools_module: "triage_agent"
+    phacore_modules: []
+    aliases: ["分诊员"]
+    port: 9101
+
+  - name: "pre_sales"
+    display_name: "售前顾问"
+    description: "商品推荐 / 价格 / 优惠 / 库存"
+    keywords:
+      - "多少钱"
+      - "怎么卖"
+      - "推荐"
+      - "优惠"
+      - "折扣"
+      - "有没有货"
+      - "库存"
+    tools_module: "pre_sales"
+    phacore_modules: []
+    aliases: ["售前"]
+    port: 9102
+
+  - name: "logistics"
+    display_name: "物流查询"
+    description: "订单 / 快递 / 配送时间 / 签收"
+    keywords:
+      - "订单"
+      - "快递"
+      - "发货"
+      - "几天到"
+      - "签收"
+      - "物流"
+      - "运单号"
+    tools_module: "logistics"
+    phacore_modules: []
+    aliases: ["物流", "快递"]
+    port: 9103
+
+  - name: "after_sales"
+    display_name: "售后服务"
+    description: "退换货 / 退款 / 投诉 / 维修"
+    keywords:
+      - "退货"
+      - "换货"
+      - "退款"
+      - "投诉"
+      - "维修"
+      - "质量问题"
+      - "不满意"
+    tools_module: "after_sales"
+    phacore_modules: []
+    aliases: ["售后", "客服"]
+    dangerously: true              # 退款 / 退货需 HITL 审核
+    port: 9104
+
+service_discovery:
+  default_port_offset: 10010
+  services:
+    triage_agent: 10201
+    pre_sales:     10202
+    logistics:     10203
+    after_sales:   10204
+
+did:
+  domain: "shop.example.com"
+  prefix: "did:wba"
+
+mcp_transport: "streamable_http"

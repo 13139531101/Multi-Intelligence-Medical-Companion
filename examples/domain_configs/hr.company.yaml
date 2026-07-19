@@ -1,0 +1,92 @@
+# HR Bot Template - 企业内部 HR/IT/财务助手
+# 多场景示例 1: 把 PHA 框架套到企业 HR 上
+# 只需这个 yaml + 4 个 agent 的 system_prompt, 不改任何代码
+
+domain:
+  name: "enterprise_assistant"
+  display_name: "企业内部智能助手"
+  description: "HR / IT / 财务 多职能助手"
+  version: "0.1.0"
+
+host:
+  name: "concierge"             # fallback "导览员" agent
+  fallback_keywords: ["帮我", "我要", "请问"]
+  classify_model: "deepseek-chat"
+
+agents:
+  - name: "concierge"
+    display_name: "智能导览"
+    description: "通用问候 + 问题路由"
+    keywords: ["你好", "你好", "帮帮我", "请问"]
+    tools_module: "concierge"
+    phacore_modules: []
+    aliases: ["导览员", "助理"]
+    port: 9101
+
+  - name: "hr_advisor"
+    display_name: "HR 顾问"
+    description: "入职 / 离职 / 假期 / 薪资 / 福利"
+    keywords:
+      - "入职"
+      - "离职"
+      - "假期"
+      - "薪资"
+      - "五险一金"
+      - "福利"
+      - "招聘"
+      - "绩效"
+    tools_module: "hr_advisor"
+    phacore_modules: []
+    aliases: ["HR", "人事"]
+    port: 9102
+
+  - name: "it_support"
+    display_name: "IT 运维"
+    description: "电脑 / 网络 / 邮箱 / 权限 / VPN 故障"
+    keywords:
+      - "电脑"
+      - "网络"
+      - "邮箱"
+      - "密码"
+      - "VPN"
+      - "打印机"
+      - "权限"
+      - "故障"
+    tools_module: "it_support"
+    phacore_modules: []
+    aliases: ["IT", "技术支持"]
+    port: 9103
+
+  - name: "finance_advisor"
+    display_name: "财务顾问"
+    description: "报销 / 发票 / 差旅 / 出差审批"
+    keywords:
+      - "报销"
+      - "发票"
+      - "差旅"
+      - "出差"
+      - "借款"
+      - "付款"
+      - "审批"
+    tools_module: "finance_advisor"
+    phacore_modules: []
+    aliases: ["财务", "出纳"]
+    dangerously: true              # 报销等需要 audit + HITL
+    port: 9104
+
+service_discovery:
+  default_port_offset: 10010
+  services:
+    concierge:       10101
+    hr_advisor:      10102
+    it_support:      10103
+    finance_advisor: 10104
+
+did:
+  domain: "company.local"
+  prefix: "did:wba"
+
+mcp_transport: "streamable_http"
+
+# 这是复用 PHA 框架的方法: 只换 yaml, 不改代码
+# 实际 "hr_advisor/it_support" agent 后端可能用一套企业内部知识库

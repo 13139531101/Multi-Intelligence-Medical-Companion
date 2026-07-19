@@ -269,6 +269,63 @@ class HealthAdvisorV2(V2Agent):
 
 ---
 
+## 3.5 新增 PhaCore 共享工具（推荐用于跨 agent 工具）
+
+### 何时用 PhaCore vs 本地 agent
+
+| 情况 | 推荐 |
+|---|---|
+| 至少 2 个 agent 都需要这个能力 (例如 OCR) | **PhaCore** |
+| 加 `*_delete / *_log` 高危操作, 多 agent 都可能调 | **PhaCore** (单 owner, 别处 re-export) |
+| 单个 agent 独有 (例如 `analyze_symptoms` 给 health_advisor) | 本地 `mcpserver/` |
+
+### 步骤 (以 OCR 工具为例)
+
+**Step 1: 在 PhaCore 加文件**
+
+```python
+# backend/PhaCore/mcpserver/shared_ocr.py
+from mcp.server.fastmcp import FastMCP
+
+mcp = FastMCP("PhaCoreSharedOCR")
+
+@mcp.tool()
+def extract_text_from_image(image_base64: str) -> str:
+    """
+    [owner: health_records] [readers: medication_reminder, health_advisor]
+    从医疗文档图片中提取文字.
+    """
+    # PhaCore 唯一实现
+    ...
+```
+
+**Step 2: HRM 删自己的 ocr_tool.py 引用, 改 load PhaCore**
+
+```python
+# backend/HealthRecordsManager/mcpserver/__init__.py 删 ocr 相关
+# 或在 agent 中
+class HealthRecordsV2(V2Agent):
+    def get_tools(self):
+        return load_mcp_tools("PhaCore_shared_ocr") + load_mcp_tools("health_records")
+```
+
+**Step 3: 测试 (1 行命令)**
+
+```bash
+python tests/test_tool_dedup.py
+# 应该通过: 没有 tool_name 出现在多个 agent
+```
+
+### PhaCore 与现有的关系
+
+- **不动** host_graph / agent_registry / sub_agents 注册
+- **动** `mcp_discover._find_mcp_tool_files` (需要把 PhaCore 加到扫描列表)
+- **动** `dangerous_tools.py` (改成从 mcp_discover 自动收集, 不再硬编码)
+
+详见 [PHACORE_REFACTOR_PLAN.md](./PHACORE_REFACTOR_PLAN.md).
+
+---
+
 ## 4. 调试技巧
 
 ### 4.1 路由决策不生效

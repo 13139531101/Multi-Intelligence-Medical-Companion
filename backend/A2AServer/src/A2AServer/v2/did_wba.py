@@ -194,28 +194,53 @@ def get_keystore() -> DIDKeyStore:
     global _keystore
     if _keystore is None:
         _keystore = DIDKeyStore()
-        # 默认注册 5 个 PHA DID
-        for name in [
-            "hostapi",
-            "health_advisor",
-            "health_records",
-            "medication_reminder",
-            "visit_summary",
-        ]:
-            did = f"did:wba:pha.local:{name}"
+        # 阶段48-20: 从 DomainManifest 读 DID 列表 (不再硬编码 PHA 默认)
+        did_names: list[str]
+        did_prefix = "did:wba"
+        did_domain = "pha.local"
+        try:
+            from .domain_manifest import load_default
+            manifest = load_default()
+            did_names = ["hostapi"] + [a.name for a in manifest.agents]
+            did_prefix = manifest.did_prefix
+            did_domain = manifest.did_domain
+        except Exception:
+            # legacy fallback (PHA)
+            did_names = [
+                "hostapi",
+                "health_advisor",
+                "health_records",
+                "medication_reminder",
+                "visit_summary",
+            ]
+        for name in did_names:
+            did = f"{did_prefix}:{did_domain}:{name}"
             _keystore.register(did)
     return _keystore
 
 
 def get_default_port(name: str) -> int:
-    port_map = {
-        "hostapi": 13002,
+    """阶段48-20: 从 DomainManifest 读 port, 不再硬编码 PHA 默认.
+
+    Fallback: 13002 (hostapi) / port_map[agent_name] / 10000.
+    """
+    if name == "hostapi":
+        return 13002
+    try:
+        from .domain_manifest import load_default
+        manifest = load_default()
+        if name in [a.name for a in manifest.agents]:
+            return manifest.service_discovery.get_port(name)
+    except Exception:
+        pass
+    # legacy fallback
+    legacy = {
         "health_advisor": 10011,
         "health_records": 10010,
         "medication_reminder": 10012,
         "visit_summary": 10013,
     }
-    return port_map.get(name, 10000)
+    return legacy.get(name, 10000)
 
 
 __all__ = [

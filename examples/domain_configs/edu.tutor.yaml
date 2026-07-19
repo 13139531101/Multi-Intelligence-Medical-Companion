@@ -1,0 +1,79 @@
+# Education Tutor Template - 多角色教学辅导
+# 老师 / 助教 / 答疑 / 个性化推题
+
+domain:
+  name: "edu_tutor"
+  display_name: "AI 教学辅导"
+  description: "老师 / 助教 / 答疑 / 个性化"
+  version: "0.1.0"
+
+host:
+  name: "guide"
+  fallback_keywords: ["开始", "上课", "请讲"]
+  classify_model: "deepseek-chat"
+
+agents:
+  - name: "guide"
+    display_name: "课程导览"
+    description: "开场白 / 引导学员进入正题"
+    keywords: ["课程", "上课", "讲解"]
+    tools_module: "edu_tutor.guide"
+    phacore_modules: []
+    aliases: ["导览", "老师"]
+    port: 9101
+
+  - name: "lecturer"
+    display_name: "主讲老师"
+    description: "概念讲解 / 知识点系统化输出"
+    keywords:
+      - "概念"
+      - "原理"
+      - "为什么"
+      - "定义"
+      - "解释"
+    tools_module: "edu_tutor.lecturer"
+    phacore_modules: []
+    aliases: ["教授", "讲师"]
+    port: 9102
+
+  - name: "ta"
+    display_name: "助教答疑"
+    description: "学员具体问题 / 错题分析"
+    keywords:
+      - "不懂"
+      - "错"
+      - "为什么不对"
+      - "解释一下"
+      - "不会做"
+    tools_module: "edu_tutor.ta"
+    phacore_modules: []
+    aliases: ["助教", "答疑"]
+    port: 9103
+
+  - name: "recommender"
+    display_name: "个性化推荐"
+    description: "推题 / 学习路径"
+    keywords:
+      - "推荐"
+      - "推题"
+      - "下一步学什么"
+      - "测一测"
+      - "评估"
+    tools_module: "edu_tutor.recommender"
+    phacore_modules: []
+    aliases: ["推荐", "学伴"]
+    port: 9104
+
+service_discovery:
+  default_port_offset: 10010
+  services:
+    guide:        10301
+    lecturer:     10302
+    ta:           10303
+    recommender:  10304
+
+did:
+  domain: "school.example.com"
+  prefix: "did:wba"
+
+mcp_transport: "streamable_http"

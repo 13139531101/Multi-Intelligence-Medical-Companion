@@ -396,8 +396,13 @@ async def v2_process_message_stream(message) -> AsyncIterator[dict]:
 
     # Layer 3: LLM fallback (省略 — 走 v1 HostGraph 一样)
 
+    # 阶段48-20: fallback agent 从 DomainManifest 读, 不再硬编码 health_advisor
     if not target_agent:
-        target_agent = "health_advisor"  # fallback
+        try:
+            from .domain_manifest import load_default
+            target_agent = load_default().host_agent_name
+        except Exception:
+            target_agent = "health_advisor"  # legacy
 
     # 阶段48-11 push routing 事件
     yield {
@@ -551,8 +556,13 @@ async def v2_process_message_resume(
     """
     try:
         from .agent_registry import AgentRegistry
+        # 阶段48-20: fallback agent 从 DomainManifest 读
         if target_agent == "auto" or not target_agent:
-            target_agent = "health_advisor"
+            try:
+                from .domain_manifest import load_default
+                target_agent = load_default().host_agent_name
+            except Exception:
+                target_agent = "health_advisor"  # legacy
         spec = AgentRegistry.get(target_agent)
         if spec is None or spec.cls is None:
             yield {"event": "error", "error": f"unknown agent: {target_agent}"}
