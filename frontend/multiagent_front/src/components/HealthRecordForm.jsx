@@ -25,8 +25,6 @@ import {
   Select,
   Stack,
   TextField,
-  ToggleButton,
-  ToggleButtonGroup,
   Tooltip,
   Typography,
   Alert,
@@ -62,21 +60,21 @@ const KIND_META = {
     label: "健康档案",
     table: "health_records",
     dateField: { key: "record_date", label: "日期" },
-    titleHint: "例: 2024-01 体检报告",
+    titleHint: "比如 2024-01 体检报告 (留空会用附件名)",
   },
   visit_summary: {
     label: "就诊摘要",
     table: "visit_summaries",
     dateField: { key: "visit_date", label: "就诊日期" },
-    titleHint: "例: 2024-01-15 协和内分泌门诊",
+    titleHint: "比如 2024-01-15 协和内分泌门诊",
   },
 };
 
 const SUMMARY_MAX = 1000;
 
 export default function HealthRecordForm({
-  userId,
-  kind = "health_record", // 'health_record' | 'visit_summary'
+  userId, // 可选 — 不传时从 localStorage.user 解
+  kind = "health_record", // 'health_record' (本组件锁定, UI 不切换)
   mode = "create", // 'create' | 'edit'
   initialRecord = null, // 编辑模式预填
   recordId = null, // 编辑模式目标 id
@@ -84,9 +82,13 @@ export default function HealthRecordForm({
   onUpdated, // 编辑模式 success 回调 (res) => void
   onCancel,
   defaultAttachedFileIds = [],
-  onKindChange,
 }) {
-  const [activeKind, setActiveKind] = useState(kind);
+  // 阶段48-22 v4: kind 是 **锁定 prop, 不再 UI 切换**.
+  //   不同 kind 走不同页面:
+  //     - /v2/health-records 用 HealthRecordForm (健康档案)
+  //     - /v2/summary 走 Summary.jsx 的独立表单 (就诊摘要)
+  //   这里硬编码 activeKind = kind, 删掉 switchKind UI.
+  const [activeKind] = useState(kind);
   const [form, setForm] = useState(() =>
     initialRecord
       ? initialToForm(initialRecord, activeKind)
@@ -105,17 +107,33 @@ export default function HealthRecordForm({
 
   const meta = KIND_META[activeKind];
 
+  // 阶段48-22 v4: userId 三路解析 — prop > localStorage.user.user_id > localStorage.user.id
+  //   之前 NewHealthRecords 删了 userId prop 后, 这里 undefined, 子组件显示 "用户未登录"
+  const effectiveUserId = useMemo(() => {
+    if (userId) return userId;
+    if (typeof window === "undefined") return null;
+    const raw = window.localStorage.getItem("user");
+    if (!raw) return null;
+    try {
+      const u = JSON.parse(raw);
+      return u.user_id || u.id || null;
+    } catch {
+      return null;
+    }
+  }, [userId]);
+
   const getAuth = () => {
     if (typeof window === "undefined") return {};
-    const t = window.localStorage.getItem("access_token");
+    // 阶段48-22 v4: token key 是 "token" (AuthContext.jsx 写的), 不是 "access_token"
+    const t = window.localStorage.getItem("token");
     return t ? { Authorization: `Bearer ${t}` } : {};
   };
 
   const refreshFiles = useCallback(async () => {
-    if (!userId) return;
+    if (!effectiveUserId) return;
     try {
       const r = await fetch(
-        `${API_BASE}/v2/upload/files?user_id=${encodeURIComponent(userId)}&limit=50`,
+        `${API_BASE}/v2/upload/files?user_id=${encodeURIComponent(effectiveUserId)}&limit=50`,
         { headers: getAuth() },
       );
       if (r.ok) {
@@ -124,11 +142,11 @@ export default function HealthRecordForm({
         setFiles(all.filter((f) => f.purpose === expectedPurpose));
       }
     } catch {}
-  }, [userId, activeKind]);
+  }, [effectiveUserId, activeKind]);
 
   // 阶段48-22 v3+ (B): 把单文件的 OCR 文本注入表单 (summary / content)
   const applyOcrToForm = async (fileId) => {
-    if (!userId) return;
+    if (!effectiveUserId) return;
     const file = files.find((f) => f.id === fileId);
     // 已经有 ocr_text 字段 (upload/files 返回完整 row)
     if (file?.ocr_text) {
@@ -148,7 +166,7 @@ export default function HealthRecordForm({
     // fallback: 拉取单文件详情
     try {
       const r = await fetch(
-        `${API_BASE}/v2/upload/files?user_id=${encodeURIComponent(userId)}&limit=50`,
+        `${API_BASE}/v2/upload/files?user_id=${encodeURIComponent(effectiveUserId)}&limit=50`,
         { headers: getAuth() },
       );
       if (!r.ok) return;
@@ -178,12 +196,12 @@ export default function HealthRecordForm({
 
   // 编辑模式: 进入时拉取该 record 已有附件, 让 chip 列表显示已挂的
   useEffect(() => {
-    if (mode !== "edit" || !recordId || !userId) return;
+    if (mode !== "edit" || !recordId || !effectiveUserId) return;
     let cancelled = false;
     (async () => {
       try {
         const r = await fetch(
-          `${API_BASE}/api/v2-attach/${KIND_META[activeKind].table}/${recordId}/files?user_id=${encodeURIComponent(userId)}`,
+          `${API_BASE}/api/v2-attach/${KIND_META[activeKind].table}/${recordId}/files?user_id=${encodeURIComponent(effectiveUserId)}`,
           { headers: getAuth() },
         );
         if (!r.ok) return;
@@ -214,23 +232,7 @@ export default function HealthRecordForm({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, recordId, userId, activeKind]);
-
-  // 切换 kind 时重置表单
-  const switchKind = (newKind) => {
-    if (newKind === activeKind) return;
-    if (mode === "edit") {
-      // 编辑模式不允许切换 kind (会换 table / schema)
-      setError("编辑模式下不能切换 kind");
-      return;
-    }
-    setActiveKind(newKind);
-    setForm(buildInitialForm(newKind));
-    setAttachedFileIds([]);
-    setError("");
-    setInfo("");
-    onKindChange?.(newKind);
-  };
+  }, [mode, recordId, effectiveUserId, activeKind]);
 
   const toggleAttach = (fid) => {
     setAttachedFileIds((prev) =>
@@ -241,8 +243,26 @@ export default function HealthRecordForm({
   const submit = async () => {
     setError("");
     setInfo("");
-    if (!form.title.trim()) {
-      setError("请填标题");
+    // 阶段48-22 v4: 标题不再是强约束. 如果空, 用首个附件文件名做 stub,
+    //   更进一步: 完全没标题也没附件就报错.
+    let titleToUse = form.title.trim();
+    if (!titleToUse) {
+      if (attachedFileIds.length > 0) {
+        const f = files.find((x) => x.id === attachedFileIds[0]);
+        if (f?.original_name) {
+          // 去掉扩展名, 比如 "血常规.pdf" -> "血常规"
+          titleToUse = f.original_name.replace(/\.[^.]+$/, "").slice(0, 200);
+          setForm((p) => ({ ...p, title: titleToUse }));
+          setInfo(`标题为空, 已用第 1 个附件名 "${titleToUse}" 自动填充`);
+        }
+      }
+      if (!titleToUse) {
+        setError("请至少填一个标题, 或者先上传一个附件");
+        return;
+      }
+    }
+    if (!effectiveUserId) {
+      setError("用户未登录 — 请先在登录页登录");
       return;
     }
     setBusy(true);
@@ -260,8 +280,8 @@ export default function HealthRecordForm({
       }
       const isEdit = mode === "edit";
       const url = isEdit
-        ? `${API_BASE}/api/v2/update-record-and-attach?user_id=${encodeURIComponent(userId)}`
-        : `${API_BASE}/api/v2/create-record-and-attach?user_id=${encodeURIComponent(userId)}`;
+        ? `${API_BASE}/api/v2/update-record-and-attach?user_id=${encodeURIComponent(effectiveUserId)}`
+        : `${API_BASE}/api/v2/create-record-and-attach?user_id=${encodeURIComponent(effectiveUserId)}`;
       const r = await fetch(url, {
         method: isEdit ? "PUT" : "POST",
         headers: {
@@ -309,18 +329,7 @@ export default function HealthRecordForm({
           )}
         </Stack>
 
-        {/* Kind switcher */}
-        <Box sx={{ mb: 2 }}>
-          <ToggleButtonGroup
-            value={activeKind}
-            exclusive
-            onChange={(_, v) => v && switchKind(v)}
-            size="small"
-          >
-            <ToggleButton value="health_record">📋 健康档案</ToggleButton>
-            <ToggleButton value="visit_summary">🏥 就诊摘要</ToggleButton>
-          </ToggleButtonGroup>
-        </Box>
+        {/* Kind switcher — v4 删: 不再让用户切换 kind. 不同种类走不同页面. */}
 
         {error && (
           <Alert severity="error" sx={{ mb: 2 }}>
@@ -339,10 +348,11 @@ export default function HealthRecordForm({
             <TextField
               fullWidth
               size="small"
-              label="标题 *"
+              label="标题"
               value={form.title}
               onChange={(e) => setForm({ ...form, title: e.target.value })}
               placeholder={meta.titleHint}
+              helperText="留空时自动用第 1 个附件的文件名"
             />
           </Grid>
           <Grid item xs={12} sm={4}>
@@ -607,7 +617,7 @@ export default function HealthRecordForm({
               }}
             >
               <HealthUploader
-                userId={userId}
+                userId={effectiveUserId}
                 domain="pha"
                 purpose={activeKind}
                 purposeLabel={KIND_META[activeKind].label}

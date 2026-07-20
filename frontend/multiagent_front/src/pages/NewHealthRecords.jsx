@@ -119,6 +119,20 @@ export default function NewHealthRecords() {
   const [editing, setEditing] = useState(null);
   const [extracting, setExtracting] = useState({});
 
+  // 阶段48-22 v4: 从 AuthContext 写入的 localStorage.user 解 user_id
+  //   之前没传, 子组件显示 "用户未登录"
+  const currentUserId = (() => {
+    if (typeof window === "undefined") return null;
+    const raw = window.localStorage.getItem("user");
+    if (!raw) return null;
+    try {
+      const u = JSON.parse(raw);
+      return u.user_id || u.id || null;
+    } catch {
+      return null;
+    }
+  })();
+
   const fetchRecords = async () => {
     setLoading(true);
     try {
@@ -658,18 +672,13 @@ export default function NewHealthRecords() {
         maxWidth="md"
         fullWidth
       >
-        <DialogTitle>
-          {editing?.id ? "编辑档案" : "新增档案 (含附件上传)"}
-        </DialogTitle>
+        <DialogTitle>{editing?.id ? "编辑档案" : "新增档案"}</DialogTitle>
         <DialogContent dividers>
           {/* 注: 阶段48-22 v3+: 新建 / 编辑 都用 HealthRecordForm (含附件编辑能力) */}
           <HealthRecordForm
             mode={editing?.id ? "edit" : "create"}
-            kind={
-              editing?.kind === "visit_summary"
-                ? "visit_summary"
-                : "health_record"
-            }
+            kind="health_record"
+            userId={currentUserId}
             recordId={editing?.id}
             initialRecord={editing?.id ? editing : null}
             onCreated={() => {
