@@ -3493,7 +3493,9 @@ def row_to_health_record(row) -> HealthRecord:
     if isinstance(tags_val, str):
         tags_parsed = deserialize_tags(tags_val)
     elif isinstance(tags_val, list):
-        tags_parsed = tags_val
+        # 阶段48-22 v3+ D 兼容性: 历史数据里 tags 元素可能是 dict,
+        # Pydantic List[str] 会拒. 这里把非 str 项转成 str 避免整个列表 500.
+        tags_parsed = [str(t) if isinstance(t, str) else json.dumps(t, ensure_ascii=False) for t in tags_val]
     else:
         tags_parsed = []
     if isinstance(meta_val, str):
