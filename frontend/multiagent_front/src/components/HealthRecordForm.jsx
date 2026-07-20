@@ -27,6 +27,7 @@ import {
   TextField,
   ToggleButton,
   ToggleButtonGroup,
+  Tooltip,
   Typography,
   Alert,
   LinearProgress,
@@ -37,6 +38,7 @@ import {
   Close as CloseIcon,
   AttachFile as AttachFileIcon,
   Refresh as RefreshIcon,
+  ContentCopy as ContentCopyIcon,
 } from "@mui/icons-material";
 import HealthUploader from "./HealthUploader";
 
@@ -118,13 +120,57 @@ export default function HealthRecordForm({
       );
       if (r.ok) {
         const all = (await r.json()) || [];
-        // 只展示目的匹配当前 kind 的文件 (purpose 跟 kind 对齐)
-        // 健康档案 ↔ purpose=health_record,  就诊摘要 ↔ purpose=visit_summary
         const expectedPurpose = activeKind;
         setFiles(all.filter((f) => f.purpose === expectedPurpose));
       }
     } catch {}
   }, [userId, activeKind]);
+
+  // 阶段48-22 v3+ (B): 把单文件的 OCR 文本注入表单 (summary / content)
+  const applyOcrToForm = async (fileId) => {
+    if (!userId) return;
+    const file = files.find((f) => f.id === fileId);
+    // 已经有 ocr_text 字段 (upload/files 返回完整 row)
+    if (file?.ocr_text) {
+      setForm((p) => ({
+        ...p,
+        summary:
+          file.ocr_text.length > SUMMARY_MAX
+            ? file.ocr_text.slice(0, SUMMARY_MAX)
+            : file.ocr_text,
+        content: file.ocr_text,
+      }));
+      setInfo(
+        `已套用 ${file.original_name} 的 OCR (${file.ocr_text.length} 字)`,
+      );
+      return;
+    }
+    // fallback: 拉取单文件详情
+    try {
+      const r = await fetch(
+        `${API_BASE}/v2/upload/files?user_id=${encodeURIComponent(userId)}&limit=50`,
+        { headers: getAuth() },
+      );
+      if (!r.ok) return;
+      const all = (await r.json()) || [];
+      const detail = all.find((f) => f.id === fileId);
+      if (detail?.ocr_text) {
+        setForm((p) => ({
+          ...p,
+          summary:
+            detail.ocr_text.length > SUMMARY_MAX
+              ? detail.ocr_text.slice(0, SUMMARY_MAX)
+              : detail.ocr_text,
+          content: detail.ocr_text,
+        }));
+        setInfo(`已套用 OCR (${detail.ocr_text.length} 字)`);
+      } else {
+        setInfo(`该文件还没有 OCR 文本 (status: ${detail?.ocr_status || "?"})`);
+      }
+    } catch (e) {
+      setError("套用 OCR 失败");
+    }
+  };
 
   useEffect(() => {
     refreshFiles();
@@ -583,28 +629,47 @@ export default function HealthRecordForm({
               {files.map((f) => {
                 const picked = attachedFileIds.includes(f.id);
                 return (
-                  <Chip
+                  <Box
                     key={f.id}
-                    label={
-                      <Box>
-                        <Typography
-                          variant="caption"
-                          sx={{ display: "block", fontWeight: 500 }}
+                    sx={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 0.5,
+                    }}
+                  >
+                    <Chip
+                      label={
+                        <Box>
+                          <Typography
+                            variant="caption"
+                            sx={{ display: "block", fontWeight: 500 }}
+                          >
+                            {f.original_name}
+                          </Typography>
+                          <Typography variant="caption" sx={{ opacity: 0.7 }}>
+                            {(f.size_bytes / 1024).toFixed(1)}KB · OCR{" "}
+                            {f.ocr_status}
+                          </Typography>
+                        </Box>
+                      }
+                      clickable
+                      onClick={() => toggleAttach(f.id)}
+                      variant={picked ? "filled" : "outlined"}
+                      color={picked ? "primary" : "default"}
+                      sx={{ height: "auto", "& .MuiChip-label": { py: 0.5 } }}
+                    />
+                    {f.ocr_text && (
+                      <Tooltip title="把 OCR 文字注入 摘要 / 内容 字段">
+                        <IconButton
+                          size="small"
+                          onClick={() => applyOcrToForm(f.id)}
+                          sx={{ opacity: 0.6, "&:hover": { opacity: 1 } }}
                         >
-                          {f.original_name}
-                        </Typography>
-                        <Typography variant="caption" sx={{ opacity: 0.7 }}>
-                          {(f.size_bytes / 1024).toFixed(1)}KB · OCR{" "}
-                          {f.ocr_status}
-                        </Typography>
-                      </Box>
-                    }
-                    clickable
-                    onClick={() => toggleAttach(f.id)}
-                    variant={picked ? "filled" : "outlined"}
-                    color={picked ? "primary" : "default"}
-                    sx={{ height: "auto", "& .MuiChip-label": { py: 0.5 } }}
-                  />
+                          <ContentCopyIcon sx={{ fontSize: 14 }} />
+                        </IconButton>
+                      </Tooltip>
+                    )}
+                  </Box>
                 );
               })}
             </Stack>
