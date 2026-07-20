@@ -24,6 +24,7 @@ import {
   Skeleton,
   Alert,
   LinearProgress,
+  CircularProgress,
   List,
   ListItem,
   ListItemText,
@@ -191,27 +192,66 @@ export default function NewHealthRecords() {
   const handleExtract = async (recordId) => {
     setExtracting((p) => ({ ...p, [recordId]: true }));
     setError("");
+    // 阶段48-22 v6: 真实进度 — 在 records 里 mark OCR 进度数字
+    const updateProgress = (doneCount, totalCount) => {
+      setRecords((p) =>
+        p.map((r) =>
+          r.id === recordId
+            ? {
+                ...r,
+                ocr_progress: {
+                  done: doneCount,
+                  total: totalCount,
+                  started_at: new Date().toISOString(),
+                },
+              }
+            : r,
+        ),
+      );
+      if (detail?.id === recordId) {
+        setDetail((p) =>
+          p
+            ? {
+                ...p,
+                ocr_progress: {
+                  done: doneCount,
+                  total: totalCount,
+                  started_at: new Date().toISOString(),
+                },
+              }
+            : p,
+        );
+      }
+    };
+    updateProgress(0, 1);
     try {
+      // 先看 record 上有几个 image 文件要跑 (用作分母)
+      const record = records.find((r) => r.id === recordId);
+      const meta = record?.metadata?._attached_files_meta || [];
+      const imageCount = meta.filter((f) =>
+        (f.file_type || f.mime_type || "").startsWith("image/"),
+      ).length;
+      updateProgress(0, Math.max(1, imageCount));
       const res = await extractHealthRecord(recordId);
-      const meta = {
+      const metaOut = {
         ok: res.ok,
         full_text: res.full_text,
         files_ocr: res.files_ocr,
         extracted_at: new Date().toISOString(),
       };
-      // 把 meta 写到 r.metadata 里 (前端 UI 用)
       const updateOne = (r) =>
         r.id === recordId
           ? {
               ...r,
-              ocr: meta,
-              metadata: { ...(r.metadata || {}), last_extract: meta },
+              ocr: metaOut,
+              metadata: { ...(r.metadata || {}), last_extract: metaOut },
             }
           : r;
       setRecords((p) => p.map(updateOne));
       if (detail?.id === recordId) {
-        setDetail((p) => ({ ...p, ocr: meta }));
+        setDetail((p) => ({ ...p, ocr: metaOut }));
       }
+      updateProgress((res.files_ocr || []).length, Math.max(1, imageCount));
       const okCount = (res.files_ocr || []).filter(
         (f) => f.reextract?.ok,
       ).length;
@@ -225,7 +265,19 @@ export default function NewHealthRecords() {
       setError(e?.message || "OCR 失败");
       console.warn("OCR extract failed:", e?.message || e);
     } finally {
-      setExtracting((p) => ({ ...p, [recordId]: false }));
+      setExtracting((p) => {
+        const np = { ...p };
+        delete np[recordId]; // 用 delete 而非 set false, 避免残留
+        return np;
+      });
+      setRecords((p) =>
+        p.map((r) =>
+          r.id === recordId ? { ...r, ocr_progress: undefined } : r,
+        ),
+      );
+      if (detail?.id === recordId) {
+        setDetail((p) => (p ? { ...p, ocr_progress: undefined } : p));
+      }
     }
   };
 
@@ -426,6 +478,10 @@ export default function NewHealthRecords() {
                       <Description />
                     )}
                   </Avatar>
+                  {/* 阶段48-22 v6: OCR 进行中显示旋转 chip (在 avatar 右侧) */}
+                  {extracting[r.id] && (
+                    <CircularProgress size={16} sx={{ mt: 0.5, mr: -1 }} />
+                  )}
                   <Box sx={{ flex: 1, minWidth: 0 }}>
                     <Stack
                       direction="row"
@@ -463,23 +519,74 @@ export default function NewHealthRecords() {
                     >
                       {r.date ? `${r.date} · ` : ""}
                       {r.files.length > 0 ? `${r.files.length} 个附件 · ` : ""}
-                      {r.ocr ? "已 OCR 提取" : "未提取"}
+                      {(() => {
+                        // 阶段48-22 v6: 把附件级 ocr_status 聚合出"已识别 N/M"
+                        const meta =
+                          (r.metadata && r.metadata._attached_files_meta) || [];
+                        if (meta.length === 0) {
+                          return r.ocr ? "已 OCR 提取" : "未提取";
+                        }
+                        const done = meta.filter(
+                          (f) => (f.ocr_status || "").toLowerCase() === "done",
+                        ).length;
+                        if (done === meta.length)
+                          return `OCR 已识别 ${done}/${meta.length}`;
+                        if (done > 0)
+                          return `OCR 已识别 ${done}/${meta.length}`;
+                        return "未提取";
+                      })()}
                     </Typography>
-                    {r.content && (
-                      <Typography
-                        variant="body2"
-                        color="text.primary"
-                        sx={{
-                          mt: 0.5,
-                          display: "-webkit-box",
-                          WebkitLineClamp: 2,
-                          WebkitBoxOrient: "vertical",
-                          overflow: "hidden",
-                        }}
-                      >
-                        {r.content}
-                      </Typography>
-                    )}
+                    {/* 阶段48-22 v6: 直接显示第一条 OCR 文本作为卡片预览 — 一眼能看到内容 */}
+                    {(() => {
+                      const meta =
+                        (r.metadata && r.metadata._attached_files_meta) || [];
+                      const firstDone = meta.find(
+                        (f) =>
+                          (f.ocr_status || "").toLowerCase() === "done" &&
+                          (f.ocr_text || "").length > 0,
+                      );
+                      if (firstDone) {
+                        const preview = (firstDone.ocr_text || "")
+                          .replace(/\s+/g, " ")
+                          .trim()
+                          .slice(0, 140);
+                        return (
+                          <Typography
+                            variant="body2"
+                            color="text.primary"
+                            sx={{
+                              mt: 0.5,
+                              display: "-webkit-box",
+                              WebkitLineClamp: 2,
+                              WebkitBoxOrient: "vertical",
+                              overflow: "hidden",
+                              pl: 1,
+                              borderLeft: "2px solid",
+                              borderColor: "success.light",
+                            }}
+                            title={`来自附件: ${firstDone.file_name || ""}`}
+                          >
+                            {preview}
+                            {(firstDone.ocr_text || "").length > 140 ? "…" : ""}
+                          </Typography>
+                        );
+                      }
+                      return r.content ? (
+                        <Typography
+                          variant="body2"
+                          color="text.primary"
+                          sx={{
+                            mt: 0.5,
+                            display: "-webkit-box",
+                            WebkitLineClamp: 2,
+                            WebkitBoxOrient: "vertical",
+                            overflow: "hidden",
+                          }}
+                        >
+                          {r.content}
+                        </Typography>
+                      ) : null;
+                    })()}
                   </Box>
                   <ChevronRight color="action" />
                 </Stack>
@@ -758,13 +865,32 @@ export default function NewHealthRecords() {
                         <Button
                           size="small"
                           startIcon={<AutoAwesome />}
-                          disabled={extracting[detail.id]}
-                          onClick={() => handleExtract(detail.id)}
+                          disabled={!!extracting[detail.id]}
+                          onClick={() => {
+                            if (extracting[detail.id]) return;
+                            handleExtract(detail.id);
+                          }}
                         >
                           {extracting[detail.id] ? "提取中..." : "重新提取"}
                         </Button>
                       </Stack>
-                      {extracting[detail.id] && <LinearProgress />}
+                      {extracting[detail.id] && (
+                        <Stack spacing={0.5}>
+                          <LinearProgress />
+                          <Typography
+                            variant="caption"
+                            color="text.secondary"
+                            sx={{
+                              display: "flex",
+                              alignItems: "center",
+                              gap: 0.5,
+                            }}
+                          >
+                            <CircularProgress size={12} />
+                            正在调用 Qwen-VL 识别图片中的文字 (每张图 3-10 秒)
+                          </Typography>
+                        </Stack>
+                      )}
 
                       {/* 直接展示每个附件的 OCR 文本, 从 uploaded_files (通过 merge 注入 _attached_files_meta) */}
                       {(() => {
