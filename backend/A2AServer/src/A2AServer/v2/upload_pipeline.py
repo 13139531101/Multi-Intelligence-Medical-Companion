@@ -583,6 +583,110 @@ async def get_file_meta(file_id: str, user_id: str = Query(...)):
     return dict(r)
 
 
+# 阶段48-22 v6: 手动重新跑 OCR (前端点 '提取信息' 调这里).
+# 老的 /api/health-records/{id}/extracted 已不存在, 新接口是按 file_id 干活.
+class ReextractRequest(BaseModel):
+    user_id: str
+    force: bool = False  # True = 跳过 status check, 已 done 也重跑
+
+
+class ReextractResponse(BaseModel):
+    ok: bool
+    file_id: str
+    ocr_status: str
+    ocr_text: Optional[str] = None
+    ocr_error: Optional[str] = None
+    cached: bool = False  # True = 没真跑, 命中已有的 done
+    message: Optional[str] = None
+
+
+@router.post("/files/{file_id}/reextract", response_model=ReextractResponse)
+async def reextract_file(
+    file_id: str,
+    req: ReextractRequest,
+):
+    """手动 OCR 重跑. 命中 done 且 !force 直接返回缓存.
+
+    同步执行 (前台 thread 跑; image 通常几秒; PDF 可能更长)
+    - 异步版见异步提取器版 (阶段48-22 v6+)
+    """
+    # 1. 找记录
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, user_id, mime_type, storage_path, ocr_status "
+                "FROM uploaded_files WHERE id=%s AND user_id=%s",
+                (file_id, req.user_id),
+            )
+            row = cur.fetchone()
+    if not row:
+        raise HTTPException(404, "file not found")
+    mime = row.get("mime_type") or "application/octet-stream"
+    storage_path = row.get("storage_path")
+
+    # 2. 已有 done 缓存 + !force → 直接返回
+    if row.get("ocr_status") == "done" and not req.force:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT ocr_text FROM uploaded_files WHERE id=%s", (file_id,)
+                )
+                r2 = cur.fetchone()
+        return ReextractResponse(
+            ok=True, file_id=file_id, ocr_status="done",
+            ocr_text=r2.get("ocr_text") if r2 else None, cached=True,
+            message="已提取过, 复用缓存",
+        )
+
+    # 3. 跑到 OCR (只走 Qwen-VL 这一路, PhaCore/mcp 在 hostapi 都不存在)
+    if not (mime.startswith("image/") or mime == "application/pdf"):
+        return ReextractResponse(
+            ok=False, file_id=file_id, ocr_status="skipped",
+            message=f"mime={mime} 不支持 OCR (仅 image/* 或 application/pdf)",
+        )
+
+    # mark running
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE uploaded_files SET ocr_status='running', updated_at=now() WHERE id=%s",
+                (file_id,),
+            )
+
+    text = None
+    err = None
+    try:
+        import anyio
+        text = await anyio.to_thread.run_sync(
+            lambda: _run_ocr(file_id, Path(storage_path), mime)
+        )
+    except Exception as e:
+        err = str(e)[:500]
+        logger.warning(f"[upload_pipeline] reextract {file_id} threw: {e}")
+
+    text = text or ""
+    final_status = "done" if text else "skipped"
+    if err and not text:
+        final_status = "failed"
+
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE uploaded_files SET ocr_status=%s, ocr_text=%s, ocr_error=%s, updated_at=now() WHERE id=%s",
+                (final_status, text, err or None, file_id),
+            )
+
+    return ReextractResponse(
+        ok=bool(text),
+        file_id=file_id,
+        ocr_status=final_status,
+        ocr_text=text or None,
+        ocr_error=err,
+        cached=False,
+        message=None if text else "OCR 没拿到文字, 可能图太小或语言不支持",
+    )
+
+
 # 阶段48-22: 静态 serve 上传的文件. 仅后端内部, 不暴露到公网 (生产应该用 nginx).
 file_router = APIRouter(prefix="/v2/files", tags=["v2-upload"])
 

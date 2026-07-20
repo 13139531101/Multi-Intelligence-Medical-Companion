@@ -3562,6 +3562,18 @@ def row_to_health_record(row) -> HealthRecord:
             m = mapping.get(s, "medium")
             return ImportanceLevel(m)
 
+    # 阶段48-22 v6: 把 v2 upload_pipeline 留的 metadata.attached_file_ids + 老 file_attachments 表 merge 进来
+    # 注: HealthRecord.file_attachments 仍是 List[str] (id only).
+    #     富信息 (file_name/original_name/mime/size/ocr_status) 塞 metadata._attached_files_meta
+    try:
+        merged = _merge_attachments_for_record(rid, files_parsed, meta_parsed) or []
+        if merged:
+            files_parsed = [m["file_id"] for m in merged]
+            meta_parsed = dict(meta_parsed or {})
+            meta_parsed["_attached_files_meta"] = merged
+    except Exception as _e:
+        logger.debug(f"[row_to_health_record] _merge_attachments_for_record failed: {_e}")
+
     return HealthRecord(
         id=rid,
         title=row.get("title"),
@@ -3576,6 +3588,101 @@ def row_to_health_record(row) -> HealthRecord:
         updated_at=updated_dt,
         file_attachments=files_parsed,
     )
+
+
+def _merge_attachments_for_record(record_id: str, current: list, meta: dict) -> list:
+    """阶段48-22 v6: merge 双轨附件.
+
+    来源 A — 老接口 row.files (从 row 直接取出, 已经是 str/file_id list)
+    来源 B — file_attachments WHERE record_id = <id> (老的 handle_upload_att 流程)
+    来源 C — uploaded_files WHERE id IN (metadata.attached_file_ids[])
+        (v2 upload_pipeline 写这里, row_to_health_record 之前漏读)
+
+    返回统一结构 [{file_id|attached_id, file_name|original_name, file_type|mime_type,
+                   file_size, ocr_status, public_url}, ...], 去重按 file_id.
+    """
+    import psycopg
+    from psycopg.rows import dict_row as _dr
+
+    # 拼接一段 dsn (跟 hostapi 同源)
+    pg_host = os.getenv("DB_HOST", "postgres")
+    pg_user = os.getenv("DB_USER", "pha")
+    pg_pwd = os.getenv("DB_PASSWORD", "")
+    pg_db = os.getenv("MEMORY_DB_NAME", "personal_health_assistant")
+    dsn = os.getenv("PHA_BLOB_DSN") or f"postgresql://{pg_user}:{pg_pwd}@{pg_host}:5432/{pg_db}"
+
+    out = []
+    seen = set()
+
+    def _push(fid, **kw):
+        if not fid:
+            return
+        k = str(fid)
+        if k in seen:
+            return
+        seen.add(k)
+        out.append({"file_id": fid, **kw})
+
+    # A: current files list (string id or dict)
+    for item in (current or []):
+        if isinstance(item, str):
+            _push(item)
+        elif isinstance(item, dict):
+            fid = item.get("file_id") or item.get("id") or item.get("attached_id")
+            _push(fid,
+                  file_name=item.get("file_name") or item.get("original_filename") or item.get("name") or item.get("original_name"),
+                  file_type=item.get("file_type") or item.get("mime_type"),
+                  file_size=item.get("file_size"),
+                  ocr_status=item.get("ocr_status"),
+                  public_url=item.get("public_url") or item.get("url"))
+
+    # B: file_attachments WHERE record_id
+    try:
+        with psycopg.connect(dsn, autocommit=False, row_factory=_dr) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT id, original_filename, mime_type, file_size FROM file_attachments WHERE record_id = %s",
+                    (record_id,),
+                )
+                for r in cur.fetchall():
+                    _push(str(r["id"]),
+                          file_name=r.get("original_filename"),
+                          file_type=r.get("mime_type"),
+                          file_size=r.get("file_size"))
+    except Exception as _e:
+        logger.debug(f"[merge_attachments] file_attachments lookup failed: {_e}")
+
+    # C: uploaded_files WHERE id IN metadata.attached_file_ids
+    attached_ids = []
+    if isinstance(meta, dict):
+        for key in ("attached_file_ids", "files", "attached_file_id"):
+            v = meta.get(key)
+            if isinstance(v, list):
+                attached_ids = v
+                break
+            if isinstance(v, str):
+                attached_ids = [v]
+                break
+    if attached_ids:
+        try:
+            with psycopg.connect(dsn, autocommit=False, row_factory=_dr) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT id, original_name, mime_type, size_bytes, ocr_status, public_url "
+                        "FROM uploaded_files WHERE id = ANY(%s)",
+                        (attached_ids,),
+                    )
+                    for r in cur.fetchall():
+                        _push(str(r["id"]),
+                              file_name=r.get("original_name"),
+                              file_type=r.get("mime_type"),
+                              file_size=r.get("size_bytes"),
+                              ocr_status=r.get("ocr_status"),
+                              public_url=r.get("public_url"))
+        except Exception as _e:
+            logger.debug(f"[merge_attachments] uploaded_files lookup failed: {_e}")
+
+    return out
 
 
 # 新增：将本系统的记录类型映射为HRM存储工具的类型

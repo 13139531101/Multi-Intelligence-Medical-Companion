@@ -504,16 +504,76 @@ export const getAttachmentUrl = (fileId) => {
   return `${base}/v2/files/${encodeURIComponent(fileId)}`;
 };
 
-// 新增：获取指定记录的结构化与OCR信息
-export const getExtractedRecordInfo = async (recordId) => {
+// 新增：手动重跑 OCR. 阶段48-22 v6 替换老 /api/health-records/{id}/extracted (404).
+export const reextractFile = async (fileId, userId, opts = {}) => {
   try {
-    const response = await healthApi.get(
-      `/api/health-records/${recordId}/extracted`,
+    const response = await healthApi.post(
+      `/v2/upload/files/${encodeURIComponent(fileId)}/reextract`,
+      { user_id: userId, force: !!opts.force },
     );
     return response.data;
   } catch (error) {
+    throw error.response?.data || { message: `OCR 重跑失败 (${fileId})`, ocr_error: String(error) };
+  }
+};
+
+// 兼容旧名字 (避免改业务页面 import)
+export const getExtractedRecordInfo = async (recordId) => {
+  try {
+    // 阶段48-22 v6: 老接口已 404, 改走 /api/health-records/{id} 拿最新数据
+    //   (OCR 文本已经在 file_attachments/uploaded_files 里, 后端 merge 进 metadata._attached_files_meta)
+    const response = await healthApi.get(`/api/health-records/${recordId}`);
+    const files = response.data?.metadata?._attached_files_meta || [];
+    // 把 list 形式转成老 extracted API 的 shape (OCR key=full_join)
+    const merged = {
+      ok: true,
+      source: "reextract-stub",
+      record_id: recordId,
+      ocr_text: files.map((f) => f.file_name ? `[${f.file_name}] ${f.ocr_status}` : f.ocr_status).join("\n"),
+      files,
+    };
+    return merged;
+  } catch (error) {
     throw error.response?.data || { message: "获取结构化信息失败" };
   }
+};
+
+// 新增: 对一条 record 上所有附件 OCR 重跑
+export const extractHealthRecord = async (recordId) => {
+  // 先拉 record, 拿到 files list + user_id
+  const r = await healthApi.get(`/api/health-records/${recordId}`);
+  const data = r.data || {};
+  const meta = data.metadata || {};
+  const files = meta._attached_files_meta || [];
+  const uid = data.user_id;
+  if (!uid) throw { message: "无 user_id" };
+  if (!files.length) {
+    return { ok: false, message: "本档案没有附件可 OCR", files_ocr: [] };
+  }
+  const results = [];
+  for (const f of files) {
+    try {
+      const r2 = await reextractFile(f.file_id, uid, { force: false });
+      results.push({ ...f, reextract: r2 });
+    } catch (e) {
+      results.push({ ...f, reextract: { ok: false, ocr_error: e?.message || "fail" } });
+    }
+  }
+  // 用全部 OCR 文本拼成完整正文 (写回 record.content)
+  const fullText = results
+    .filter((r) => r.reextract?.ocr_text)
+    .map((r) => `\n## ${r.file_name || r.file_id}\n\n${r.reextract.ocr_text}`)
+    .join("\n");
+  if (fullText && !data.content) {
+    try {
+      await healthApi.put(`/api/health-records/${recordId}`, {
+        content: fullText,
+      });
+    } catch (e) {
+      // 不强制, 写回失败也没事 (前端缓存即可)
+    }
+  }
+  return { ok: true, full_text: fullText, files_ocr: results };
 };
 
 // 批量上传文件

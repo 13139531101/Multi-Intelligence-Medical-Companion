@@ -62,9 +62,9 @@ import {
   createHealthRecord,
   updateHealthRecord,
   deleteHealthRecord,
-  uploadFile,
   getAttachmentUrl,
   getExtractedRecordInfo,
+  extractHealthRecord,
 } from "../api/healthApi";
 
 // 阶段48: 升级 - 加图片预览 + OCR 结果 + 详情抽屉 + 真实上传
@@ -100,7 +100,16 @@ const adaptRecord = (r) => {
     hospital: r.hospital || r.metadata?.hospital || "",
     department: r.department || r.metadata?.department || "",
     content: r.description || r.summary || r.content || "",
-    files: r.files || r.file_attachments || r.metadata?.files || [],
+    files:
+      // 阶段48-22 v6: 后端 row_to_health_record 把 metadata._attached_files_meta
+      //   注入了一份富信息 (id+name+mime+ocr_status+public_url)
+      //   用它最全; 退化 4 道兜底确保历史数据不丢
+      r.metadata?._attached_files_meta ||
+      r.files ||
+      r.file_attachments ||
+      r.metadata?.files ||
+      r.metadata?.attached_file_ids ||
+      [],
     importance: r.importance || "medium",
     tags: r.tags || [],
     metadata: r.metadata || {},
@@ -153,18 +162,37 @@ export default function NewHealthRecords() {
 
   const handleExtract = async (recordId) => {
     setExtracting((p) => ({ ...p, [recordId]: true }));
+    setError("");
     try {
-      const ocr = await getExtractedRecordInfo(recordId);
-      setRecords((p) =>
-        p.map((r) => (r.id === recordId ? { ...r, ocr: ocr || r.ocr } : r)),
-      );
+      const res = await extractHealthRecord(recordId);
+      const meta = {
+        ok: res.ok,
+        full_text: res.full_text,
+        files_ocr: res.files_ocr,
+        extracted_at: new Date().toISOString(),
+      };
+      // 把 meta 写到 r.metadata 里 (前端 UI 用)
+      const updateOne = (r) =>
+        r.id === recordId
+          ? { ...r, ocr: meta, metadata: { ...(r.metadata || {}), last_extract: meta } }
+          : r;
+      setRecords((p) => p.map(updateOne));
       if (detail?.id === recordId) {
-        setDetail((p) => ({ ...p, ocr: ocr || p.ocr }));
+        setDetail((p) => ({ ...p, ocr: meta }));
+      }
+      const okCount = (res.files_ocr || []).filter((f) => f.reextract?.ok).length;
+      const totalCount = (res.files_ocr || []).length;
+      if (okCount > 0) {
+        setInfo(`OCR 完成: ${okCount}/${totalCount} 个附件识别成功`);
+      } else {
+        setInfo(`OCR: ${totalCount} 个附件均未识别到文字 — 检查图是否清楚`);
       }
     } catch (e) {
-      console.warn("OCR extract failed:", e?.message);
+      setError(e?.message || "OCR 失败");
+      console.warn("OCR extract failed:", e?.message || e);
+    } finally {
+      setExtracting((p) => ({ ...p, [recordId]: false }));
     }
-    setExtracting((p) => ({ ...p, [recordId]: false }));
   };
 
   const handleDelete = async (id) => {
