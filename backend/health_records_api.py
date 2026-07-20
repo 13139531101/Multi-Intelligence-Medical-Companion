@@ -3668,7 +3668,7 @@ def _merge_attachments_for_record(record_id: str, current: list, meta: dict) -> 
             with psycopg.connect(dsn, autocommit=False, row_factory=_dr) as conn:
                 with conn.cursor() as cur:
                     cur.execute(
-                        "SELECT id, original_name, mime_type, size_bytes, ocr_status, public_url "
+                        "SELECT id, original_name, mime_type, size_bytes, ocr_status, public_url, ocr_text "
                         "FROM uploaded_files WHERE id = ANY(%s)",
                         (attached_ids,),
                     )
@@ -3678,6 +3678,7 @@ def _merge_attachments_for_record(record_id: str, current: list, meta: dict) -> 
                               file_type=r.get("mime_type"),
                               file_size=r.get("size_bytes"),
                               ocr_status=r.get("ocr_status"),
+                              ocr_text=r.get("ocr_text"),
                               public_url=r.get("public_url"))
         except Exception as _e:
             logger.debug(f"[merge_attachments] uploaded_files lookup failed: {_e}")

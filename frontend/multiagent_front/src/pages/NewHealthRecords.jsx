@@ -117,6 +117,34 @@ const adaptRecord = (r) => {
   };
 };
 
+// 阶段48-22 v6: OCR tab 用的辅助函数
+const fname_default = (fid) =>
+  fid ? `附件 ${String(fid).slice(0, 8)}` : "附件";
+
+const ocrStatusLabel = (status) => {
+  switch (status) {
+    case "done":
+      return "✓ 已识别";
+    case "running":
+      return "识别中";
+    case "failed":
+      return "失败";
+    case "skipped":
+      return "跳过";
+    case "pending":
+      return "待识别";
+    default:
+      return status || "未知";
+  }
+};
+
+// 取最近一次"提取信息"返回的 OCR 文本 (按 fid 索引)
+const lastExtractText = (fid, ocrBlock) => {
+  if (!ocrBlock || !ocrBlock.files_ocr) return "";
+  const m = (ocrBlock.files_ocr || []).find((x) => x.file_id === fid);
+  return m?.reextract?.ocr_text || "";
+};
+
 export default function NewHealthRecords() {
   const [tab, setTab] = useState("all");
   const [search, setSearch] = useState("");
@@ -174,13 +202,19 @@ export default function NewHealthRecords() {
       // 把 meta 写到 r.metadata 里 (前端 UI 用)
       const updateOne = (r) =>
         r.id === recordId
-          ? { ...r, ocr: meta, metadata: { ...(r.metadata || {}), last_extract: meta } }
+          ? {
+              ...r,
+              ocr: meta,
+              metadata: { ...(r.metadata || {}), last_extract: meta },
+            }
           : r;
       setRecords((p) => p.map(updateOne));
       if (detail?.id === recordId) {
         setDetail((p) => ({ ...p, ocr: meta }));
       }
-      const okCount = (res.files_ocr || []).filter((f) => f.reextract?.ok).length;
+      const okCount = (res.files_ocr || []).filter(
+        (f) => f.reextract?.ok,
+      ).length;
       const totalCount = (res.files_ocr || []).length;
       if (okCount > 0) {
         setInfo(`OCR 完成: ${okCount}/${totalCount} 个附件识别成功`);
@@ -468,7 +502,14 @@ export default function NewHealthRecords() {
         {detail &&
           (() => {
             const fileCount = (detail.files || []).length;
-            const hasOcr = !!detail.ocr;
+            // 阶段48-22 v6: 至少 1 个附件 OCR 已 done 才打 OCR ✓
+            const metaFiles =
+              (detail.metadata && detail.metadata._attached_files_meta) || [];
+            const hasOcr =
+              metaFiles.length > 0 &&
+              metaFiles.some(
+                (f) => (f.ocr_status || "").toLowerCase() === "done",
+              );
             return (
               <>
                 {/* 顶部 — 类型 chip + 标题 + 关闭 */}
@@ -693,7 +734,10 @@ export default function NewHealthRecords() {
                     </Box>
                   )}
 
-                  {/* Tab 3: OCR */}
+                  {/* Tab 3: OCR — 阶段48-22 v6 修复: 直接读 _attached_files_meta
+                       老逻辑看 detail.ocr (永远 null, 因为 OCR 文本写 uploaded_files.ocr_text,
+                       不写 metadata.ocr_result), 所以 tab 一直空.
+                       现在从附件列表里逐个显示状态 + 文本. */}
                   {detailTab === 3 && (
                     <Stack spacing={2}>
                       <Stack
@@ -717,47 +761,116 @@ export default function NewHealthRecords() {
                           disabled={extracting[detail.id]}
                           onClick={() => handleExtract(detail.id)}
                         >
-                          {extracting[detail.id]
-                            ? "提取中..."
-                            : detail.ocr
-                              ? "重新提取"
-                              : "提取信息"}
+                          {extracting[detail.id] ? "提取中..." : "重新提取"}
                         </Button>
                       </Stack>
                       {extracting[detail.id] && <LinearProgress />}
-                      {detail.ocr ? (
-                        <Box>
-                          {Object.entries(detail.ocr).map(([k, v]) => (
-                            <Stack
-                              key={k}
-                              direction="row"
-                              sx={{
-                                py: 0.5,
-                                borderBottom: "1px dashed",
-                                borderColor: "divider",
-                              }}
-                            >
-                              <Typography
-                                variant="body2"
-                                sx={{ width: 120, color: "text.secondary" }}
-                              >
-                                {k}
-                              </Typography>
-                              <Typography variant="body2" sx={{ flex: 1 }}>
-                                {typeof v === "object"
-                                  ? JSON.stringify(v)
-                                  : String(v)}
-                              </Typography>
-                            </Stack>
-                          ))}
-                        </Box>
-                      ) : (
-                        !extracting[detail.id] && (
-                          <Typography variant="body2" color="text.secondary">
-                            点击 "提取信息" 从附件中识别关键信息
-                          </Typography>
-                        )
-                      )}
+
+                      {/* 直接展示每个附件的 OCR 文本, 从 uploaded_files (通过 merge 注入 _attached_files_meta) */}
+                      {(() => {
+                        const fileList = Array.isArray(detail.files)
+                          ? detail.files
+                          : [];
+                        const metaFiles =
+                          (detail.metadata &&
+                            detail.metadata._attached_files_meta) ||
+                          [];
+                        // 兼容: detail.files 可能是 dict 数组或字符串数组
+                        if (!fileList.length) {
+                          return (
+                            <Typography variant="body2" color="text.secondary">
+                              本档案暂无附件, 无 OCR 内容
+                            </Typography>
+                          );
+                        }
+                        const showFiles =
+                          metaFiles.length > 0
+                            ? metaFiles
+                            : fileList.map((f) =>
+                                typeof f === "object"
+                                  ? f
+                                  : {
+                                      file_id: f,
+                                      file_name: `附件 ${f.slice(0, 8)}`,
+                                    },
+                              );
+                        return (
+                          <Stack spacing={1.5}>
+                            {showFiles.map((f) => {
+                              const fid = f.file_id;
+                              const fname = f.file_name || fname_default(fid);
+                              const status = (f.ocr_status || "").toLowerCase();
+                              const ocrText =
+                                f.ocr_text || lastExtractText(fid, detail.ocr);
+                              return (
+                                <Paper
+                                  key={fid}
+                                  variant="outlined"
+                                  sx={{ p: 1.5 }}
+                                >
+                                  <Stack
+                                    direction="row"
+                                    alignItems="center"
+                                    spacing={1}
+                                    sx={{ mb: ocrText ? 1 : 0 }}
+                                  >
+                                    <Description fontSize="small" />
+                                    <Typography
+                                      variant="body2"
+                                      sx={{ flex: 1, fontWeight: 600 }}
+                                      noWrap
+                                    >
+                                      {fname}
+                                    </Typography>
+                                    <Chip
+                                      size="small"
+                                      label={ocrStatusLabel(status)}
+                                      color={
+                                        status === "done"
+                                          ? "success"
+                                          : status === "failed"
+                                            ? "error"
+                                            : status === "running"
+                                              ? "info"
+                                              : "default"
+                                      }
+                                      variant="outlined"
+                                    />
+                                  </Stack>
+                                  {ocrText ? (
+                                    <Typography
+                                      variant="body2"
+                                      sx={{
+                                        whiteSpace: "pre-wrap",
+                                        lineHeight: 1.6,
+                                        maxHeight: 280,
+                                        overflow: "auto",
+                                        bgcolor: "grey.50",
+                                        p: 1.5,
+                                        borderRadius: 1,
+                                        fontFamily: "monospace",
+                                      }}
+                                    >
+                                      {ocrText}
+                                    </Typography>
+                                  ) : status !== "running" ? (
+                                    <Typography
+                                      variant="body2"
+                                      color="text.secondary"
+                                    >
+                                      {status === "failed"
+                                        ? "OCR 失败 — 点 '重新提取' 重试"
+                                        : status === "skipped"
+                                          ? "此附件为非图片/PDF, 无需 OCR"
+                                          : "尚未识别 — 点 '重新提取' 启动"}
+                                    </Typography>
+                                  ) : null}
+                                </Paper>
+                              );
+                            })}
+                          </Stack>
+                        );
+                      })()}
                     </Stack>
                   )}
                 </DialogContent>
