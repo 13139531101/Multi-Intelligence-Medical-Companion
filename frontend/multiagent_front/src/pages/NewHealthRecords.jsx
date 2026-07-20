@@ -15,7 +15,6 @@ import {
   DialogTitle,
   DialogContent,
   DialogActions,
-  Drawer,
   Divider,
   Tabs,
   Tab,
@@ -118,6 +117,8 @@ export default function NewHealthRecords() {
   const [detail, setDetail] = useState(null);
   const [editing, setEditing] = useState(null);
   const [extracting, setExtracting] = useState({});
+  // 阶段48-22 v5: 详情弹窗 Tab 状态 (基础/正文/附件/OCR)
+  const [detailTab, setDetailTab] = useState(0);
 
   // 阶段48-22 v4: 从 AuthContext 写入的 localStorage.user 解 user_id
   //   之前没传, 子组件显示 "用户未登录"
@@ -339,7 +340,10 @@ export default function NewHealthRecords() {
                   borderLeft: `4px solid ${r.color}`,
                   "&:hover": { borderColor: r.color, boxShadow: 1 },
                 }}
-                onClick={() => setDetail(r)}
+                onClick={() => {
+                  setDetailTab(0);
+                  setDetail(r);
+                }}
               >
                 <Stack direction="row" spacing={2} alignItems="flex-start">
                   <Avatar
@@ -423,247 +427,335 @@ export default function NewHealthRecords() {
         )}
       </Container>
 
-      <Drawer
-        anchor="right"
+      {/* 阶段48-22 v5: 弹窗(Material Dialog)取代侧边栏(Drawer).
+            - 更大尺寸, 中心展示, 一眼看清档案全部内容
+            - Tab 分区: 基础信息 / 正文 / 附件 / OCR (避免信息堆在一起)  */}
+      <Dialog
         open={!!detail}
         onClose={() => setDetail(null)}
-        PaperProps={{ sx: { width: { xs: "100%", sm: 480 } } }}
+        maxWidth="md"
+        fullWidth
+        PaperProps={{ sx: { borderRadius: 2 } }}
       >
-        {detail && (
-          <Box>
-            <Stack
-              direction="row"
-              alignItems="center"
-              justifyContent="space-between"
-              sx={{ p: 2, borderBottom: "1px solid", borderColor: "divider" }}
-            >
-              <Typography variant="h6" sx={{ fontWeight: 600 }} noWrap>
-                档案详情
-              </Typography>
-              <IconButton size="small" onClick={() => setDetail(null)}>
-                <Close />
-              </IconButton>
-            </Stack>
-            <Box sx={{ p: 2 }}>
-              <Stack
-                direction="row"
-                spacing={2}
-                alignItems="center"
-                sx={{ mb: 2 }}
-              >
-                <Avatar
-                  variant="rounded"
-                  sx={{ bgcolor: detail.color, width: 56, height: 56 }}
-                >
-                  {detail.type === "diagnosis" ? (
-                    <Face />
-                  ) : detail.type === "exam" ? (
-                    <Science />
-                  ) : (
-                    <Description />
-                  )}
-                </Avatar>
-                <Box sx={{ flex: 1 }}>
-                  <Typography variant="h6" sx={{ fontWeight: 600 }}>
-                    {detail.title}
-                  </Typography>
-                  <Stack direction="row" spacing={1} sx={{ mt: 0.5 }}>
-                    <Chip
-                      label={detail.typeLabel}
-                      size="small"
-                      sx={{ bgcolor: detail.color, color: "white" }}
-                    />
-                    <Chip
-                      label={detail.importance || "medium"}
-                      size="small"
-                      variant="outlined"
-                    />
-                  </Stack>
-                </Box>
-              </Stack>
-
-              <Stack spacing={1.5} sx={{ mb: 2 }}>
-                {detail.hospital && (
-                  <DetailRow
-                    icon={<LocalHospital fontSize="small" />}
-                    label={detail.hospital}
-                    sub={detail.department}
-                  />
-                )}
-                {detail.date && (
-                  <DetailRow
-                    icon={<Event fontSize="small" />}
-                    label={detail.date}
-                  />
-                )}
-                {detail.files.length > 0 && (
-                  <DetailRow
-                    icon={<ImageIcon fontSize="small" />}
-                    label={`${detail.files.length} 个附件`}
-                  />
-                )}
-              </Stack>
-
-              {detail.content && (
-                <Paper
-                  variant="outlined"
-                  sx={{ p: 1.5, mb: 2, bgcolor: "grey.50" }}
-                >
-                  <Typography
-                    variant="caption"
-                    color="text.secondary"
-                    sx={{ display: "block", mb: 0.5 }}
-                  >
-                    内容
-                  </Typography>
-                  <Typography variant="body2" sx={{ whiteSpace: "pre-wrap" }}>
-                    {detail.content}
-                  </Typography>
-                </Paper>
-              )}
-
-              {detail.files.length > 0 && (
-                <Box sx={{ mb: 2 }}>
-                  <Typography
-                    variant="caption"
-                    color="text.secondary"
-                    sx={{ display: "block", mb: 1 }}
-                  >
-                    附件预览
-                  </Typography>
-                  <ImageList cols={2} gap={4} sx={{ m: 0 }}>
-                    {detail.files.slice(0, 4).map((f, i) => {
-                      const fid =
-                        typeof f === "string" ? f : f.file_id || f.id || f;
-                      return (
-                        <ImageListItem
-                          key={i}
-                          sx={{
-                            border: "1px solid",
-                            borderColor: "divider",
-                            borderRadius: 1,
-                            overflow: "hidden",
-                          }}
-                        >
-                          <img
-                            src={getAttachmentUrl(fid)}
-                            alt=""
-                            loading="lazy"
-                            style={{
-                              width: "100%",
-                              height: 100,
-                              objectFit: "cover",
-                            }}
-                            onError={(e) => {
-                              e.target.style.display = "none";
-                            }}
+        {detail &&
+          (() => {
+            const fileCount = (detail.files || []).length;
+            const hasOcr = !!detail.ocr;
+            return (
+              <>
+                {/* 顶部 — 类型 chip + 标题 + 关闭 */}
+                <DialogTitle sx={{ pb: 1.5 }}>
+                  <Stack direction="row" spacing={2} alignItems="center">
+                    <Avatar
+                      variant="rounded"
+                      sx={{ bgcolor: detail.color, width: 56, height: 56 }}
+                    >
+                      {detail.type === "diagnosis" ? (
+                        <Face />
+                      ) : detail.type === "exam" ? (
+                        <Science />
+                      ) : (
+                        <Description />
+                      )}
+                    </Avatar>
+                    <Box sx={{ flex: 1, minWidth: 0 }}>
+                      <Typography variant="h6" sx={{ fontWeight: 700 }} noWrap>
+                        {detail.title}
+                      </Typography>
+                      <Stack direction="row" spacing={1} sx={{ mt: 0.5 }}>
+                        <Chip
+                          label={detail.typeLabel}
+                          size="small"
+                          sx={{ bgcolor: detail.color, color: "white" }}
+                        />
+                        <Chip
+                          label={detail.importance || "medium"}
+                          size="small"
+                          variant="outlined"
+                        />
+                        {fileCount > 0 && (
+                          <Chip
+                            size="small"
+                            variant="outlined"
+                            label={`📎 ${fileCount} 个附件`}
                           />
-                        </ImageListItem>
-                      );
-                    })}
-                  </ImageList>
-                </Box>
-              )}
-
-              <Paper variant="outlined" sx={{ p: 1.5, mb: 2 }}>
-                <Stack
-                  direction="row"
-                  alignItems="center"
-                  justifyContent="space-between"
-                  sx={{ mb: 1 }}
-                >
-                  <Stack direction="row" alignItems="center" spacing={0.5}>
-                    <AutoAwesome fontSize="small" color="primary" />
-                    <Typography variant="caption" sx={{ fontWeight: 600 }}>
-                      OCR 提取
-                    </Typography>
+                        )}
+                      </Stack>
+                    </Box>
+                    <IconButton onClick={() => setDetail(null)}>
+                      <Close />
+                    </IconButton>
                   </Stack>
-                  <Button
-                    size="small"
-                    startIcon={<AutoAwesome />}
-                    disabled={extracting[detail.id]}
-                    onClick={() => handleExtract(detail.id)}
+                </DialogTitle>
+
+                {/* 4-区 Tabs — 默认第一区(基础信息) */}
+                <Box sx={{ borderBottom: 1, borderColor: "divider", px: 2 }}>
+                  <Tabs
+                    value={detailTab}
+                    onChange={(_, v) => setDetailTab(v)}
+                    variant="scrollable"
+                    scrollButtons="auto"
                   >
-                    {extracting[detail.id]
-                      ? "提取中..."
-                      : detail.ocr
-                        ? "重新提取"
-                        : "提取信息"}
-                  </Button>
-                </Stack>
-                {extracting[detail.id] && <LinearProgress sx={{ mb: 1 }} />}
-                {detail.ocr ? (
-                  <Box sx={{ fontSize: "0.8rem" }}>
-                    {Object.entries(detail.ocr)
-                      .slice(0, 6)
-                      .map(([k, v]) => (
-                        <Stack
-                          key={k}
-                          direction="row"
-                          sx={{
-                            py: 0.25,
-                            borderBottom: "1px dashed",
-                            borderColor: "divider",
-                          }}
-                        >
-                          <Typography
-                            variant="caption"
-                            sx={{ width: 80, color: "text.secondary" }}
-                          >
-                            {k}
+                    <Tab label="基础信息" />
+                    <Tab label={`正文${detail.content ? "" : " (空)"}`} />
+                    <Tab label={`附件${fileCount ? ` (${fileCount})` : ""}`} />
+                    <Tab label={`OCR${hasOcr ? " ✓" : ""}`} />
+                  </Tabs>
+                </Box>
+
+                <DialogContent dividers sx={{ minHeight: 360 }}>
+                  {/* Tab 0: 基础信息 */}
+                  {detailTab === 0 && (
+                    <Stack spacing={2}>
+                      <Grid container spacing={2}>
+                        {detail.date && (
+                          <Grid item xs={12} sm={6}>
+                            <Typography
+                              variant="caption"
+                              color="text.secondary"
+                            >
+                              日期
+                            </Typography>
+                            <Typography variant="body1">
+                              {detail.date}
+                            </Typography>
+                          </Grid>
+                        )}
+                        {detail.hospital && (
+                          <Grid item xs={12} sm={6}>
+                            <Typography
+                              variant="caption"
+                              color="text.secondary"
+                            >
+                              医院 / 科室
+                            </Typography>
+                            <Typography variant="body1">
+                              {detail.hospital}
+                              {detail.department
+                                ? ` · ${detail.department}`
+                                : ""}
+                            </Typography>
+                          </Grid>
+                        )}
+                        <Grid item xs={12} sm={6}>
+                          <Typography variant="caption" color="text.secondary">
+                            重要性
                           </Typography>
-                          <Typography variant="caption" sx={{ flex: 1 }}>
-                            {typeof v === "object"
-                              ? JSON.stringify(v)
-                              : String(v)}
+                          <Typography variant="body1">
+                            {detail.importance || "medium"}
+                          </Typography>
+                        </Grid>
+                        {detail.tags && detail.tags.length > 0 && (
+                          <Grid item xs={12}>
+                            <Typography
+                              variant="caption"
+                              color="text.secondary"
+                            >
+                              标签
+                            </Typography>
+                            <Stack
+                              direction="row"
+                              spacing={0.5}
+                              sx={{ flexWrap: "wrap", gap: 0.5, mt: 0.5 }}
+                            >
+                              {detail.tags.map((t, i) => (
+                                <Chip
+                                  key={i}
+                                  label={t}
+                                  size="small"
+                                  variant="outlined"
+                                />
+                              ))}
+                            </Stack>
+                          </Grid>
+                        )}
+                      </Grid>
+
+                      {/* 摘要提示 */}
+                      <Alert severity="info" variant="outlined">
+                        {detail.content
+                          ? `本文档有 ${detail.content.length} 字正文, 切到 "正文" tab 阅读`
+                          : "本文档暂无正文 — 切到 OCR tab 从附件提取, 或点 编辑 手动填写"}
+                      </Alert>
+                    </Stack>
+                  )}
+
+                  {/* Tab 1: 正文 */}
+                  {detailTab === 1 && (
+                    <Box>
+                      {detail.content ? (
+                        <Typography
+                          variant="body1"
+                          sx={{ whiteSpace: "pre-wrap", lineHeight: 1.8 }}
+                        >
+                          {detail.content}
+                        </Typography>
+                      ) : (
+                        <Stack alignItems="center" sx={{ py: 6 }} spacing={1}>
+                          <Description
+                            sx={{ fontSize: 48, color: "text.disabled" }}
+                          />
+                          <Typography variant="body2" color="text.secondary">
+                            暂无正文
+                          </Typography>
+                          <Button
+                            startIcon={<AutoAwesome />}
+                            onClick={() => handleExtract(detail.id)}
+                            disabled={extracting[detail.id]}
+                          >
+                            从附件 OCR 提取
+                          </Button>
+                        </Stack>
+                      )}
+                    </Box>
+                  )}
+
+                  {/* Tab 2: 附件 */}
+                  {detailTab === 2 && (
+                    <Box>
+                      {fileCount > 0 ? (
+                        <ImageList cols={3} gap={8} sx={{ m: 0 }}>
+                          {detail.files.map((f, i) => {
+                            const fid =
+                              typeof f === "string"
+                                ? f
+                                : f.file_id || f.id || f;
+                            const fname =
+                              typeof f === "object"
+                                ? f.original_name || f.name || `附件 ${i + 1}`
+                                : `附件 ${i + 1}`;
+                            return (
+                              <ImageListItem
+                                key={i}
+                                sx={{
+                                  border: "1px solid",
+                                  borderColor: "divider",
+                                  borderRadius: 1,
+                                  overflow: "hidden",
+                                }}
+                              >
+                                <img
+                                  src={getAttachmentUrl(fid)}
+                                  alt={fname}
+                                  loading="lazy"
+                                  style={{
+                                    width: "100%",
+                                    height: 160,
+                                    objectFit: "cover",
+                                  }}
+                                  onError={(e) => {
+                                    e.target.style.display = "none";
+                                  }}
+                                />
+                                <ImageListItemBar title={fname} />
+                              </ImageListItem>
+                            );
+                          })}
+                        </ImageList>
+                      ) : (
+                        <Stack alignItems="center" sx={{ py: 6 }} spacing={1}>
+                          <ImageIcon
+                            sx={{ fontSize: 48, color: "text.disabled" }}
+                          />
+                          <Typography variant="body2" color="text.secondary">
+                            暂无附件
                           </Typography>
                         </Stack>
-                      ))}
-                  </Box>
-                ) : (
-                  <Typography variant="caption" color="text.secondary">
-                    {extracting[detail.id]
-                      ? "正在解析..."
-                      : "点击提取以识别图片中的关键信息"}
-                  </Typography>
-                )}
-              </Paper>
+                      )}
+                    </Box>
+                  )}
 
-              {detail.tags && detail.tags.length > 0 && (
-                <Stack
-                  direction="row"
-                  spacing={0.5}
-                  sx={{ mb: 2, flexWrap: "wrap", gap: 0.5 }}
-                >
-                  {detail.tags.map((t, i) => (
-                    <Chip key={i} label={t} size="small" variant="outlined" />
-                  ))}
-                </Stack>
-              )}
-            </Box>
-            <Divider />
-            <Stack direction="row" spacing={1} sx={{ p: 2 }}>
-              <Button
-                fullWidth
-                variant="outlined"
-                startIcon={<Edit />}
-                onClick={() => setEditing(detail)}
-              >
-                编辑
-              </Button>
-              <Button
-                fullWidth
-                variant="outlined"
-                color="error"
-                startIcon={<Delete />}
-                onClick={() => handleDelete(detail.id)}
-              >
-                删除
-              </Button>
-            </Stack>
-          </Box>
-        )}
-      </Drawer>
+                  {/* Tab 3: OCR */}
+                  {detailTab === 3 && (
+                    <Stack spacing={2}>
+                      <Stack
+                        direction="row"
+                        alignItems="center"
+                        justifyContent="space-between"
+                      >
+                        <Stack
+                          direction="row"
+                          alignItems="center"
+                          spacing={0.5}
+                        >
+                          <AutoAwesome fontSize="small" color="primary" />
+                          <Typography variant="subtitle2">
+                            OCR 提取结果
+                          </Typography>
+                        </Stack>
+                        <Button
+                          size="small"
+                          startIcon={<AutoAwesome />}
+                          disabled={extracting[detail.id]}
+                          onClick={() => handleExtract(detail.id)}
+                        >
+                          {extracting[detail.id]
+                            ? "提取中..."
+                            : detail.ocr
+                              ? "重新提取"
+                              : "提取信息"}
+                        </Button>
+                      </Stack>
+                      {extracting[detail.id] && <LinearProgress />}
+                      {detail.ocr ? (
+                        <Box>
+                          {Object.entries(detail.ocr).map(([k, v]) => (
+                            <Stack
+                              key={k}
+                              direction="row"
+                              sx={{
+                                py: 0.5,
+                                borderBottom: "1px dashed",
+                                borderColor: "divider",
+                              }}
+                            >
+                              <Typography
+                                variant="body2"
+                                sx={{ width: 120, color: "text.secondary" }}
+                              >
+                                {k}
+                              </Typography>
+                              <Typography variant="body2" sx={{ flex: 1 }}>
+                                {typeof v === "object"
+                                  ? JSON.stringify(v)
+                                  : String(v)}
+                              </Typography>
+                            </Stack>
+                          ))}
+                        </Box>
+                      ) : (
+                        !extracting[detail.id] && (
+                          <Typography variant="body2" color="text.secondary">
+                            点击 "提取信息" 从附件中识别关键信息
+                          </Typography>
+                        )
+                      )}
+                    </Stack>
+                  )}
+                </DialogContent>
+
+                <DialogActions sx={{ p: 2 }}>
+                  <Button
+                    color="error"
+                    startIcon={<Delete />}
+                    onClick={() => handleDelete(detail.id)}
+                  >
+                    删除
+                  </Button>
+                  <Box sx={{ flex: 1 }} />
+                  <Button onClick={() => setDetail(null)}>关闭</Button>
+                  <Button
+                    variant="contained"
+                    startIcon={<Edit />}
+                    onClick={() => setEditing(detail)}
+                  >
+                    编辑
+                  </Button>
+                </DialogActions>
+              </>
+            );
+          })()}
+      </Dialog>
 
       {/* 阶段48-22 v3+: 用 HealthRecordForm 替代老的 document.getElementById 表单 + 上传 Dialog */}
       <Dialog
