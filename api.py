@@ -47,6 +47,9 @@ try:
         spec = importlib.util.spec_from_file_location("health_records_api", module_path)
         if spec and spec.loader:
             mod = importlib.util.module_from_spec(spec)
+            # 阶段48-22 v3+ D 修复: 必须把模块注册到 sys.modules, 否则模块内的
+            #   sys.modules[__name__] 会 KeyError ('health_records_api')
+            sys.modules["health_records_api"] = mod
             spec.loader.exec_module(mod)
             health_api = mod
 except Exception as e:
@@ -897,6 +900,7 @@ try:
         spec = importlib.util.spec_from_file_location("health_records_api", module_path)
         if spec and spec.loader:
             mod = importlib.util.module_from_spec(spec)
+            sys.modules["health_records_api"] = mod  # 阶段48-22 v3+ D
             spec.loader.exec_module(mod)
             health_api = mod
 
