@@ -75,13 +75,21 @@ const SUMMARY_MAX = 1000;
 export default function HealthRecordForm({
   userId,
   kind = "health_record", // 'health_record' | 'visit_summary'
-  onCreated,
+  mode = "create", // 'create' | 'edit'
+  initialRecord = null, // 编辑模式预填
+  recordId = null, // 编辑模式目标 id
+  onCreated, // (res, files) => void
+  onUpdated, // 编辑模式 success 回调 (res) => void
   onCancel,
   defaultAttachedFileIds = [],
-  onKindChange, // (newKind) => void   可选, 让父组件切换时拿到通知
+  onKindChange,
 }) {
   const [activeKind, setActiveKind] = useState(kind);
-  const [form, setForm] = useState(() => buildInitialForm(activeKind));
+  const [form, setForm] = useState(() =>
+    initialRecord
+      ? initialToForm(initialRecord, activeKind)
+      : buildInitialForm(activeKind),
+  );
   const [attachedFileIds, setAttachedFileIds] = useState(
     defaultAttachedFileIds,
   );
@@ -122,9 +130,54 @@ export default function HealthRecordForm({
     refreshFiles();
   }, [refreshFiles]);
 
+  // 编辑模式: 进入时拉取该 record 已有附件, 让 chip 列表显示已挂的
+  useEffect(() => {
+    if (mode !== "edit" || !recordId || !userId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch(
+          `${API_BASE}/api/v2-attach/${KIND_META[activeKind].table}/${recordId}/files?user_id=${encodeURIComponent(userId)}`,
+          { headers: getAuth() },
+        );
+        if (!r.ok) return;
+        const rows = (await r.json()) || [];
+        if (!cancelled) {
+          setAttachedFileIds(rows.map((x) => x.id));
+          // 同时把已有文件放进 files 列表 (chip 才能显示名字)
+          setFiles((p) => {
+            const ids = new Set(p.map((f) => f.id));
+            return [
+              ...rows
+                .filter((x) => !ids.has(x.id))
+                .map((x) => ({
+                  id: x.id,
+                  original_name: x.original_name,
+                  size_bytes: x.size_bytes || 0,
+                  ocr_status: x.ocr_status,
+                  mime_type: x.mime_type,
+                  purpose: activeKind,
+                })),
+              ...p,
+            ];
+          });
+        }
+      } catch {}
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, recordId, userId, activeKind]);
+
   // 切换 kind 时重置表单
   const switchKind = (newKind) => {
     if (newKind === activeKind) return;
+    if (mode === "edit") {
+      // 编辑模式不允许切换 kind (会换 table / schema)
+      setError("编辑模式下不能切换 kind");
+      return;
+    }
     setActiveKind(newKind);
     setForm(buildInitialForm(newKind));
     setAttachedFileIds([]);
@@ -150,25 +203,32 @@ export default function HealthRecordForm({
     try {
       const payload = {
         target_table: meta.table,
-        record: buildRecordPayload(activeKind, form),
-        attached_file_ids: attachedFileIds,
       };
-      const r = await fetch(
-        `${API_BASE}/api/v2/create-record-and-attach?user_id=${encodeURIComponent(userId)}`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Idempotency-Key": idempotencyKey, // 防重复
-            ...getAuth(),
-          },
-          body: JSON.stringify(payload),
+      if (mode === "edit") {
+        payload.record_id = recordId;
+        payload.record = buildRecordPayload(activeKind, form);
+        payload.attached_file_ids = attachedFileIds; // [] = 清空; array = 替换
+      } else {
+        payload.record = buildRecordPayload(activeKind, form);
+        payload.attached_file_ids = attachedFileIds;
+      }
+      const isEdit = mode === "edit";
+      const url = isEdit
+        ? `${API_BASE}/api/v2/update-record-and-attach?user_id=${encodeURIComponent(userId)}`
+        : `${API_BASE}/api/v2/create-record-and-attach?user_id=${encodeURIComponent(userId)}`;
+      const r = await fetch(url, {
+        method: isEdit ? "PUT" : "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key": idempotencyKey, // 防重复
+          ...getAuth(),
         },
-      );
+        body: JSON.stringify(payload),
+      });
       if (!r.ok) {
         const t = await r.text();
         throw new Error(
-          `one-step create failed: ${r.status} ${t.slice(0, 200)}`,
+          `one-step ${isEdit ? "update" : "create"} failed: ${r.status} ${t.slice(0, 200)}`,
         );
       }
       const res = await r.json();
@@ -176,7 +236,7 @@ export default function HealthRecordForm({
         ? `  ⚠ ${res.warnings.length} warning(s)`
         : "";
       setInfo(
-        `创建成功${warn} — ${meta.label} +${res.attached_count} 附件 (id=${res.record_id.slice(0, 8)}…)`,
+        `${isEdit ? "更新" : "创建"}成功${warn} — ${meta.label} ${res.attached_count > 0 ? `+${res.attached_count} 附件 ` : ""}(id=${res.record_id.slice(0, 8)}…)`,
       );
       onCreated?.(res, attachedFileIds);
     } catch (e) {
@@ -191,7 +251,9 @@ export default function HealthRecordForm({
       <CardContent>
         <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 2 }}>
           <Typography variant="h6">
-            新增{activeKind === "visit_summary" ? "就诊摘要" : "健康档案"}
+            {mode === "edit"
+              ? `编辑${activeKind === "visit_summary" ? "就诊摘要" : "健康档案"}`
+              : `新增${activeKind === "visit_summary" ? "就诊摘要" : "健康档案"}`}
           </Typography>
           <Box sx={{ flex: 1 }} />
           {onCancel && (
@@ -568,7 +630,7 @@ export default function HealthRecordForm({
             onClick={submit}
             disabled={busy}
           >
-            创建{meta.label}{" "}
+            {mode === "edit" ? `保存${meta.label}` : `创建${meta.label}`}{" "}
             {attachedFileIds.length > 0 && `+${attachedFileIds.length} 附件`}
           </Button>
         </Stack>
@@ -608,6 +670,44 @@ function buildInitialForm(kind) {
     prescription: "[]",
     follow_up: "",
     notes: "",
+  };
+}
+
+// 编辑模式预填: 把后端 record row 映射回 form state
+function initialToForm(record, kind) {
+  const tags_csv = Array.isArray(record.tags) ? record.tags.join(", ") : "";
+  const prescription_str =
+    typeof record.prescription === "string"
+      ? record.prescription
+      : JSON.stringify(record.prescription || []);
+  if (kind === "health_record") {
+    return {
+      title: record.title || "",
+      hospital: record.hospital || "",
+      doctor: record.doctor || "",
+      summary: record.summary || "",
+      record_type: record.record_type || "lab_report",
+      record_date: (record.record_date || "").slice(0, 10),
+      importance: record.importance || "medium",
+      tags: tags_csv,
+      content: record.content || "",
+    };
+  }
+  // visit_summary
+  return {
+    title: record.title || "",
+    hospital: record.hospital || "",
+    doctor: record.doctor || "",
+    summary: record.summary || "",
+    visit_date: (record.visit_date || "").slice(0, 10),
+    chief_complaint: record.chief_complaint || "",
+    symptoms: record.symptoms || "",
+    examination: record.examination || "",
+    diagnosis: record.diagnosis || "",
+    treatment: record.treatment || "",
+    prescription: prescription_str,
+    follow_up: record.follow_up || "",
+    notes: record.notes || "",
   };
 }
 

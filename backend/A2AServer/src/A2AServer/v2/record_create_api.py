@@ -38,6 +38,7 @@ from .record_attach_api import (
     _back_mark_files,
     _merge_metadata_attached_ids,
     _verify_files_ownership,
+    _verify_record_ownership,
 )
 
 logger = logging.getLogger(__name__)
@@ -107,6 +108,15 @@ class CreateAndAttachResponse(BaseModel):
     attached_file_ids: List[str] = []
     attached_count: int = 0
     warnings: List[str] = Field(default_factory=list)
+
+
+class UpdateAndAttachRequest(BaseModel):
+    """阶段48-22 v3+: 单步更新接口. 跟 create-record-and-attach 对称."""
+    target_table: str = "health_records"
+    record_id: str                                      # 要更新哪一行
+    record: Dict[str, Any]                              # 要更新的业务字段
+    attached_file_ids: Optional[List[str]] = None       # None=保持不变, []=清空, [id1,id2]=替换
+
 
 
 # ===== Create + Attach helpers =====
@@ -241,6 +251,143 @@ async def create_record_and_attach(
     return CreateAndAttachResponse(
         ok=True,
         record_id=rid,
+        target_table=target_table,
+        attached_file_ids=final_ids,
+        attached_count=len(final_ids),
+        warnings=warnings,
+    )
+
+
+# ===== 单步 update-and-attach =====
+def _update_health_record(user_id: str, rid: str, payload: Dict[str, Any]) -> None:
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE health_records SET
+                    title        = COALESCE(%s, title),
+                    record_type  = COALESCE(%s, record_type),
+                    summary      = COALESCE(%s, summary),
+                    content      = COALESCE(%s, content),
+                    importance   = COALESCE(%s, importance),
+                    tags         = COALESCE(%s::jsonb, tags),
+                    record_date  = COALESCE(%s, record_date),
+                    hospital     = COALESCE(%s, hospital),
+                    doctor       = COALESCE(%s, doctor),
+                    updated_at   = now()
+                WHERE id=%s AND user_id=%s
+            """, (
+                payload.get("title"),
+                payload.get("record_type"),
+                payload.get("summary"),
+                payload.get("content"),
+                payload.get("importance"),
+                json.dumps(payload["tags"]) if "tags" in payload and payload["tags"] is not None else None,
+                payload.get("record_date"),
+                payload.get("hospital"),
+                payload.get("doctor"),
+                rid, user_id,
+            ))
+
+
+def _update_visit_summary(user_id: str, rid: str, payload: Dict[str, Any]) -> None:
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE visit_summaries SET
+                    title             = COALESCE(%s, title),
+                    visit_date        = COALESCE(%s, visit_date),
+                    doctor            = COALESCE(%s, doctor),
+                    hospital          = COALESCE(%s, hospital),
+                    department        = COALESCE(%s, department),
+                    chief_complaint   = COALESCE(%s, chief_complaint),
+                    symptoms          = COALESCE(%s, symptoms),
+                    examination       = COALESCE(%s, examination),
+                    diagnosis         = COALESCE(%s, diagnosis),
+                    treatment         = COALESCE(%s, treatment),
+                    prescription      = COALESCE(%s, prescription),
+                    follow_up         = COALESCE(%s, follow_up),
+                    notes             = COALESCE(%s, notes),
+                    updated_at        = now()
+                WHERE id=%s AND user_id=%s
+            """, (
+                payload.get("title"),
+                payload.get("visit_date"),
+                payload.get("doctor"),
+                payload.get("hospital"),
+                payload.get("department"),
+                payload.get("chief_complaint"),
+                payload.get("symptoms"),
+                payload.get("examination"),
+                payload.get("diagnosis"),
+                payload.get("treatment"),
+                payload.get("prescription"),
+                payload.get("follow_up"),
+                payload.get("notes"),
+                rid, user_id,
+            ))
+
+
+@router.put("/update-record-and-attach", response_model=CreateAndAttachResponse)
+async def update_record_and_attach(
+    user_id: str = Query(..., description="current user"),
+    body: UpdateAndAttachRequest = Body(...),
+):
+    """阶段48-22 v3+: 单步更新接口 (1 步搞完: 更新业务字段 + 重设附件)."""
+    target_table = body.target_table
+    if target_table not in SUPPORTED_TABLES:
+        raise HTTPException(400, f"target_table must be one of {sorted(SUPPORTED_TABLES)}")
+
+    # 1. ownership (更新前先确认这行属于该 user)
+    _verify_record_ownership(target_table, body.record_id, user_id)
+
+    warnings: List[str] = []
+
+    # 2. 更新业务字段
+    try:
+        if target_table == "health_records":
+            _update_health_record(user_id, body.record_id, body.record)
+        else:
+            _update_visit_summary(user_id, body.record_id, body.record)
+    except Exception as e:
+        logger.exception(f"[update-record-attach] update failed: {e}")
+        raise HTTPException(500, f"update failed: {e}")
+
+    # 3. 附件: None=不变, []=清空, [list]=替换
+    if body.attached_file_ids is not None:
+        new_ids = body.attached_file_ids or []
+        # ownership 校验
+        if new_ids:
+            try:
+                owned = _verify_files_ownership(new_ids, user_id)
+            except HTTPException as e:
+                raise e
+            if len(owned) != len(new_ids):
+                missing = set(new_ids) - set(owned)
+                warnings.append(f"these files not owned / not exist: {sorted(missing)}")
+                new_ids = owned
+        try:
+            from .record_attach_api import _replace_metadata_attached_ids
+            if not new_ids:
+                # 清空 — 把已有替换成 []
+                _replace_metadata_attached_ids(target_table, body.record_id, [])
+            else:
+                _replace_metadata_attached_ids(target_table, body.record_id, new_ids)
+                _back_mark_files(new_ids, target_table, body.record_id)
+        except Exception as e:
+            logger.exception(f"[update-record-attach] attach change failed: {e}")
+            raise HTTPException(500, f"attach change failed (record updated though): {e}")
+
+    # 4. 回读 final attached_file_ids
+    final_ids: List[str] = []
+    try:
+        from .record_attach_api import _read_metadata_attached_ids
+        final_ids = _read_metadata_attached_ids(target_table, body.record_id)
+    except Exception:
+        final_ids = body.attached_file_ids or []
+
+    return CreateAndAttachResponse(
+        ok=True,
+        record_id=body.record_id,
         target_table=target_table,
         attached_file_ids=final_ids,
         attached_count=len(final_ids),

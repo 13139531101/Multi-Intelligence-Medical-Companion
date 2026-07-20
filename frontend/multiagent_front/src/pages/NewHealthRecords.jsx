@@ -662,73 +662,27 @@ export default function NewHealthRecords() {
           {editing?.id ? "编辑档案" : "新增档案 (含附件上传)"}
         </DialogTitle>
         <DialogContent dividers>
-          {/* 注: 编辑模式还在老路径; 新建用 HealthRecordForm 含附件上传 */}
-          {editing?.id ? (
-            <Stack spacing={2} sx={{ pt: 1 }}>
-              <TextField
-                label="标题"
-                fullWidth
-                size="small"
-                defaultValue={editing?.title || ""}
-                id="edit-title"
-              />
-              <TextField
-                select
-                label="类型"
-                fullWidth
-                size="small"
-                SelectProps={{ native: true }}
-                defaultValue={editing?.type || "diagnosis"}
-                id="edit-type"
-              >
-                {CATEGORIES.filter((c) => c.key !== "all").map((c) => (
-                  <option key={c.key} value={c.key}>
-                    {c.label}
-                  </option>
-                ))}
-              </TextField>
-              <TextField
-                label="医院"
-                fullWidth
-                size="small"
-                defaultValue={editing?.hospital || ""}
-                id="edit-hospital"
-              />
-              <TextField
-                label="科室"
-                fullWidth
-                size="small"
-                defaultValue={editing?.department || ""}
-                id="edit-department"
-              />
-              <TextField
-                label="日期"
-                type="date"
-                fullWidth
-                size="small"
-                defaultValue={editing?.date || ""}
-                id="edit-date"
-                InputLabelProps={{ shrink: true }}
-              />
-              <TextField
-                label="内容描述"
-                fullWidth
-                size="small"
-                multiline
-                rows={3}
-                defaultValue={editing?.content || ""}
-                id="edit-content"
-              />
-            </Stack>
-          ) : (
-            <HealthRecordForm
-              onCreated={() => {
-                setEditing(null);
-                fetchRecords();
-              }}
-              onCancel={() => setEditing(null)}
-            />
-          )}
+          {/* 注: 阶段48-22 v3+: 新建 / 编辑 都用 HealthRecordForm (含附件编辑能力) */}
+          <HealthRecordForm
+            mode={editing?.id ? "edit" : "create"}
+            kind={
+              editing?.kind === "visit_summary"
+                ? "visit_summary"
+                : "health_record"
+            }
+            recordId={editing?.id}
+            initialRecord={editing?.id ? editing : null}
+            onCreated={() => {
+              setEditing(null);
+              fetchRecords();
+            }}
+            onUpdated={() => {
+              setEditing(null);
+              fetchRecords();
+              setDetail(null);
+            }}
+            onCancel={() => setEditing(null)}
+          />
         </DialogContent>
         {editing?.id && (
           <DialogActions>
