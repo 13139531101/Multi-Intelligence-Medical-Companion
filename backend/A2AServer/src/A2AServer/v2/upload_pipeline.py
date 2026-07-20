@@ -285,36 +285,118 @@ def json_dumps(obj: Any) -> str:
     return json.dumps(obj, ensure_ascii=False)
 
 
-def _run_ocr(file_id: str, file_path: Path, mime: str) -> Optional[str]:
-    """阶段48-22: 用 PhaCore OCR (阶段48-19 统一) 抽文字.
+def _run_ocr_qwen_vl_sync(image_bytes: bytes, mime: str = "image/jpeg") -> Optional[str]:
+    """阶段48-22 v6: 同步调 DashScope 原生 multimodal-generation.
 
-    返回 None = 跳过 (例如 audio 或 unsupported).
-    返回 str = OCR 提取的文字.
+    PhaCore / mcp__health_records 都装不上的退化路径, 直接用 Qwen-VL.
+    注意: 走 dashscope.aliyuncs.com/api/v1/... 原生 API, 而不是 OpenAI-compat
+          (/compatible/v1/chat/completions 对 VL 经常 404).
     """
+    api_key = (
+        os.getenv("QWEN_API_KEY")
+        or os.getenv("DASHSCOPE_API_KEY")
+        or os.getenv("ALIYUN_DASHSCOPE_API_KEY")
+        or ""
+    ).strip()
+    if not api_key or not image_bytes:
+        return None
+    base_url = (
+        os.getenv("QWEN_VL_API_BASE")
+        or "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
+    ).rstrip("/")
+    model_name = os.getenv("QWEN_VL_MODEL") or "qwen-vl-plus"
+    prompt_text = (
+        os.getenv("HOSTAPI_CHAT_OCR_QWEN_PROMPT")
+        or "请识别这张图片中的所有文字, 按原始结构输出纯文本, 不要解释."
+    )
+    import base64 as _b64
+    import httpx as _httpx
+    b64 = _b64.b64encode(image_bytes).decode("utf-8")
+    mime_q = (mime or "image/jpeg").split(";")[0]
+    payload = {
+        "model": model_name,
+        "input": {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"image": f"data:{mime_q};base64,{b64}"},
+                        {"text": prompt_text},
+                    ],
+                }
+            ]
+        },
+        "parameters": {},
+    }
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     try:
-        # 优先用 PhaCore 统一入口
+        with _httpx.Client(timeout=_httpx.Timeout(connect=10.0, read=60.0, write=60.0, pool=10.0)) as cli:
+            r = cli.post(base_url, headers=headers, json=payload)
+        if r.status_code < 200 or r.status_code >= 300:
+            logger.warning(f"[upload_pipeline] Qwen-VL OCR HTTP {r.status_code}: {r.text[:200]}")
+            return None
+        data = r.json()
+        # 原生格式: data.output.choices[0].message.content[*].text
         try:
-            from PhaCore.share.ocr import extract_text  # type: ignore
-            return extract_text(str(file_path), mime=mime)
-        except ImportError:
-            pass
+            msg = data["output"]["choices"][0]["message"]
+            content = msg.get("content") or ""
+            if isinstance(content, list):
+                content = "".join(str(p.get("text") or "") for p in content if isinstance(p, dict))
+            return (content or "").strip()
+        except (KeyError, IndexError, TypeError):
+            logger.warning(f"[upload_pipeline] Qwen-VL OCR unexpected payload: {str(data)[:300]}")
+            return None
+    except Exception as e:
+        logger.warning(f"[upload_pipeline] Qwen-VL OCR threw: {e}")
+    return None
 
-        # 次选: mcp__health_records ocr_extract (走 mcpserver)
-        try:
-            import httpx
-            base = os.getenv("HEALTH_RECORDS_MCP_URL", "http://localhost:10010")
-            files = {"file": (file_path.name, open(file_path, "rb"), mime or "application/octet-stream")}
+
+def _run_ocr(file_id: str, file_path: Path, mime: str) -> Optional[str]:
+    """阶段48-22 v6: OCR 三级回退.
+      1. PhaCore.share.ocr.extract_text (本机统一入口)
+      2. mcp__health_records @localhost:10010/ocr_extract (MCPServer, 健康档案子服务)
+      3. Qwen-VL 直连 DashScope (无外部依赖, 只要有 QWEN_API_KEY)
+
+    返回 None = 跳过 (audio/unsupported).
+    返回 str = OCR 文本.
+    """
+    # 1. PhaCore
+    try:
+        from PhaCore.share.ocr import extract_text  # type: ignore
+        return extract_text(str(file_path), mime=mime)
+    except ImportError:
+        pass
+    except Exception as e:
+        logger.debug(f"[upload_pipeline] PhaCore OCR failed: {e}")
+
+    # 2. mcp__health_records
+    try:
+        import httpx
+        base = os.getenv("HEALTH_RECORDS_MCP_URL", "http://localhost:10010")
+        with open(file_path, "rb") as fh:
+            files = {"file": (file_path.name, fh, mime or "application/octet-stream")}
             data = {"user_id": "ocr_worker", "skip_db": "true"}
             r = httpx.post(f"{base}/ocr_extract", files=files, data=data, timeout=30)
-            if r.status_code == 200:
-                return r.json().get("text", "") or ""
-        except Exception:
-            pass
+        if r.status_code == 200:
+            text = r.json().get("text", "") or ""
+            if text:
+                return text
+    except Exception:
+        pass
 
-        return None
-    except Exception as e:
-        logger.warning(f"[upload_pipeline] OCR failed for {file_id}: {e}")
-        return None
+    # 3. Qwen-VL 直连 (fallback, 这一步绝对不要跳)
+    if mime.startswith("image/") or mime == "application/pdf":
+        try:
+            raw = file_path.read_bytes()
+            if mime.startswith("image/"):
+                text = _run_ocr_qwen_vl_sync(raw, mime=mime)
+                if text:
+                    return text
+            # 注: PDF 多页 Qwen 直接吃; 这里仅第 1 页, 多页扩展示例后续
+        except Exception as e:
+            logger.warning(f"[upload_pipeline] Qwen-VL fallback failed for {file_id}: {e}")
+
+    return None
 
 
 async def async_process_file(file_id: str, file_path: Path, mime: str, purpose: str,

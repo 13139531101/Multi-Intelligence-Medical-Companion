@@ -498,8 +498,10 @@ export const uploadFile = async (file, onProgress = null) => {
 export const getAttachmentUrl = (fileId) => {
   if (!fileId) return "";
   // healthApi.defaults.baseURL 例如 http://localhost:13002
+  // 注意: 阶段48-22 v6 修复 — 之前 /api/health-records/files/<id> 是错的
+  //   正确路由是 /v2/files/<id> (upload_pipeline.py serve_file)
   const base = healthApi.defaults.baseURL?.replace(/\/$/, "") || "";
-  return `${base}/api/health-records/files/${encodeURIComponent(fileId)}`;
+  return `${base}/v2/files/${encodeURIComponent(fileId)}`;
 };
 
 // 新增：获取指定记录的结构化与OCR信息
