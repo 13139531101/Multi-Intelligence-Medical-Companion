@@ -786,7 +786,8 @@ _KNOWN_KEYS = {
     "报告医生": "报告医生", "审核医生": "审核医生",
 }
 
-_KV_LINE = _re.compile(r"^([^:：\n]{2,16})\s*[::]\s*(.*)$")
+_KV_LINE = _re.compile(r"^([^:：\n]{2,16}[^:：\n]?)\s*[:：]\s*(.*)$")
+_KNOWN_KEYS_SET = set(_KNOWN_KEYS.keys())
 
 
 def _parse_ocr_to_structured(text: str) -> dict:
@@ -803,77 +804,86 @@ def _parse_ocr_to_structured(text: str) -> dict:
       ],
       'summary': '病理号: ... 临床诊断: 胃窦恶性肿瘤 ...'
     }
+
+    关键修复 (阶段48-22 v6 终): OCR 文本中常见的行是:
+      "肉眼所见:  胃癌切除标本:小弯长7cm,大弯13cm..."
+    这里第一个冒号后面紧接着是另一个冒号 (内嵌值). 老 _KV_LINE 只匹配首个 KV 对,
+    导致 value 为空 → fields['肉眼所见']['filled']=False → section 不出现.
+
+    新逻辑: 扫描已知 keys 集合 (按 key 长度从长到短排, 避免误匹配), 对每行:
+      - 若 行能匹配 key (key 在 known + 行包含 "key:" 模式) → 把整行剩下的部分
+        (包括内嵌 ":" 字符) 都作为 value
+      - 否则尝试单对 KV 解析
     """
     if not text:
         return {"fields": [], "sections": [], "summary": ""}
-    lines = text.replace("\r\n", "\n").split("\n")
 
+    fields = []  # [{key, value, filled}]
     fields_seen = set()
-    fields = []
     sections = []  # [{title, paras, chips}]
-    current_section = None
     summary_parts = []
 
-    def _flush_section():
-        nonlocal current_section
-        if current_section and (current_section["paras"] or current_section["chips"]):
-            sections.append(current_section)
-        current_section = None
+    # 按 key 长度倒序排, 优先匹配更长 (例如 '病理号' 必须先于 '编号')
+    sorted_keys = sorted(_KNOWN_KEYS_SET, key=len, reverse=True)
 
-    for raw in lines:
-        line = raw.strip()
-        if not line:
-            continue
-        # 键值对
-        m = _KV_LINE.match(line)
-        if m and m.group(1).strip() in _KNOWN_KEYS:
-            k = m.group(1).strip()
-            v = m.group(2).strip()
-            if k in fields_seen:
-                continue
-            fields_seen.add(k)
-            fields.append({"key": k, "value": v, "filled": bool(v)})
-            if v and k in ("临床诊断", "病理诊断"):
-                summary_parts.append(v[:60])
-            continue
-        # 段落标题: 肉眼所见 / 镜下所见 / 病理诊断 / 免疫组化 / 备注 (在词末尾带冒号)
-        for k in _KNOWN_KEYS:
-            if line.startswith(k) and (line.endswith("::") or line.endswith(":")):
-                _flush_section()
-                current_section = {"title": k, "paras": [], "chips": []}
-                rest = line[len(k):].strip("::：: ").strip()
-                if rest:
-                    current_section["paras"].append(rest)
-                break
-        else:
-            # 免疫组化行内列表 (例如: I2013-950: 肿瘤细胞 AE1/AE3 (+), ...)
-            if current_section and current_section["title"] in ("免疫组化", "备注"):
-                # 把 "AE1/AE3 (+)" 这种拆成 chips
-                parts = _re.split(r"[,，、]\s*", line)
-                for p in parts:
-                    p = p.strip()
-                    if not p:
-                        continue
-                    # 像 AE1/AE3 (+) 这种 token
-                    if _re.match(r"^[A-Za-z0-9/().+\\-]{1,20}\s*\(\s*[-+]+\s*/?\s*\+?\s*\)$", p):
-                        current_section["chips"].append(p)
-                    else:
-                        current_section["paras"].append(p)
-            elif current_section:
-                current_section["paras"].append(line)
-            # 否则 orphan
-    _flush_section()
+    # 用一个正则把 "keyA: ... keyB: ..." 这种多键串行也能拆开
+    # 在一行文本上跑多次匹配
+    # 把多行合并成单段, 行内可能有多个 KV
+    combined = text.replace("\r\n", "\n")
+    # 把单行合并成"逻辑行"段落: 段落之间靠 'KEY:' 重新起头
+    # 但事实上 OCR 报告一行就几十 KV, 我们要按"遇到下一个 known key 就截断"拆段
 
-    summary = ("；".join(summary_parts) or "（OCR 已识别）")[:160]
-    # 把"病理诊断"/"临床诊断"等长字段转成 sections, 提升展示
+    # 构建: 用一个扫描器, 走整个文本, 遇到 known_key (后面跟冒号) 就开新段
+    segments = []  # [(key, value_str)]
+    cursor = 0
+    L = len(combined)
+    pattern = "|".join(_re.escape(k) for k in sorted_keys) if False else None
+    # 上面的 or 模式会很长, 改用手动扫描
+
+    # 记录下一个 known_key 在文本中的位置
+    # 用 finditer 多次迭代 (per key)
+    # 简单粗暴: 把 combined 沿 'KEY:' 手动 split
+    # 先获取所有 known_key 的位置
+    positions = []  # [(start, end, key)]  end = start + len(key) + 1 (冒号的位置)
+    for key in sorted_keys:
+        # 匹配 'KEY' 后紧跟 '[:：]'
+        for m in _re.finditer(_re.escape(key) + r"\s*[:：]", combined):
+            positions.append((m.start(), m.end(), key))
+
+    # 按 start 排序
+    positions.sort(key=lambda x: x[0])
+
+    # 去重 (同一位置只能分配给一个 key, 已按长度倒序优先)
+    seen_starts = set()
+    unique_positions = []
+    for start, end, key in positions:
+        if start in seen_starts:
+            continue
+        seen_starts.add(start)
+        unique_positions.append((start, end, key))
+
+    # 切段: 每段 = 从 current_key 的 end 到 下一个 key 的 start (不含冒号)
+    for i, (start, end, key) in enumerate(unique_positions):
+        next_start = unique_positions[i + 1][0] if i + 1 < len(unique_positions) else L
+        value = combined[end:next_start].strip(" \t:：\n")
+        # value 中的内嵌 "胃癌切除标本:" 也算内容保留
+        if key in fields_seen:
+            continue
+        fields_seen.add(key)
+        fields.append({"key": key, "value": value, "filled": bool(value)})
+        if value and key in ("临床诊断", "病理诊断"):
+            summary_parts.append(value[:60])
+
+    # sections: 从 fields 中抓 SECTION_LIKE
     SECTION_LIKE = {"肉眼所见", "镜下所见", "病理诊断", "免疫组化", "备注"}
     for f in fields:
         if f["key"] in SECTION_LIKE and f["value"]:
-            # 免疫组化拆 chips
             entry = {"title": f["key"], "paras": [], "chips": []}
             if f["key"] == "免疫组化":
-                # 拆 "AE1/AE3 (+), CK7 (+), ..." 成 chips
-                m = _re.findall(r"([A-Za-z0-9/_.-]{2,20})\s*\(\s*([-+]\+?|3\+)\s*\)", f["value"])
+                m = _re.findall(
+                    r"([A-Za-z0-9/_.-]{2,20})\s*\(\s*([-+]\+?|3\+)\s*\)",
+                    f["value"],
+                )
                 if m:
                     for name, val in m:
                         entry["chips"].append(f"{name} ({val})")
@@ -881,6 +891,8 @@ def _parse_ocr_to_structured(text: str) -> dict:
             else:
                 entry["paras"].append(f["value"])
             sections.append(entry)
+
+    summary = ("；".join(summary_parts) or "（OCR 已识别）")[:160]
     return {"fields": fields, "sections": sections, "summary": summary}
 
 
