@@ -1042,23 +1042,8 @@ export default function NewHealthRecords() {
                       color="text.secondary"
                       sx={{ display: "block" }}
                     >
-                      {r.date ? `${r.date} · ` : ""}
-                      {r.files.length > 0 ? `${r.files.length} 个附件 · ` : ""}
-                      {(() => {
-                        // 用户视角: 把附件状态聚合成用户能看懂的字眼
-                        const meta =
-                          (r.metadata && r.metadata._attached_files_meta) || [];
-                        if (meta.length === 0) {
-                          return r.ocr ? "已识别内容" : "暂未识别";
-                        }
-                        const done = meta.filter(
-                          (f) => (f.ocr_status || "").toLowerCase() === "done",
-                        ).length;
-                        if (done === meta.length)
-                          return `已识别 ${done}/${meta.length}`;
-                        if (done > 0) return `已识别 ${done}/${meta.length}`;
-                        return "暂未识别";
-                      })()}
+                      {r.date ? `${r.date}` : ""}
+                      {r.files.length > 0 ? ` · ${r.files.length} 个附件` : ""}
                     </Typography>
                     {/* 阶段48-22 v6: 直接显示第一条 OCR 文本作为卡片预览 — 一眼能看到内容 */}
                     {(() => {
@@ -1088,7 +1073,7 @@ export default function NewHealthRecords() {
                               borderLeft: "2px solid",
                               borderColor: "success.light",
                             }}
-                            title={`来自附件: ${firstDone.file_name || ""}`}
+                            title={firstDone.file_name || ""}
                           >
                             {preview}
                             {(firstDone.ocr_text || "").length > 140 ? "…" : ""}
