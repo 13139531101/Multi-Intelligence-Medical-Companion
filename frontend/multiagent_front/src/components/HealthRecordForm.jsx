@@ -159,7 +159,7 @@ export default function HealthRecordForm({
         content: file.ocr_text,
       }));
       setInfo(
-        `已套用 ${file.original_name} 的 OCR (${file.ocr_text.length} 字)`,
+        `已套用 ${file.original_name} 的识别内容 (${file.ocr_text.length} 字)`,
       );
       return;
     }
@@ -181,12 +181,12 @@ export default function HealthRecordForm({
               : detail.ocr_text,
           content: detail.ocr_text,
         }));
-        setInfo(`已套用 OCR (${detail.ocr_text.length} 字)`);
+        setInfo(`已套用识别内容 (${detail.ocr_text.length} 字)`);
       } else {
-        setInfo(`该文件还没有 OCR 文本 (status: ${detail?.ocr_status || "?"})`);
+        setInfo(`该文件还没识别出文字 (${detail?.ocr_status || "?"})`);
       }
     } catch (e) {
-      setError("套用 OCR 失败");
+      setError("套用识别内容失败");
     }
   };
 
@@ -566,7 +566,7 @@ export default function HealthRecordForm({
             <TextField
               fullWidth
               size="small"
-              label="详细 / OCR 文字 / 备注"
+              label="内容详情 / 备注"
               value={form.content || form.notes || ""}
               onChange={(e) =>
                 setForm({
@@ -657,7 +657,7 @@ export default function HealthRecordForm({
                             {f.original_name}
                           </Typography>
                           <Typography variant="caption" sx={{ opacity: 0.7 }}>
-                            {(f.size_bytes / 1024).toFixed(1)}KB · OCR{" "}
+                            {(f.size_bytes / 1024).toFixed(1)}KB · 识别{" "}
                             {f.ocr_status}
                           </Typography>
                         </Box>
@@ -669,7 +669,7 @@ export default function HealthRecordForm({
                       sx={{ height: "auto", "& .MuiChip-label": { py: 0.5 } }}
                     />
                     {f.ocr_text && (
-                      <Tooltip title="把 OCR 文字注入 摘要 / 内容 字段">
+                      <Tooltip title="把图片内容填充到 摘要 / 内容 字段">
                         <IconButton
                           size="small"
                           onClick={() => applyOcrToForm(f.id)}

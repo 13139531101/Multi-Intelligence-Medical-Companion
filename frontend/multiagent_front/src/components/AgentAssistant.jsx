@@ -94,11 +94,11 @@ const AgentAssistant = ({
     summary: {
       name: "就诊摘要生成器",
       color: "#9C27B0",
-      defaultPrompt: "我需要生成的就诊摘要或解析医疗文档",
+      defaultPrompt: "帮我写就诊摘要, 或者帮我整理检查报告",
       suggestions: [
-        "生成的就诊摘要",
-        "解析医疗报告",
-        "整理检查结果",
+        "生成就诊摘要",
+        "整理检查报告",
+        "把这次的就诊总结一下",
         "创建健康总结",
       ],
     },

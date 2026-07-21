@@ -294,7 +294,7 @@ function OcrSummaryBlock({ detailId, files, metadata, userContent }) {
           <Stack direction="row" alignItems="center" spacing={1}>
             <CircularProgress size={16} />
             <Typography variant="body2" color="text.secondary">
-              加载 OCR 解析摘要…
+              加载图片识别内容…
             </Typography>
           </Stack>
         </Paper>
@@ -445,7 +445,7 @@ function ParsedView({ detailId, files, metadata }) {
       <Box sx={{ py: 6, textAlign: "center" }}>
         <Description sx={{ fontSize: 48, color: "text.disabled" }} />
         <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-          本档案暂无 OCR 完成的图片附件 — 没法解析
+          本档案没有可识别的图片附件
         </Typography>
       </Box>
     );
@@ -455,7 +455,7 @@ function ParsedView({ detailId, files, metadata }) {
       <Stack alignItems="center" spacing={1} sx={{ py: 6 }}>
         <CircularProgress size={32} />
         <Typography variant="body2" color="text.secondary">
-          正在智能解析 OCR 文本…
+          正在读取图片中的文字…
         </Typography>
       </Stack>
     );
@@ -470,7 +470,7 @@ function ParsedView({ detailId, files, metadata }) {
   if (!parsed || parsed.fields.length === 0) {
     return (
       <Alert severity="info" sx={{ m: 1 }}>
-        OCR 文本尚未识别, 点 'OCR 原文' tab 跑一次
+        图片内容还在识别中, 识别完成后会自动显示
       </Alert>
     );
   }
@@ -504,7 +504,7 @@ function ParsedView({ detailId, files, metadata }) {
               color="text.secondary"
               sx={{ display: "block" }}
             >
-              智能解析摘要
+              内容摘要
             </Typography>
             <Typography variant="body1" sx={{ fontWeight: 500, mt: 0.5 }}>
               {summary}
@@ -782,12 +782,12 @@ export default function NewHealthRecords() {
       ).length;
       const totalCount = (res.files_ocr || []).length;
       if (okCount > 0) {
-        setInfo(`OCR 完成: ${okCount}/${totalCount} 个附件识别成功`);
+        setInfo(`识别完成: ${okCount}/${totalCount} 个附件识别成功`);
       } else {
-        setInfo(`OCR: ${totalCount} 个附件均未识别到文字 — 检查图是否清楚`);
+        setInfo(`${totalCount} 个附件都没有识别到文字, 检查图片是否清楚`);
       }
     } catch (e) {
-      setError(e?.message || "OCR 失败");
+      setError(e?.message || "识别失败");
       console.warn("OCR extract failed:", e?.message || e);
     } finally {
       setExtracting((p) => {
@@ -1045,20 +1045,19 @@ export default function NewHealthRecords() {
                       {r.date ? `${r.date} · ` : ""}
                       {r.files.length > 0 ? `${r.files.length} 个附件 · ` : ""}
                       {(() => {
-                        // 阶段48-22 v6: 把附件级 ocr_status 聚合出"已识别 N/M"
+                        // 用户视角: 把附件状态聚合成用户能看懂的字眼
                         const meta =
                           (r.metadata && r.metadata._attached_files_meta) || [];
                         if (meta.length === 0) {
-                          return r.ocr ? "已 OCR 提取" : "未提取";
+                          return r.ocr ? "已识别内容" : "暂未识别";
                         }
                         const done = meta.filter(
                           (f) => (f.ocr_status || "").toLowerCase() === "done",
                         ).length;
                         if (done === meta.length)
-                          return `OCR 已识别 ${done}/${meta.length}`;
-                        if (done > 0)
-                          return `OCR 已识别 ${done}/${meta.length}`;
-                        return "未提取";
+                          return `已识别 ${done}/${meta.length}`;
+                        if (done > 0) return `已识别 ${done}/${meta.length}`;
+                        return "暂未识别";
                       })()}
                     </Typography>
                     {/* 阶段48-22 v6: 直接显示第一条 OCR 文本作为卡片预览 — 一眼能看到内容 */}

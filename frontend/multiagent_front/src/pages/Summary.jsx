@@ -385,7 +385,7 @@ const Summary = () => {
       
       ${
         aiFormData.files.length > 0
-          ? `已上传 ${aiFormData.files.length} 个文件（请从文件中提取信息）`
+          ? `已上传 ${aiFormData.files.length} 个文件, 等待读取内容`
           : ""
       }
       
@@ -1655,7 +1655,7 @@ const Summary = () => {
         {/* 智能助手 */}
         <AgentAssistant
           agentType="summary"
-          contextPrompt="当前用户正在使用就诊摘要页面，可能需要关于医疗文档解析、摘要生成、报告整理等方面的帮助。"
+          contextPrompt="当前用户正在就诊摘要页面, 可能需要关于整理病历内容、生成简单摘要、整理检查报告等方面的帮助。"
           position="bottom-right"
           size="medium"
         />

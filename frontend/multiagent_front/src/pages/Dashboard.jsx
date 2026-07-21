@@ -89,7 +89,7 @@ const AGENTS = [
     id: "health_records",
     name: "档案管理",
     en: "health_records",
-    desc: "检查报告上传、OCR 识别、档案管理",
+    desc: "上传检查报告, 自动识别内容, 整理档案",
     icon: Description,
     color: "#00897B",
     bgColor: "#E0F2F1",

@@ -6,8 +6,18 @@
 
 import React, { useState, useRef, useEffect } from "react";
 import {
-  Box, Button, CircularProgress, LinearProgress, Chip, Stack, Typography,
-  Tooltip, IconButton, Card, CardContent, CardMedia,
+  Box,
+  Button,
+  CircularProgress,
+  LinearProgress,
+  Chip,
+  Stack,
+  Typography,
+  Tooltip,
+  IconButton,
+  Card,
+  CardContent,
+  CardMedia,
 } from "@mui/material";
 import {
   CloudUpload as CloudUploadIcon,
@@ -19,7 +29,7 @@ import {
   Delete as DeleteIcon,
 } from "@mui/icons-material";
 
-const API_BASE = (import.meta?.env?.VITE_API_BASE) || "http://localhost:13002";
+const API_BASE = import.meta?.env?.VITE_API_BASE || "http://localhost:13002";
 
 const PURPOSE_LABEL = {
   health_record: "健康档案",
@@ -68,30 +78,39 @@ export default function HealthUploader({
     }
   };
 
-  useEffect(() => { loadList(); }, [userId, domain, purpose, max]);
+  useEffect(() => {
+    loadList();
+  }, [userId, domain, purpose, max]);
 
   const handleUpload = async (file) => {
     if (!userId) {
       setError("用户未登录");
       return;
     }
-    setBusy(true); setError(""); setProgress(0);
+    setBusy(true);
+    setError("");
+    setProgress(0);
     try {
       const fd = new FormData();
       fd.append("file", file);
       fd.append("user_id", userId);
       fd.append("domain", domain);
       fd.append("purpose", purpose);
-      fd.append("metadata", JSON.stringify({ uploaded_at: new Date().toISOString() }));
+      fd.append(
+        "metadata",
+        JSON.stringify({ uploaded_at: new Date().toISOString() }),
+      );
 
       // XMLHttpRequest to get progress
       const xhr = new XMLHttpRequest();
       const promise = new Promise((resolve, reject) => {
         xhr.upload.onprogress = (e) => {
-          if (e.lengthComputable) setProgress(Math.round(e.loaded / e.total * 80));
+          if (e.lengthComputable)
+            setProgress(Math.round((e.loaded / e.total) * 80));
         };
         xhr.onload = () => {
-          if (xhr.status >= 200 && xhr.status < 300) resolve(JSON.parse(xhr.responseText));
+          if (xhr.status >= 200 && xhr.status < 300)
+            resolve(JSON.parse(xhr.responseText));
           else reject(new Error(`HTTP ${xhr.status}: ${xhr.responseText}`));
         };
         xhr.onerror = () => reject(new Error("network error"));
@@ -126,7 +145,10 @@ export default function HealthUploader({
     } catch (e) {
       setError(String(e));
     } finally {
-      setTimeout(() => { setBusy(false); setProgress(0); }, 600);
+      setTimeout(() => {
+        setBusy(false);
+        setProgress(0);
+      }, 600);
     }
   };
 
@@ -134,19 +156,32 @@ export default function HealthUploader({
     for (let i = 0; i < 8; i++) {
       await new Promise((r) => setTimeout(r, 1500));
       try {
-        const r = await fetch(`${API_BASE}/v2/upload/file/${fileId}?user_id=${encodeURIComponent(userId)}`, {
-          headers: getAuth(),
-        });
+        const r = await fetch(
+          `${API_BASE}/v2/upload/file/${fileId}?user_id=${encodeURIComponent(userId)}`,
+          {
+            headers: getAuth(),
+          },
+        );
         if (r.ok) {
           const d = await r.json();
-          if (d.ocr_status === "done" || d.ocr_status === "failed" || d.ocr_status === "skipped") {
-            setFiles((p) => p.map((f) => f.id === fileId ? {
-              ...f,
-              ocr_status: d.ocr_status,
-              attached_record_id: d.attached_id,
-              attached_table: d.attached_table,
-              ocr_text: d.ocr_text,
-            } : f));
+          if (
+            d.ocr_status === "done" ||
+            d.ocr_status === "failed" ||
+            d.ocr_status === "skipped"
+          ) {
+            setFiles((p) =>
+              p.map((f) =>
+                f.id === fileId
+                  ? {
+                      ...f,
+                      ocr_status: d.ocr_status,
+                      attached_record_id: d.attached_id,
+                      attached_table: d.attached_table,
+                      ocr_text: d.ocr_text,
+                    }
+                  : f,
+              ),
+            );
             return;
           }
         }
@@ -172,7 +207,10 @@ export default function HealthUploader({
     <Box>
       {/* Drop zone */}
       <Box
-        onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+        onDragOver={(e) => {
+          e.preventDefault();
+          setDragOver(true);
+        }}
         onDragLeave={() => setDragOver(false)}
         onDrop={onDrop}
         sx={{
@@ -202,7 +240,11 @@ export default function HealthUploader({
             <Typography variant="body2" sx={{ mt: 1 }}>
               上传中… {progress}%
             </Typography>
-            <LinearProgress variant="determinate" value={progress} sx={{ mt: 1 }} />
+            <LinearProgress
+              variant="determinate"
+              value={progress}
+              sx={{ mt: 1 }}
+            />
           </Box>
         ) : (
           <Box>
@@ -211,14 +253,19 @@ export default function HealthUploader({
               点击或拖拽文件到这里上传
             </Typography>
             <Typography variant="caption" color="text.secondary">
-              支持 图片 (PNG/JPG) / PDF / CSV · 最大 50MB · 用途: {purposeLabel || PURPOSE_LABEL[purpose]}
+              支持 图片 (PNG/JPG) / PDF / CSV · 最大 50MB · 用途:{" "}
+              {purposeLabel || PURPOSE_LABEL[purpose]}
             </Typography>
           </Box>
         )}
       </Box>
 
       {error && (
-        <Typography variant="caption" color="error" sx={{ display: "block", mt: 1 }}>
+        <Typography
+          variant="caption"
+          color="error"
+          sx={{ display: "block", mt: 1 }}
+        >
           {error}
         </Typography>
       )}
@@ -227,20 +274,37 @@ export default function HealthUploader({
       {showList && files.length > 0 && (
         <Box sx={{ mt: 2 }}>
           <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1 }}>
-            <Typography variant="subtitle2">已上传文件 ({files.length})</Typography>
-            <IconButton size="small" onClick={loadList}><RefreshIcon fontSize="small" /></IconButton>
+            <Typography variant="subtitle2">
+              已上传文件 ({files.length})
+            </Typography>
+            <IconButton size="small" onClick={loadList}>
+              <RefreshIcon fontSize="small" />
+            </IconButton>
           </Stack>
           <Stack spacing={1}>
             {files.map((f) => (
-              <Card key={f.id} variant="outlined" sx={{ display: "flex", alignItems: "center", p: 1 }}>
+              <Card
+                key={f.id}
+                variant="outlined"
+                sx={{ display: "flex", alignItems: "center", p: 1 }}
+              >
                 <Box sx={{ mr: 1 }}>
-                  {f.mime_type?.startsWith("image/") ? <ImageIcon color="primary" /> : <FileIcon color="action" />}
+                  {f.mime_type?.startsWith("image/") ? (
+                    <ImageIcon color="primary" />
+                  ) : (
+                    <FileIcon color="action" />
+                  )}
                 </Box>
                 <Box sx={{ flex: 1, minWidth: 0 }}>
                   <Typography variant="body2" sx={{ fontWeight: 500 }} noWrap>
                     {f.name}
                   </Typography>
-                  <Stack direction="row" spacing={1} sx={{ mt: 0.5 }} alignItems="center">
+                  <Stack
+                    direction="row"
+                    spacing={1}
+                    sx={{ mt: 0.5 }}
+                    alignItems="center"
+                  >
                     <Chip
                       size="small"
                       label={`${(f.size_bytes / 1024).toFixed(1)} KB`}
@@ -259,7 +323,12 @@ export default function HealthUploader({
                 </Box>
                 {f.public_url && (
                   <Tooltip title="打开">
-                    <IconButton size="small" component="a" href={`${API_BASE}${f.public_url}`} target="_blank">
+                    <IconButton
+                      size="small"
+                      component="a"
+                      href={`${API_BASE}${f.public_url}`}
+                      target="_blank"
+                    >
                       <ImageIcon fontSize="small" />
                     </IconButton>
                   </Tooltip>
@@ -275,11 +344,23 @@ export default function HealthUploader({
 
 function StatusChip({ status }) {
   const map = {
-    pending: { label: "OCR 排队中", color: "default", icon: null },
-    running: { label: "OCR 中…", color: "warning", icon: <CircularProgress size={10} /> },
-    done: { label: "OCR 完成", color: "success", icon: <CheckIcon sx={{ fontSize: 12 }} /> },
-    skipped: { label: "无需 OCR", color: "default", icon: null },
-    failed: { label: "OCR 失败", color: "error", icon: <ErrorIcon sx={{ fontSize: 12 }} /> },
+    pending: { label: "等待识别", color: "default", icon: null },
+    running: {
+      label: "识别中…",
+      color: "warning",
+      icon: <CircularProgress size={10} />,
+    },
+    done: {
+      label: "识别完成",
+      color: "success",
+      icon: <CheckIcon sx={{ fontSize: 12 }} />,
+    },
+    skipped: { label: "无需识别", color: "default", icon: null },
+    failed: {
+      label: "识别失败",
+      color: "error",
+      icon: <ErrorIcon sx={{ fontSize: 12 }} />,
+    },
   };
   const info = map[status] || map.pending;
   return (
