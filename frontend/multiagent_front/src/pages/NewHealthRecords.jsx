@@ -1095,7 +1095,15 @@ export default function NewHealthRecords() {
         onClose={() => setDetail(null)}
         maxWidth="md"
         fullWidth
-        PaperProps={{ sx: { borderRadius: 2 } }}
+        scroll="paper"
+        PaperProps={{
+          sx: {
+            borderRadius: 2,
+            maxHeight: "90vh", // 弹窗占屏幕 90%, 留 10% 给遮罩
+            display: "flex",
+            flexDirection: "column",
+          },
+        }}
       >
         {detail &&
           (() => {
@@ -1170,7 +1178,10 @@ export default function NewHealthRecords() {
                   </Tabs>
                 </Box>
 
-                <DialogContent dividers sx={{ minHeight: 360 }}>
+                <DialogContent
+                  dividers
+                  sx={{ flex: 1, overflowY: "auto", p: 3 }}
+                >
                   {/* Tab 0: 基础信息 */}
                   {detailTab === 0 && (
                     <Stack spacing={2}>
