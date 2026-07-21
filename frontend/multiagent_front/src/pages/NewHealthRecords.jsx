@@ -887,7 +887,14 @@ export default function NewHealthRecords() {
           </Stack>
         </Stack>
 
-        <Grid container spacing={1.5} sx={{ mb: 2 }}>
+        <Box
+          sx={{
+            display: "grid",
+            gridTemplateColumns: { xs: "1fr 1fr", sm: "repeat(5, 1fr)" },
+            gap: 1.5,
+            mb: 2,
+          }}
+        >
           {[
             { label: "诊断", value: stats.diagnosis, color: "#1565C0" },
             { label: "检查", value: stats.exam, color: "#00897B" },
@@ -895,25 +902,28 @@ export default function NewHealthRecords() {
             { label: "过敏", value: stats.allergy, color: "#C62828" },
             { label: "档案总数", value: stats.total, color: "#5A6776" },
           ].map((s) => (
-            <Grid item xs={6} md key={s.label}>
-              <Paper
-                variant="outlined"
-                sx={{
-                  p: 1.5,
-                  textAlign: "center",
-                  borderTop: `3px solid ${s.color}`,
-                }}
-              >
-                <Typography variant="h6" sx={{ fontWeight: 600 }}>
-                  {s.value}
-                </Typography>
-                <Typography variant="caption" color="text.secondary">
-                  {s.label}
-                </Typography>
-              </Paper>
-            </Grid>
+            <Paper
+              key={s.label}
+              variant="outlined"
+              sx={{
+                p: 1.5,
+                textAlign: "center",
+                borderTop: `3px solid ${s.color}`,
+                minHeight: 76,
+                display: "flex",
+                flexDirection: "column",
+                justifyContent: "center",
+              }}
+            >
+              <Typography variant="h5" sx={{ fontWeight: 700 }}>
+                {s.value}
+              </Typography>
+              <Typography variant="caption" color="text.secondary">
+                {s.label}
+              </Typography>
+            </Paper>
           ))}
-        </Grid>
+        </Box>
 
         <Paper sx={{ p: 1, mb: 2 }}>
           <Stack direction="row" spacing={1} alignItems="center">
@@ -1045,7 +1055,8 @@ export default function NewHealthRecords() {
                       {r.date ? `${r.date}` : ""}
                       {r.files.length > 0 ? ` · ${r.files.length} 个附件` : ""}
                     </Typography>
-                    {/* 阶段48-22 v6: 直接显示第一条 OCR 文本作为卡片预览 — 一眼能看到内容 */}
+                    {/* 阶段48-22 v6: 列表卡片预览 — 用户视角, 优先命中临床诊断/病理诊断 一行
+                        之前直接前 140 字是 "病理号: 病人编号: 报告状态: ..." 一堆冒号, 用户读不出主次. */}
                     {(() => {
                       const meta =
                         (r.metadata && r.metadata._attached_files_meta) || [];
@@ -1054,33 +1065,56 @@ export default function NewHealthRecords() {
                           (f.ocr_status || "").toLowerCase() === "done" &&
                           (f.ocr_text || "").length > 0,
                       );
+                      const extractPreview = (raw) => {
+                        if (!raw) return "";
+                        // 优先从已知 KV 中抓最有用的那行
+                        const PRIORITY_KEYS = [
+                          "临床诊断",
+                          "病理诊断",
+                          "肉眼所见",
+                          "镜下所见",
+                          "诊断",
+                        ];
+                        for (const k of PRIORITY_KEYS) {
+                          const m = new RegExp(
+                            `${k}\\s*[:：]\\s*([^\\n]{2,140})`,
+                          ).exec(raw);
+                          if (m && m[1].trim().length > 0) {
+                            return m[1].trim();
+                          }
+                        }
+                        // 次选: 跳过空值 KV 行, 落到第一个有 value 的 KV
+                        const lineWithValue = raw
+                          .split(/\n/)
+                          .map((l) => l.trim())
+                          .find(
+                            (l) =>
+                              l.includes(":") &&
+                              /\S/.test(l.split(":")[1] || ""),
+                          );
+                        if (lineWithValue) {
+                          const idx = lineWithValue.indexOf(":");
+                          const v = lineWithValue
+                            .slice(idx + 1)
+                            .replace(/\s+/g, " ")
+                            .trim();
+                          if (v.length > 2) return v.slice(0, 120);
+                        }
+                        // 后备: raw 前 140
+                        return raw.replace(/\s+/g, " ").trim().slice(0, 140);
+                      };
+                      let title = "";
+                      let raw = "";
                       if (firstDone) {
-                        const preview = (firstDone.ocr_text || "")
-                          .replace(/\s+/g, " ")
-                          .trim()
-                          .slice(0, 140);
-                        return (
-                          <Typography
-                            variant="body2"
-                            color="text.primary"
-                            sx={{
-                              mt: 0.5,
-                              display: "-webkit-box",
-                              WebkitLineClamp: 2,
-                              WebkitBoxOrient: "vertical",
-                              overflow: "hidden",
-                              pl: 1,
-                              borderLeft: "2px solid",
-                              borderColor: "success.light",
-                            }}
-                            title={firstDone.file_name || ""}
-                          >
-                            {preview}
-                            {(firstDone.ocr_text || "").length > 140 ? "…" : ""}
-                          </Typography>
-                        );
+                        title = firstDone.file_name || "";
+                        raw = firstDone.ocr_text || "";
+                      } else if (r.content) {
+                        // content 格式: "## filename\n\n{OCR 文本}" — 跳过头部 file 标记
+                        raw = r.content.replace(/^## [^\n]+\n+/, "");
                       }
-                      return r.content ? (
+                      const preview = extractPreview(raw);
+                      if (!preview) return null;
+                      return (
                         <Typography
                           variant="body2"
                           color="text.primary"
@@ -1090,11 +1124,15 @@ export default function NewHealthRecords() {
                             WebkitLineClamp: 2,
                             WebkitBoxOrient: "vertical",
                             overflow: "hidden",
+                            pl: 1,
+                            borderLeft: "2px solid",
+                            borderColor: "success.light",
                           }}
+                          title={title}
                         >
-                          {r.content}
+                          {preview}
                         </Typography>
-                      ) : null;
+                      );
                     })()}
                   </Box>
                   <ChevronRight color="action" />
