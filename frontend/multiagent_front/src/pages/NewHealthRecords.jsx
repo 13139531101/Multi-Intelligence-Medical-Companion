@@ -42,6 +42,7 @@ import {
   Close,
   Delete,
   Edit,
+  InfoOutlined,
   Visibility,
   Download,
   LocalHospital,
@@ -1257,12 +1258,45 @@ export default function NewHealthRecords() {
                         )}
                       </Grid>
 
-                      {/* 摘要提示 */}
-                      <Alert severity="info" variant="outlined">
-                        {detail.content
-                          ? `本文档有 ${detail.content.length} 字正文, 切到 "正文" tab 阅读`
-                          : "本文档暂无正文 — 切到 OCR tab 从附件提取, 或点 编辑 手动填写"}
-                      </Alert>
+                      {/* 阶段48-22 v6: 底部操作提示 — 替代老版本"切到 OCR tab"的过时引导
+                         基础页顶部 OcrSummaryBlock 已经包含 OCR 摘要 + 用户填的合并, 这里只显示
+                         跟 content 相关的小提示 + 操作按钮 (跳转/编辑). */}
+                      <Paper
+                        variant="outlined"
+                        sx={{
+                          p: 1,
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 1,
+                          bgcolor: detail.content ? "grey.50" : "warning.50",
+                          borderColor: detail.content
+                            ? "divider"
+                            : "warning.light",
+                        }}
+                      >
+                        {detail.content ? (
+                          <Description fontSize="small" color="action" />
+                        ) : (
+                          <InfoOutlined fontSize="small" color="warning" />
+                        )}
+                        <Typography
+                          variant="caption"
+                          color="text.secondary"
+                          sx={{ flex: 1 }}
+                        >
+                          {detail.content
+                            ? `正文 ${detail.content.length} 字 — 已存档 (与 OCR 摘要合并展示在顶部)`
+                            : "没有正文 — 可点 '编辑' 手动填写, 或用 'OCR' Tab 从附件抽取"}
+                        </Typography>
+                        <Button
+                          size="small"
+                          variant="text"
+                          onClick={() => setDetailTab(1)}
+                          sx={{ minWidth: 0, fontSize: "0.7rem" }}
+                        >
+                          查看正文
+                        </Button>
+                      </Paper>
                     </Stack>
                   )}
 
