@@ -687,6 +687,154 @@ async def reextract_file(
     )
 
 
+# 阶段48-22 v6: OCR 智能解析 — 把原始文本拆成结构化字段/段落/列表
+# 用在 detail dialog 的'智能解析'tab, 让用户一眼看懂报告
+
+import re as _re
+
+# 关键字段 (键: 显示标签)  — 报告中的常见字段
+_KNOWN_KEYS = {
+    "病理号": "病理号", "病人编号": "病人编号", "编号": "编号",
+    "报告状态": "报告状态", "姓名": "姓名", "性别": "性别",
+    "年龄": "年龄", "婚姻": "婚姻", "民族": "民族", "职业": "职业",
+    "住院号": "住院号", "床号": "床号", "门诊号": "门诊号",
+    "收到日期": "收到日期", "送检医院": "送检医院", "送检科室": "送检科室",
+    "送检医生": "送检医生", "报告日期": "报告日期", "标本名称": "标本名称",
+    "临床诊断": "临床诊断", "肉眼所见": "肉眼所见", "镜下所见": "镜下所见",
+    "病理诊断": "病理诊断", "免疫组化": "免疫组化", "备注": "备注",
+    "报告医生": "报告医生", "审核医生": "审核医生",
+}
+
+_KV_LINE = _re.compile(r"^([^:：\n]{2,16})\s*[::]\s*(.*)$")
+
+
+def _parse_ocr_to_structured(text: str) -> dict:
+    """把 OCR 纯文本解析成结构化 dict.
+
+    形如:
+    {
+      'fields': [
+        {'key': '姓名', 'value': '张三', 'filled': True/False}
+      ],
+      'sections': [
+        {'title': '肉眼所见', 'paras': ['胃癌切除标本: ...', ...]},
+        {'title': '免疫组化', 'paras': [...], 'chips': ['AE1/AE3 (+)', ...]},
+      ],
+      'summary': '病理号: ... 临床诊断: 胃窦恶性肿瘤 ...'
+    }
+    """
+    if not text:
+        return {"fields": [], "sections": [], "summary": ""}
+    lines = text.replace("\r\n", "\n").split("\n")
+
+    fields_seen = set()
+    fields = []
+    sections = []  # [{title, paras, chips}]
+    current_section = None
+    summary_parts = []
+
+    def _flush_section():
+        nonlocal current_section
+        if current_section and (current_section["paras"] or current_section["chips"]):
+            sections.append(current_section)
+        current_section = None
+
+    for raw in lines:
+        line = raw.strip()
+        if not line:
+            continue
+        # 键值对
+        m = _KV_LINE.match(line)
+        if m and m.group(1).strip() in _KNOWN_KEYS:
+            k = m.group(1).strip()
+            v = m.group(2).strip()
+            if k in fields_seen:
+                continue
+            fields_seen.add(k)
+            fields.append({"key": k, "value": v, "filled": bool(v)})
+            if v and k in ("临床诊断", "病理诊断"):
+                summary_parts.append(v[:60])
+            continue
+        # 段落标题: 肉眼所见 / 镜下所见 / 病理诊断 / 免疫组化 / 备注 (在词末尾带冒号)
+        for k in _KNOWN_KEYS:
+            if line.startswith(k) and (line.endswith("::") or line.endswith(":")):
+                _flush_section()
+                current_section = {"title": k, "paras": [], "chips": []}
+                rest = line[len(k):].strip("::：: ").strip()
+                if rest:
+                    current_section["paras"].append(rest)
+                break
+        else:
+            # 免疫组化行内列表 (例如: I2013-950: 肿瘤细胞 AE1/AE3 (+), ...)
+            if current_section and current_section["title"] in ("免疫组化", "备注"):
+                # 把 "AE1/AE3 (+)" 这种拆成 chips
+                parts = _re.split(r"[,，、]\s*", line)
+                for p in parts:
+                    p = p.strip()
+                    if not p:
+                        continue
+                    # 像 AE1/AE3 (+) 这种 token
+                    if _re.match(r"^[A-Za-z0-9/().+\\-]{1,20}\s*\(\s*[-+]+\s*/?\s*\+?\s*\)$", p):
+                        current_section["chips"].append(p)
+                    else:
+                        current_section["paras"].append(p)
+            elif current_section:
+                current_section["paras"].append(line)
+            # 否则 orphan
+    _flush_section()
+
+    summary = ("；".join(summary_parts) or "（OCR 已识别）")[:160]
+    # 把"病理诊断"/"临床诊断"等长字段转成 sections, 提升展示
+    SECTION_LIKE = {"肉眼所见", "镜下所见", "病理诊断", "免疫组化", "备注"}
+    for f in fields:
+        if f["key"] in SECTION_LIKE and f["value"]:
+            # 免疫组化拆 chips
+            entry = {"title": f["key"], "paras": [], "chips": []}
+            if f["key"] == "免疫组化":
+                # 拆 "AE1/AE3 (+), CK7 (+), ..." 成 chips
+                m = _re.findall(r"([A-Za-z0-9/_.-]{2,20})\s*\(\s*([-+]\+?|3\+)\s*\)", f["value"])
+                if m:
+                    for name, val in m:
+                        entry["chips"].append(f"{name} ({val})")
+                entry["paras"].append(f["value"])
+            else:
+                entry["paras"].append(f["value"])
+            sections.append(entry)
+    return {"fields": fields, "sections": sections, "summary": summary}
+
+
+class ParsedOCRResponse(BaseModel):
+    ok: bool
+    file_id: str
+    parsed: Dict[str, Any]  # _parse_ocr_to_structured result
+    raw_text: str = ""
+
+
+@router.get("/files/{file_id}/parsed", response_model=ParsedOCRResponse)
+async def get_parsed_ocr(file_id: str, user_id: str = Query(...)):
+    """阶段48-22 v6: OCR 智能解析 — 把 OCR 文本拆结构化.
+
+    给 detail dialog 的'智能解析'tab 提供 raw 字段/段落/列表.
+    """
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, ocr_text, ocr_status FROM uploaded_files "
+                "WHERE id=%s AND user_id=%s",
+                (file_id, user_id),
+            )
+            row = cur.fetchone()
+    if not row:
+        raise HTTPException(404, "file not found")
+    parsed = _parse_ocr_to_structured(row.get("ocr_text") or "")
+    return ParsedOCRResponse(
+        ok=True,
+        file_id=file_id,
+        parsed=parsed,
+        raw_text=(row.get("ocr_text") or "")[:5000],
+    )
+
+
 # 阶段48-22: 静态 serve 上传的文件. 仅后端内部, 不暴露到公网 (生产应该用 nginx).
 file_router = APIRouter(prefix="/v2/files", tags=["v2-upload"])
 

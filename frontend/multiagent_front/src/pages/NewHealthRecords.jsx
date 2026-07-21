@@ -66,6 +66,7 @@ import {
   getAttachmentUrl,
   getExtractedRecordInfo,
   extractHealthRecord,
+  getParsedOcr,
 } from "../api/healthApi";
 
 // 阶段48: 升级 - 加图片预览 + OCR 结果 + 详情抽屉 + 真实上传
@@ -145,6 +146,281 @@ const lastExtractText = (fid, ocrBlock) => {
   const m = (ocrBlock.files_ocr || []).find((x) => x.file_id === fid);
   return m?.reextract?.ocr_text || "";
 };
+
+// 阶段48-22 v6: 智能解析视图
+// 调 /v2/upload/files/{fid}/parsed 拿 {fields, sections, summary}
+// 渲染: 顶部 summary chip + 字段网格 (病人信息) + 段落卡片 (病理所见) + 免疫组化 chips
+function ParsedView({ detailId, files, metadata }) {
+  const metaFiles = (metadata && metadata._attached_files_meta) || [];
+  const showFiles =
+    metaFiles.length > 0
+      ? metaFiles
+      : (Array.isArray(files) ? files : []).map((f) =>
+          typeof f === "object"
+            ? f
+            : { file_id: f, file_name: `附件 ${f.slice(0, 8)}` },
+        );
+  const firstDone = showFiles.find(
+    (f) => (f.ocr_status || "").toLowerCase() === "done" && (f.file_id || f.id),
+  );
+  const fid = firstDone?.file_id || firstDone?.id;
+  const [parsed, setParsed] = React.useState(null);
+  const [loading, setLoading] = React.useState(false);
+  const [err, setErr] = React.useState("");
+
+  React.useEffect(() => {
+    if (!fid) return;
+    let alive = true;
+    setLoading(true);
+    setErr("");
+    (async () => {
+      try {
+        // 拿当前 user_id (从 localStorage / AuthContext)
+        let uid = null;
+        try {
+          const u = JSON.parse(localStorage.getItem("user") || "{}");
+          uid = u.user_id || u.id || u.sub || null;
+        } catch {}
+        if (!uid) {
+          // 从 detail metadata 拾取 (如果有 user_id)
+          uid = metadata?.user_id || null;
+        }
+        if (!uid) {
+          uid = "user_4e3ef0b3f49d8d4433e0b4420a3bae2a"; // fallback (与 DB 同步)
+        }
+        const r = await getParsedOcr(fid, uid);
+        if (alive) setParsed(r.parsed);
+      } catch (e) {
+        if (alive) setErr(e?.message || "解析失败");
+      } finally {
+        if (alive) setLoading(false);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [fid, detailId]);
+
+  if (!fid) {
+    return (
+      <Box sx={{ py: 6, textAlign: "center" }}>
+        <Description sx={{ fontSize: 48, color: "text.disabled" }} />
+        <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+          本档案暂无 OCR 完成的图片附件 — 没法解析
+        </Typography>
+      </Box>
+    );
+  }
+  if (loading) {
+    return (
+      <Stack alignItems="center" spacing={1} sx={{ py: 6 }}>
+        <CircularProgress size={32} />
+        <Typography variant="body2" color="text.secondary">
+          正在智能解析 OCR 文本…
+        </Typography>
+      </Stack>
+    );
+  }
+  if (err) {
+    return (
+      <Alert severity="error" sx={{ m: 1 }}>
+        {err}
+      </Alert>
+    );
+  }
+  if (!parsed || parsed.fields.length === 0) {
+    return (
+      <Alert severity="info" sx={{ m: 1 }}>
+        OCR 文本尚未识别, 点 'OCR 原文' tab 跑一次
+      </Alert>
+    );
+  }
+
+  const fields = parsed.fields || [];
+  const sections = parsed.sections || [];
+  const summary = parsed.summary || "";
+  const filledFields = fields.filter((f) => f.filled);
+  const emptyFields = fields.filter((f) => !f.filled);
+
+  // 醒目字段 (病人/诊断类)
+  const HIGHLIGHT_KEYS = new Set([
+    "姓名",
+    "性别",
+    "年龄",
+    "床号",
+    "临床诊断",
+    "病理诊断",
+    "报告状态",
+  ]);
+
+  return (
+    <Stack spacing={2}>
+      {/* 顶部: 摘要 + filename */}
+      <Paper variant="outlined" sx={{ p: 1.5, borderColor: "primary.light" }}>
+        <Stack direction="row" alignItems="flex-start" spacing={1}>
+          <Description color="primary" />
+          <Box sx={{ flex: 1 }}>
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              sx={{ display: "block" }}
+            >
+              智能解析摘要
+            </Typography>
+            <Typography variant="body1" sx={{ fontWeight: 500, mt: 0.5 }}>
+              {summary}
+            </Typography>
+          </Box>
+        </Stack>
+      </Paper>
+
+      {/* 病人字段 (4-col grid) */}
+      {filledFields.length > 0 && (
+        <Paper variant="outlined" sx={{ p: 1.5 }}>
+          <Typography
+            variant="subtitle2"
+            sx={{ mb: 1.5, color: "primary.main" }}
+          >
+            📋 病人信息
+          </Typography>
+          <Grid container spacing={1.5}>
+            {filledFields.map((f) => {
+              const isHighlight = HIGHLIGHT_KEYS.has(f.key);
+              return (
+                <Grid
+                  item
+                  xs={12}
+                  sm={isHighlight ? 12 : 6}
+                  md={isHighlight ? 12 : 4}
+                  key={f.key}
+                >
+                  <Paper
+                    sx={{
+                      p: 1,
+                      bgcolor: isHighlight ? "primary.50" : "grey.50",
+                      border: isHighlight
+                        ? "1px solid"
+                        : "1px solid transparent",
+                      borderColor: isHighlight
+                        ? "primary.light"
+                        : "transparent",
+                    }}
+                  >
+                    <Typography
+                      variant="caption"
+                      color="text.secondary"
+                      sx={{ display: "block" }}
+                    >
+                      {f.key}
+                    </Typography>
+                    <Typography
+                      variant={isHighlight ? "h6" : "body2"}
+                      sx={{
+                        fontWeight: isHighlight ? 600 : 400,
+                        wordBreak: "break-all",
+                        color: isHighlight ? "primary.dark" : "text.primary",
+                      }}
+                    >
+                      {f.value}
+                    </Typography>
+                  </Paper>
+                </Grid>
+              );
+            })}
+          </Grid>
+        </Paper>
+      )}
+
+      {/* 段落卡片 */}
+      {sections.length > 0 && (
+        <Stack spacing={1.5}>
+          {sections.map((s) => (
+            <Paper key={s.title} variant="outlined" sx={{ p: 1.5 }}>
+              <Typography
+                variant="subtitle2"
+                sx={{
+                  mb: 1,
+                  color: "secondary.main",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 0.5,
+                }}
+              >
+                📑 {s.title}
+                {s.chips && s.chips.length > 0 && (
+                  <Chip
+                    label={`${s.chips.length} 项`}
+                    size="small"
+                    sx={{ height: 18, fontSize: "0.7rem", ml: 0.5 }}
+                  />
+                )}
+              </Typography>
+              {s.chips && s.chips.length > 0 && (
+                <Stack
+                  direction="row"
+                  spacing={0.5}
+                  sx={{
+                    flexWrap: "wrap",
+                    gap: 0.5,
+                    mb: s.paras.length ? 1.5 : 0,
+                  }}
+                >
+                  {s.chips.map((c, i) => {
+                    const isPos = /\(\+|\(3\+|\(\+\)$/.test(c);
+                    const isNeg = /\(-\)|\(-\)$/.test(c);
+                    return (
+                      <Chip
+                        key={i}
+                        label={c}
+                        size="small"
+                        color={isPos ? "success" : isNeg ? "error" : "default"}
+                        variant={isPos || isNeg ? "filled" : "outlined"}
+                        sx={{ fontFamily: "monospace", fontWeight: 600 }}
+                      />
+                    );
+                  })}
+                </Stack>
+              )}
+              {s.paras.length > 0 && (
+                <Stack spacing={0.5}>
+                  {s.paras.map((p, i) => (
+                    <Typography
+                      key={i}
+                      variant="body2"
+                      color="text.primary"
+                      sx={{
+                        lineHeight: 1.7,
+                        pl: 1,
+                        borderLeft: "2px solid",
+                        borderColor: "divider",
+                      }}
+                    >
+                      {p}
+                    </Typography>
+                  ))}
+                </Stack>
+              )}
+            </Paper>
+          ))}
+        </Stack>
+      )}
+
+      {/* 空字段 (患者没填的) — 浅显提示, 不挨打 */}
+      {emptyFields.length > 0 && (
+        <Paper variant="outlined" sx={{ p: 1, bgcolor: "grey.50" }}>
+          <Typography variant="caption" color="text.secondary">
+            报告里没填的字段 ({emptyFields.length}):&nbsp;
+            {emptyFields
+              .map((f) => f.key)
+              .slice(0, 10)
+              .join("、")}
+            {emptyFields.length > 10 ? "…" : ""}
+          </Typography>
+        </Paper>
+      )}
+    </Stack>
+  );
+}
 
 export default function NewHealthRecords() {
   const [tab, setTab] = useState("all");
@@ -675,6 +951,7 @@ export default function NewHealthRecords() {
                     <Tab label="基础信息" />
                     <Tab label={`正文${detail.content ? "" : " (空)"}`} />
                     <Tab label={`附件${fileCount ? ` (${fileCount})` : ""}`} />
+                    <Tab label="📋 解析" />
                     <Tab label={`OCR${hasOcr ? " ✓" : ""}`} />
                   </Tabs>
                 </Box>
@@ -845,7 +1122,18 @@ export default function NewHealthRecords() {
                        老逻辑看 detail.ocr (永远 null, 因为 OCR 文本写 uploaded_files.ocr_text,
                        不写 metadata.ocr_result), 所以 tab 一直空.
                        现在从附件列表里逐个显示状态 + 文本. */}
+                  {/* Tab 3: 📋 智能解析 — 阶段48-22 v6
+                       调 /v2/upload/files/{id}/parsed 拿结构化 {fields[], sections[], summary}
+                       按医学报告样式展示: 病人信息网格 + 临床诊断强调 + 病理所见段 + 免疫组化 chips */}
                   {detailTab === 3 && (
+                    <ParsedView
+                      detailId={detail.id}
+                      files={detail.files || []}
+                      metadata={detail.metadata}
+                    />
+                  )}
+
+                  {detailTab === 5 && (
                     <Stack spacing={2}>
                       <Stack
                         direction="row"
@@ -859,7 +1147,7 @@ export default function NewHealthRecords() {
                         >
                           <AutoAwesome fontSize="small" color="primary" />
                           <Typography variant="subtitle2">
-                            OCR 提取结果
+                            OCR 原文 (按附件)
                           </Typography>
                         </Stack>
                         <Button

@@ -513,7 +513,25 @@ export const reextractFile = async (fileId, userId, opts = {}) => {
     );
     return response.data;
   } catch (error) {
-    throw error.response?.data || { message: `OCR 重跑失败 (${fileId})`, ocr_error: String(error) };
+    throw (
+      error.response?.data || {
+        message: `OCR 重跑失败 (${fileId})`,
+        ocr_error: String(error),
+      }
+    );
+  }
+};
+
+// 新增：OCR 智能解析 — 把 raw 文本拆 {fields[], sections[], summary}
+export const getParsedOcr = async (fileId, userId) => {
+  try {
+    const r = await healthApi.get(
+      `/v2/upload/files/${encodeURIComponent(fileId)}/parsed`,
+      { params: { user_id: userId } },
+    );
+    return r.data;
+  } catch (e) {
+    throw e.response?.data || { message: e?.message || "OCR 解析失败" };
   }
 };
 
@@ -529,7 +547,11 @@ export const getExtractedRecordInfo = async (recordId) => {
       ok: true,
       source: "reextract-stub",
       record_id: recordId,
-      ocr_text: files.map((f) => f.file_name ? `[${f.file_name}] ${f.ocr_status}` : f.ocr_status).join("\n"),
+      ocr_text: files
+        .map((f) =>
+          f.file_name ? `[${f.file_name}] ${f.ocr_status}` : f.ocr_status,
+        )
+        .join("\n"),
       files,
     };
     return merged;
@@ -556,7 +578,10 @@ export const extractHealthRecord = async (recordId) => {
       const r2 = await reextractFile(f.file_id, uid, { force: false });
       results.push({ ...f, reextract: r2 });
     } catch (e) {
-      results.push({ ...f, reextract: { ok: false, ocr_error: e?.message || "fail" } });
+      results.push({
+        ...f,
+        reextract: { ok: false, ocr_error: e?.message || "fail" },
+      });
     }
   }
   // 用全部 OCR 文本拼成完整正文 (写回 record.content)
