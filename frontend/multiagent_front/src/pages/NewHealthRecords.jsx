@@ -1274,8 +1274,8 @@ export default function NewHealthRecords() {
                           sx={{ flex: 1 }}
                         >
                           {detail.content
-                            ? `正文 ${detail.content.length} 字 — 已存档 (与 OCR 摘要合并展示在顶部)`
-                            : "没有正文 — 可点 '编辑' 手动填写, 或用 'OCR' Tab 从附件抽取"}
+                            ? `已存档 ${detail.content.length} 字 (顶部和正文 Tab 都能看到内容)`
+                            : "没有内容 — 可点 '编辑' 手动填写, 或上传图片"}
                         </Typography>
                         <Button
                           size="small"
@@ -1289,29 +1289,58 @@ export default function NewHealthRecords() {
                     </Stack>
                   )}
 
-                  {/* Tab 1: 正文 */}
+                  {/* Tab 1: 正文 — 用户视角: 显示结构化医学报告卡片, 而不是 859 字的纯文本
+                       1) 若有图片附件 → 调 /parsed 渲染 ParsedView (字段网格+段落卡片+免疫组化 chips)
+                       2) 若只有用户手填 content → 渲染 content 文本
+                       3) 都没有 → 显示占位 */}
                   {detailTab === 1 && (
                     <Box>
-                      {detail.content ? (
-                        <Typography
-                          variant="body1"
-                          sx={{ whiteSpace: "pre-wrap", lineHeight: 1.8 }}
-                        >
-                          {detail.content}
-                        </Typography>
-                      ) : (
-                        <Stack alignItems="center" sx={{ py: 6 }} spacing={1}>
-                          <Description
-                            sx={{ fontSize: 48, color: "text.disabled" }}
-                          />
-                          <Typography variant="body2" color="text.secondary">
-                            暂无正文
-                          </Typography>
-                          <Typography variant="caption" color="text.disabled">
-                            上传附件后, 图片内容会自动出现在这里
-                          </Typography>
-                        </Stack>
-                      )}
+                      {/* A. 优先: 显示结构化的图片识别 (如果有任何 done 的图片附件) */}
+                      {(() => {
+                        const metaFiles =
+                          (detail.metadata &&
+                            detail.metadata._attached_files_meta) ||
+                          [];
+                        const firstDone = metaFiles.find(
+                          (f) =>
+                            (f.ocr_status || "").toLowerCase() === "done" &&
+                            (f.file_id || f.id),
+                        );
+                        if (firstDone) {
+                          return (
+                            <ParsedView
+                              detailId={detail.id}
+                              files={detail.files || []}
+                              metadata={detail.metadata}
+                            />
+                          );
+                        }
+                        // B. 次选: 用户手填 content
+                        if (detail.content) {
+                          return (
+                            <Typography
+                              variant="body1"
+                              sx={{ whiteSpace: "pre-wrap", lineHeight: 1.8 }}
+                            >
+                              {detail.content}
+                            </Typography>
+                          );
+                        }
+                        // C. 占位
+                        return (
+                          <Stack alignItems="center" sx={{ py: 6 }} spacing={1}>
+                            <Description
+                              sx={{ fontSize: 48, color: "text.disabled" }}
+                            />
+                            <Typography variant="body2" color="text.secondary">
+                              暂无正文
+                            </Typography>
+                            <Typography variant="caption" color="text.disabled">
+                              上传附件后, 图片内容会自动出现在这里
+                            </Typography>
+                          </Stack>
+                        );
+                      })()}
                     </Box>
                   )}
 
