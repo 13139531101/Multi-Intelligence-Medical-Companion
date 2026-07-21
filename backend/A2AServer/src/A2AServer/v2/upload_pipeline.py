@@ -437,6 +437,43 @@ async def async_process_file(file_id: str, file_path: Path, mime: str, purpose: 
                     ocr_text,
                     file_id,
                 ))
+
+                # 阶段48-22 v6: 用户视角 — OCR 完成自动把文字并入 health_records.content
+                if ocr_text:
+                    try:
+                        cur.execute(
+                            "SELECT user_id, metadata->'attached_file_ids' AS afids FROM uploaded_files WHERE id=%s",
+                            (file_id,),
+                        )
+                        _u = cur.fetchone()
+                        if _u:
+                            cur.execute(
+                                "SELECT id, content FROM health_records "
+                                "WHERE user_id=%s "
+                                "AND (metadata->'attached_file_ids' ? %s OR metadata->'_attached_file_ids' ? %s) "
+                                "ORDER BY created_at DESC LIMIT 1",
+                                (_u["user_id"], file_id, file_id),
+                            )
+                            _hr = cur.fetchone()
+                            if _hr:
+                                cur_content = _hr.get("content") or ""
+                                stripped = cur_content.strip()
+                                if stripped == "" or stripped.startswith("[从附件识别]") or ocr_text in cur_content:
+                                    fname = Path(file_path).name
+                                    new_content = (
+                                        f"## {fname}\n\n{ocr_text}\n\n" + cur_content
+                                        if cur_content
+                                        else f"## {fname}\n\n{ocr_text}"
+                                    )
+                                    cur.execute(
+                                        "UPDATE health_records SET content=%s, updated_at=now() WHERE id=%s",
+                                        (new_content[:30000], _hr["id"]),
+                                    )
+                                    logger.info(
+                                        f"[upload_pipeline] auto-merged {file_id} OCR into record {_hr['id']} (added {len(ocr_text)} 字)"
+                                    )
+                    except Exception as _em:
+                        logger.debug(f"[auto-merge bg] skip: {_em}")
         logger.info(f"[upload_pipeline] ocr done for {file_id}: text_len={len(ocr_text)}")
     except Exception as e:
         logger.exception(f"[upload_pipeline] process {file_id} failed: {e}")
@@ -675,6 +712,50 @@ async def reextract_file(
                 "UPDATE uploaded_files SET ocr_status=%s, ocr_text=%s, ocr_error=%s, updated_at=now() WHERE id=%s",
                 (final_status, text, err or None, file_id),
             )
+
+            # 阶段48-22 v6: 用户视角 — OCR 完成自动把文字并入 health_records.content
+            # (之前要用户切到"提取信息"按钮才会并, 现在上传即合并)
+            # 仅当关联的 health_records.content 还空 或 等于先前 OCR 文本时才覆盖,
+            # 避免冲掉用户手写的笔记.
+            if text and final_status == "done":
+                try:
+                    cur.execute(
+                        "SELECT metadata->'attached_file_ids' AS afids, user_id "
+                        "FROM uploaded_files WHERE id=%s",
+                        (file_id,),
+                    )
+                    _urow = cur.fetchone()
+                    if _urow:
+                        # 找到含此 file_id 的 health_records
+                        cur.execute(
+                            "SELECT id, content, metadata FROM health_records "
+                            "WHERE user_id=%s "
+                            "AND (metadata->'attached_file_ids' ? %s OR metadata->'_attached_file_ids' ? %s) "
+                            "ORDER BY created_at DESC LIMIT 1",
+                            (_urow["user_id"], file_id, file_id),
+                        )
+                        _hr = cur.fetchone()
+                        if _hr:
+                            cur_content = _hr.get("content") or ""
+                            # 仅在 content 为空/已含此 OCR 文本/已是 OCR 合成时覆盖
+                            stripped = cur_content.strip()
+                            if stripped == "" or stripped.startswith("[从附件识别]") or text in cur_content:
+                                # 头插入新 OCR 段 (用 '## 文件名' 标题)
+                                fname = Path(storage_path).name
+                                new_content = (
+                                    f"## {fname}\n\n{text}\n\n" + cur_content
+                                    if cur_content
+                                    else f"## {fname}\n\n{text}"
+                                )
+                                cur.execute(
+                                    "UPDATE health_records SET content=%s, updated_at=now() WHERE id=%s",
+                                    (new_content[:30000], _hr["id"]),
+                                )
+                                logger.info(
+                                    f"[upload_pipeline] auto-merged OCR text into record {_hr['id']} content (added {len(text)} 字)"
+                                )
+                except Exception as _ex:
+                    logger.debug(f"[auto-merge] skipped: {_ex}")
 
     return ReextractResponse(
         ok=bool(text),

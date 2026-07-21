@@ -274,7 +274,7 @@ function OcrSummaryBlock({ detailId, files, metadata, userContent }) {
                 variant="subtitle2"
                 sx={{ flex: 1, color: "primary.main" }}
               >
-                📋 OCR 智能解析摘要
+                📋 图片识别到的信息
               </Typography>
               {fname && (
                 <Chip
@@ -326,38 +326,28 @@ function OcrSummaryBlock({ detailId, files, metadata, userContent }) {
                 ))}
               </Grid>
             )}
-
-            {/* 链接: 切到详细解析 */}
-            {parsed.sections && parsed.sections.length > 0 && (
-              <Typography
-                variant="caption"
-                color="primary"
-                sx={{
-                  display: "inline-block",
-                  cursor: "pointer",
-                  "&:hover": { textDecoration: "underline" },
-                }}
-                onClick={() => {
-                  // 找到外层的 detail tab setter, set 3 (📋 解析)
-                  const evt = new CustomEvent("v2-healthrecords-jump-tab", {
-                    detail: 3,
-                  });
-                  document.dispatchEvent(evt);
-                }}
-              >
-                查看完整解析 ({parsed.sections.length} 个段落 / {filled.length}{" "}
-                个字段) →
-              </Typography>
-            )}
           </Stack>
         </Paper>
       )}
 
-      {/* C. 没有任何 OCR 但有附件未跑 — 提示 */}
+      {/* C. 用户视角: 没有任何 '已识别' 的图片 — 用更友好的非技术提示 */}
       {!fid && (files || []).length > 0 && (
-        <Alert severity="warning" sx={{ m: 0 }}>
-          本档案有附件但未完成 OCR, 切到 "OCR" Tab 启动提取
-        </Alert>
+        <Paper
+          variant="outlined"
+          sx={{
+            p: 1,
+            display: "flex",
+            alignItems: "center",
+            gap: 1,
+            bgcolor: "grey.50",
+            borderStyle: "dashed",
+          }}
+        >
+          <InfoOutlined fontSize="small" color="action" />
+          <Typography variant="caption" color="text.secondary" sx={{ flex: 1 }}>
+            附件里的图片内容正在后台读取, 读取完后会自动出现在正文里
+          </Typography>
+        </Paper>
       )}
     </Stack>
   );
@@ -979,7 +969,7 @@ export default function NewHealthRecords() {
                       <Description />
                     )}
                   </Avatar>
-                  {/* 阶段48-22 v6: OCR 进行中显示旋转 chip (在 avatar 右侧) */}
+                  {/* 阶段48-22 v6: 图片内容识别中显示旋转标识 (在 avatar 右侧) */}
                   {extracting[r.id] && (
                     <CircularProgress size={16} sx={{ mt: 0.5, mr: -1 }} />
                   )}
@@ -1173,11 +1163,10 @@ export default function NewHealthRecords() {
                     variant="scrollable"
                     scrollButtons="auto"
                   >
+                    {/* 阶段48-22 v6: 用户视角 — 不暴露 OCR/解析术语, 简化到 3 个 tab */}
                     <Tab label="基础信息" />
                     <Tab label={`正文${detail.content ? "" : " (空)"}`} />
                     <Tab label={`附件${fileCount ? ` (${fileCount})` : ""}`} />
-                    <Tab label="📋 解析" />
-                    <Tab label={`OCR${hasOcr ? " ✓" : ""}`} />
                   </Tabs>
                 </Box>
 
@@ -1318,13 +1307,9 @@ export default function NewHealthRecords() {
                           <Typography variant="body2" color="text.secondary">
                             暂无正文
                           </Typography>
-                          <Button
-                            startIcon={<AutoAwesome />}
-                            onClick={() => handleExtract(detail.id)}
-                            disabled={extracting[detail.id]}
-                          >
-                            从附件 OCR 提取
-                          </Button>
+                          <Typography variant="caption" color="text.disabled">
+                            上传附件后, 图片内容会自动出现在这里
+                          </Typography>
                         </Stack>
                       )}
                     </Box>
@@ -1392,168 +1377,9 @@ export default function NewHealthRecords() {
                   {/* Tab 3: 📋 智能解析 — 阶段48-22 v6
                        调 /v2/upload/files/{id}/parsed 拿结构化 {fields[], sections[], summary}
                        按医学报告样式展示: 病人信息网格 + 临床诊断强调 + 病理所见段 + 免疫组化 chips */}
-                  {detailTab === 3 && (
-                    <ParsedView
-                      detailId={detail.id}
-                      files={detail.files || []}
-                      metadata={detail.metadata}
-                    />
-                  )}
-
-                  {detailTab === 5 && (
-                    <Stack spacing={2}>
-                      <Stack
-                        direction="row"
-                        alignItems="center"
-                        justifyContent="space-between"
-                      >
-                        <Stack
-                          direction="row"
-                          alignItems="center"
-                          spacing={0.5}
-                        >
-                          <AutoAwesome fontSize="small" color="primary" />
-                          <Typography variant="subtitle2">
-                            OCR 原文 (按附件)
-                          </Typography>
-                        </Stack>
-                        <Button
-                          size="small"
-                          startIcon={<AutoAwesome />}
-                          disabled={!!extracting[detail.id]}
-                          onClick={() => {
-                            if (extracting[detail.id]) return;
-                            handleExtract(detail.id);
-                          }}
-                        >
-                          {extracting[detail.id] ? "提取中..." : "重新提取"}
-                        </Button>
-                      </Stack>
-                      {extracting[detail.id] && (
-                        <Stack spacing={0.5}>
-                          <LinearProgress />
-                          <Typography
-                            variant="caption"
-                            color="text.secondary"
-                            sx={{
-                              display: "flex",
-                              alignItems: "center",
-                              gap: 0.5,
-                            }}
-                          >
-                            <CircularProgress size={12} />
-                            正在调用 Qwen-VL 识别图片中的文字 (每张图 3-10 秒)
-                          </Typography>
-                        </Stack>
-                      )}
-
-                      {/* 直接展示每个附件的 OCR 文本, 从 uploaded_files (通过 merge 注入 _attached_files_meta) */}
-                      {(() => {
-                        const fileList = Array.isArray(detail.files)
-                          ? detail.files
-                          : [];
-                        const metaFiles =
-                          (detail.metadata &&
-                            detail.metadata._attached_files_meta) ||
-                          [];
-                        // 兼容: detail.files 可能是 dict 数组或字符串数组
-                        if (!fileList.length) {
-                          return (
-                            <Typography variant="body2" color="text.secondary">
-                              本档案暂无附件, 无 OCR 内容
-                            </Typography>
-                          );
-                        }
-                        const showFiles =
-                          metaFiles.length > 0
-                            ? metaFiles
-                            : fileList.map((f) =>
-                                typeof f === "object"
-                                  ? f
-                                  : {
-                                      file_id: f,
-                                      file_name: `附件 ${f.slice(0, 8)}`,
-                                    },
-                              );
-                        return (
-                          <Stack spacing={1.5}>
-                            {showFiles.map((f) => {
-                              const fid = f.file_id;
-                              const fname = f.file_name || fname_default(fid);
-                              const status = (f.ocr_status || "").toLowerCase();
-                              const ocrText =
-                                f.ocr_text || lastExtractText(fid, detail.ocr);
-                              return (
-                                <Paper
-                                  key={fid}
-                                  variant="outlined"
-                                  sx={{ p: 1.5 }}
-                                >
-                                  <Stack
-                                    direction="row"
-                                    alignItems="center"
-                                    spacing={1}
-                                    sx={{ mb: ocrText ? 1 : 0 }}
-                                  >
-                                    <Description fontSize="small" />
-                                    <Typography
-                                      variant="body2"
-                                      sx={{ flex: 1, fontWeight: 600 }}
-                                      noWrap
-                                    >
-                                      {fname}
-                                    </Typography>
-                                    <Chip
-                                      size="small"
-                                      label={ocrStatusLabel(status)}
-                                      color={
-                                        status === "done"
-                                          ? "success"
-                                          : status === "failed"
-                                            ? "error"
-                                            : status === "running"
-                                              ? "info"
-                                              : "default"
-                                      }
-                                      variant="outlined"
-                                    />
-                                  </Stack>
-                                  {ocrText ? (
-                                    <Typography
-                                      variant="body2"
-                                      sx={{
-                                        whiteSpace: "pre-wrap",
-                                        lineHeight: 1.6,
-                                        maxHeight: 280,
-                                        overflow: "auto",
-                                        bgcolor: "grey.50",
-                                        p: 1.5,
-                                        borderRadius: 1,
-                                        fontFamily: "monospace",
-                                      }}
-                                    >
-                                      {ocrText}
-                                    </Typography>
-                                  ) : status !== "running" ? (
-                                    <Typography
-                                      variant="body2"
-                                      color="text.secondary"
-                                    >
-                                      {status === "failed"
-                                        ? "OCR 失败 — 点 '重新提取' 重试"
-                                        : status === "skipped"
-                                          ? "此附件为非图片/PDF, 无需 OCR"
-                                          : "尚未识别 — 点 '重新提取' 启动"}
-                                    </Typography>
-                                  ) : null}
-                                </Paper>
-                              );
-                            })}
-                          </Stack>
-                        );
-                      })()}
-                    </Stack>
-                  )}
+                  {/* 阶段48-22 v6: detailTab 3 (📋 解析) 和 4 (OCR 原文) 已隐藏 — 用户不应看到
+                       OCR 概念. OCR 文本在上传时已自动合入 detail.content (用户进正文 tab 就看到).
+                       解析字段 (姓名/年龄/床号/诊断) 在基础信息 tab 顶部 OcrSummaryBlock 里直接展示. */}
                 </DialogContent>
 
                 <DialogActions sx={{ p: 2 }}>
