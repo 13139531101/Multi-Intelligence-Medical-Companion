@@ -207,12 +207,20 @@ function OcrSummaryBlock({ detailId, files, metadata, userContent }) {
   const filled = (parsed?.fields || []).filter((f) => f.filled);
   const keyFields = filled.filter((f) => HIGHLIGHT.has(f.key)).slice(0, 6);
 
-  // 合并逻辑: 用户手输入 content 优先显示作 '您填写', OCR 摘要补充在下面作 'OCR 解析'
-  // 不覆盖用户文本 (你填的更重要)
+  // 合并逻辑: 用户手输入 content 显示作 '内容摘要', 但不压 raw 文本 (用户从正文 Tab 看结构化版)
   const userContentTrim = (userContent || "").trim();
   const hasUserContent = userContentTrim.length > 0;
   const showOcSummary =
     !loading && parsed && (parsed.summary || keyFields.length > 0);
+
+  // 内容是 OCR 自动写入 (区分: 以 '## 文件名' 开头就是 auto-merge 进来的)
+  const isAutoOcrContent =
+    userContentTrim.startsWith("## ") &&
+    /^## \S+\.\w+\s*\n/.test(userContentTrim);
+  const contentTitle = isAutoOcrContent ? "📝 从附件自动识别" : "✍️ 您填写";
+  // 摘要预览: 取第一句或前 60 字
+  const firstLine = userContentTrim.split("\n")[0].slice(0, 80);
+  const secondLine = (userContentTrim.split("\n")[1] || "").slice(0, 80);
 
   if (!fid && !hasUserContent) {
     // 既没 OCR 也没手填 — 不渲染, 让基础页保持干净
@@ -221,33 +229,59 @@ function OcrSummaryBlock({ detailId, files, metadata, userContent }) {
 
   return (
     <Stack spacing={1.5}>
-      {/* A. 用户填的 (放在最上面, 优先) */}
+      {/* A. 内容摘要卡片 — 只显示前 80 字 + 跳转按钮, 不压 raw 文本
+         raw 文本在正文 Tab 已经渲染成结构化卡片, 这里只是摘要 + 跳转.*/}
       {hasUserContent && (
         <Paper
           variant="outlined"
           sx={{ p: 1.5, borderColor: "secondary.light" }}
         >
           <Stack direction="row" alignItems="flex-start" spacing={1}>
-            <Edit color="secondary" />
+            <Edit color="secondary" fontSize="small" />
             <Box sx={{ flex: 1, minWidth: 0 }}>
-              <Typography
-                variant="caption"
-                color="text.secondary"
-                sx={{ display: "block" }}
+              <Stack
+                direction="row"
+                alignItems="center"
+                justifyContent="space-between"
+                sx={{ mb: 0.5 }}
               >
-                ✍️ 您填写 ({userContentTrim.length} 字) — 点击编辑可修改
-              </Typography>
+                <Typography variant="caption" color="text.secondary">
+                  {contentTitle} · {userContentTrim.length} 字
+                </Typography>
+                <Button
+                  size="small"
+                  variant="text"
+                  sx={{
+                    minWidth: 0,
+                    fontSize: "0.7rem",
+                    py: 0,
+                    px: 1,
+                  }}
+                  onClick={() => {
+                    const evt = new CustomEvent("v2-healthrecords-jump-tab", {
+                      detail: 1,
+                    });
+                    document.dispatchEvent(evt);
+                  }}
+                >
+                  查看正文 →
+                </Button>
+              </Stack>
+              {/* 只显示前两行摘要, 不展开 raw 文本 */}
               <Typography
                 variant="body2"
+                color="text.primary"
                 sx={{
-                  mt: 0.5,
-                  whiteSpace: "pre-wrap",
-                  lineHeight: 1.7,
-                  maxHeight: 140,
-                  overflow: "auto",
+                  display: "-webkit-box",
+                  WebkitLineClamp: 2,
+                  WebkitBoxOrient: "vertical",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
                 }}
               >
-                {userContentTrim}
+                {firstLine}
+                {secondLine ? ` — ${secondLine}` : ""}
+                {userContentTrim.length > 160 ? " …" : ""}
               </Typography>
             </Box>
           </Stack>
