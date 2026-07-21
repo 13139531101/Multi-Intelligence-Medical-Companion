@@ -147,7 +147,221 @@ const lastExtractText = (fid, ocrBlock) => {
   return m?.reextract?.ocr_text || "";
 };
 
-// 阶段48-22 v6: 智能解析视图
+// 阶段48-22 v6: 详情页 0 tab 顶部的 OCR 摘要区
+// 抽取 /parsed, 合并用户手输入 content (若存在)
+function OcrSummaryBlock({ detailId, files, metadata, userContent }) {
+  const metaFiles = (metadata && metadata._attached_files_meta) || [];
+  const showFiles =
+    metaFiles.length > 0
+      ? metaFiles
+      : (Array.isArray(files) ? files : []).map((f) =>
+          typeof f === "object"
+            ? f
+            : { file_id: f, file_name: `附件 ${f.slice(0, 8)}` },
+        );
+  const firstDone = showFiles.find(
+    (f) => (f.ocr_status || "").toLowerCase() === "done" && (f.file_id || f.id),
+  );
+  const fid = firstDone?.file_id || firstDone?.id;
+  const fname = firstDone?.file_name || "";
+  const [parsed, setParsed] = React.useState(null);
+  const [loading, setLoading] = React.useState(false);
+
+  React.useEffect(() => {
+    if (!fid) return;
+    let alive = true;
+    setLoading(true);
+    (async () => {
+      try {
+        let uid = null;
+        try {
+          const u = JSON.parse(localStorage.getItem("user") || "{}");
+          uid = u.user_id || u.id || u.sub || null;
+        } catch {}
+        if (!uid) uid = metadata?.user_id || null;
+        if (!uid) uid = "user_4e3ef0b3f49d8d4433e0b4420a3bae2a";
+        const r = await getParsedOcr(fid, uid);
+        if (alive) setParsed(r.parsed);
+      } catch {
+        /* ignore */
+      } finally {
+        if (alive) setLoading(false);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [fid, detailId]);
+
+  // 醒目字段 (跟解析页一致)
+  const HIGHLIGHT = new Set([
+    "姓名",
+    "性别",
+    "年龄",
+    "床号",
+    "临床诊断",
+    "病理诊断",
+  ]);
+  // 关键 fields (从 parsed.fields 抽 4-6 个最值得展示)
+  const filled = (parsed?.fields || []).filter((f) => f.filled);
+  const keyFields = filled.filter((f) => HIGHLIGHT.has(f.key)).slice(0, 6);
+
+  // 合并逻辑: 用户手输入 content 优先显示作 '您填写', OCR 摘要补充在下面作 'OCR 解析'
+  // 不覆盖用户文本 (你填的更重要)
+  const userContentTrim = (userContent || "").trim();
+  const hasUserContent = userContentTrim.length > 0;
+  const showOcSummary =
+    !loading && parsed && (parsed.summary || keyFields.length > 0);
+
+  if (!fid && !hasUserContent) {
+    // 既没 OCR 也没手填 — 不渲染, 让基础页保持干净
+    return null;
+  }
+
+  return (
+    <Stack spacing={1.5}>
+      {/* A. 用户填的 (放在最上面, 优先) */}
+      {hasUserContent && (
+        <Paper
+          variant="outlined"
+          sx={{ p: 1.5, borderColor: "secondary.light" }}
+        >
+          <Stack direction="row" alignItems="flex-start" spacing={1}>
+            <Edit color="secondary" />
+            <Box sx={{ flex: 1, minWidth: 0 }}>
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                sx={{ display: "block" }}
+              >
+                ✍️ 您填写 ({userContentTrim.length} 字) — 点击编辑可修改
+              </Typography>
+              <Typography
+                variant="body2"
+                sx={{
+                  mt: 0.5,
+                  whiteSpace: "pre-wrap",
+                  lineHeight: 1.7,
+                  maxHeight: 140,
+                  overflow: "auto",
+                }}
+              >
+                {userContentTrim}
+              </Typography>
+            </Box>
+          </Stack>
+        </Paper>
+      )}
+
+      {/* B. OCR 解析摘要 */}
+      {loading && fid && (
+        <Paper variant="outlined" sx={{ p: 1.5, borderColor: "primary.light" }}>
+          <Stack direction="row" alignItems="center" spacing={1}>
+            <CircularProgress size={16} />
+            <Typography variant="body2" color="text.secondary">
+              加载 OCR 解析摘要…
+            </Typography>
+          </Stack>
+        </Paper>
+      )}
+      {showOcSummary && (
+        <Paper variant="outlined" sx={{ p: 1.5, borderColor: "primary.light" }}>
+          <Stack spacing={1}>
+            <Stack direction="row" alignItems="center" spacing={1}>
+              <AutoAwesome color="primary" fontSize="small" />
+              <Typography
+                variant="subtitle2"
+                sx={{ flex: 1, color: "primary.main" }}
+              >
+                📋 OCR 智能解析摘要
+              </Typography>
+              {fname && (
+                <Chip
+                  label={fname}
+                  size="small"
+                  variant="outlined"
+                  sx={{
+                    maxWidth: 160,
+                    "& .MuiChip-label": { textOverflow: "ellipsis" },
+                  }}
+                />
+              )}
+            </Stack>
+
+            {/* 摘要一句话 */}
+            {parsed.summary && (
+              <Typography
+                variant="body2"
+                sx={{ fontWeight: 500, color: "primary.dark" }}
+              >
+                {parsed.summary}
+              </Typography>
+            )}
+
+            {/* 关键 fields: 姓名/性别/年龄/床号/诊断 */}
+            {keyFields.length > 0 && (
+              <Grid container spacing={0.75}>
+                {keyFields.map((f) => (
+                  <Grid item xs={12} sm={6} key={f.key}>
+                    <Stack direction="row" spacing={0.5} alignItems="baseline">
+                      <Typography
+                        variant="caption"
+                        sx={{ color: "text.secondary", minWidth: 52 }}
+                      >
+                        {f.key}
+                      </Typography>
+                      <Typography
+                        variant="body2"
+                        sx={{
+                          fontWeight: 600,
+                          color: "text.primary",
+                          wordBreak: "break-all",
+                        }}
+                      >
+                        {f.value}
+                      </Typography>
+                    </Stack>
+                  </Grid>
+                ))}
+              </Grid>
+            )}
+
+            {/* 链接: 切到详细解析 */}
+            {parsed.sections && parsed.sections.length > 0 && (
+              <Typography
+                variant="caption"
+                color="primary"
+                sx={{
+                  display: "inline-block",
+                  cursor: "pointer",
+                  "&:hover": { textDecoration: "underline" },
+                }}
+                onClick={() => {
+                  // 找到外层的 detail tab setter, set 3 (📋 解析)
+                  const evt = new CustomEvent("v2-healthrecords-jump-tab", {
+                    detail: 3,
+                  });
+                  document.dispatchEvent(evt);
+                }}
+              >
+                查看完整解析 ({parsed.sections.length} 个段落 / {filled.length}{" "}
+                个字段) →
+              </Typography>
+            )}
+          </Stack>
+        </Paper>
+      )}
+
+      {/* C. 没有任何 OCR 但有附件未跑 — 提示 */}
+      {!fid && (files || []).length > 0 && (
+        <Alert severity="warning" sx={{ m: 0 }}>
+          本档案有附件但未完成 OCR, 切到 "OCR" Tab 启动提取
+        </Alert>
+      )}
+    </Stack>
+  );
+}
+
 // 调 /v2/upload/files/{fid}/parsed 拿 {fields, sections, summary}
 // 渲染: 顶部 summary chip + 字段网格 (病人信息) + 段落卡片 (病理所见) + 免疫组化 chips
 function ParsedView({ detailId, files, metadata }) {
@@ -463,6 +677,16 @@ export default function NewHealthRecords() {
 
   useEffect(() => {
     fetchRecords();
+  }, []);
+
+  // 阶段48-22 v6: 让 '查看完整解析' 链接能把 detailTab 跳到 3 (📋 解析)
+  useEffect(() => {
+    const onJump = (e) => {
+      if (typeof e.detail === "number") setDetailTab(e.detail);
+    };
+    document.addEventListener("v2-healthrecords-jump-tab", onJump);
+    return () =>
+      document.removeEventListener("v2-healthrecords-jump-tab", onJump);
   }, []);
 
   const handleExtract = async (recordId) => {
@@ -960,6 +1184,15 @@ export default function NewHealthRecords() {
                   {/* Tab 0: 基础信息 */}
                   {detailTab === 0 && (
                     <Stack spacing={2}>
+                      {/* 阶段48-22 v6: 顶部 OCR 智能摘要 — 让用户进弹窗第一眼看到内容
+                          即使是用户手输入 content, 也保留用户源作 '您填写' 卡片, 不被覆盖. */}
+                      <OcrSummaryBlock
+                        detailId={detail.id}
+                        files={detail.files || []}
+                        metadata={detail.metadata}
+                        userContent={detail.content}
+                      />
+
                       <Grid container spacing={2}>
                         {detail.date && (
                           <Grid item xs={12} sm={6}>
