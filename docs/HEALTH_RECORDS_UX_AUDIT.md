@@ -2,11 +2,11 @@
 
 > **最后体检日期**: 2026-07-22
 > **下次体检触发**: 累积 3 项 ✓ 后, 或用户反馈"开发太乱"时
-> **总项数**: 12 / 10 (上限突破, 见 #11 #12 附加)
+> **总项数**: 14 / 10 (上限突破, 见 #11 #12 #13 #14 附加)
 
 ## 进度总览
 
-- ✅ 已完成: 4 项 (#1, #7, #11, #12)
+- ✅ 已完成: 6 项 (#1, #7, #11, #12, #13, #14)
 - ❌ 待办: 8 项
 
 ---
@@ -123,14 +123,22 @@
 - **修法**: hostapi.py 在 v2_upload_router 之后, registry_router 之前, 再加一段 `from A2AServer.v2.record_create_api import router as v2_record_create_router; app.include_router(v2_record_create_router)`. rebuild + recreate. 现在 `/api/v2/create-record-and-attach?user_id=...` POST 200, 返回 record_id, attached_count=0
 - **优先级**: 高 (阻塞任何新建/编辑健康档案动作)
 
+### ❌ #14 附件图片看不见 (2026-07-22, 阻塞)
+
+- **现象**: 健康档案页附件列表显示 "1" 但点击/缩略图看不到实际图片
+- **真因**: 前端 `getAttachmentUrl()` 生成 `/v2/files/<file_id>`, 这是 `static file serve`. backend `A2AServer/v2/upload_pipeline.py` 里定义了 `file_router = APIRouter(prefix='/v2/files')` + `@file_router.get('/{file_id}')` serve_file(), 但跟 #12 #13 一样, hostapi 也没 mount 这个 router
+- **修法**: hostapi.py 在 v2_record_create_router 后, registry_router 前, 再加一段 `from A2AServer.v2.upload_pipeline import file_router as v2_file_router; app.include_router(v2_file_router)`. 现在 `/v2/files/<file_id>` GET 返回 200 + 内容 (curl 验过)
+- **优先级**: 高 (图片/附件不可见)
+- **附带 OCR 问题**: Qwen-VL 报告 "The image format is illegal" 只对真 PNG/JPG 触发. 如果你传的是合法图片, OCR 会被处理并入 `uploaded_files.ocr_text`. 前端轮询 `/v2/upload/files/<fid>/parsed?user_id=...`, 200 + `parsed` + `raw_text`(取前 5000 字). OCR 是异步, 几条后过, 直接刷新页面重试即可.
+
 ---
 
 ## 用户视角原则检查 (这一页)
 
-| 原则 | 健康档案页 | 详情弹窗 |
-|---|---|---|
-| 0 程序员术语 | ✅ (已清理) | ✅ (已清理) |
-| 0 状态暴露 | ✅ (列表卡片已删) | ⚠️ "已存档 N 字" 还在底部 |
-| 0 中间按钮 | ✅ (无 OCR 按钮) | ✅ (无 OCR 按钮) |
+| 原则         | 健康档案页        | 详情弹窗                  |
+| ------------ | ----------------- | ------------------------- |
+| 0 程序员术语 | ✅ (已清理)       | ✅ (已清理)               |
+| 0 状态暴露   | ✅ (列表卡片已删) | ⚠️ "已存档 N 字" 还在底部 |
+| 0 中间按钮   | ✅ (无 OCR 按钮)  | ✅ (无 OCR 按钮)          |
 
 > **下一轮**: 把详情弹窗底部"已存档 N 字 (顶部和正文 Tab 都能看到内容)"也删了, 用户不需要被告知"内容已经被存档".

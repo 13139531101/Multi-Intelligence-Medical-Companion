@@ -167,6 +167,16 @@ except Exception as _e:
     print(f"[hostapi] v2 record-create mount failed: {_e}")
     traceback.print_exc()
 
+# 阶段48-22 v3+: 静态文件 serve_file 路由 (前端 <img src=...> 取缩略图 / 预览图)
+try:
+    from A2AServer.v2.upload_pipeline import file_router as v2_file_router
+    app.include_router(v2_file_router)
+    print("[hostapi] v2 file serve mounted: /v2/files/{file_id}")
+except Exception as _e:
+    import traceback
+    print(f"[hostapi] v2 file serve mount failed: {_e}")
+    traceback.print_exc()
+
 # 阶段41-3: Skill/MCP 注册表管理（增删改）
 try:
     from A2AServer.v2.registry_endpoints import router as registry_router
