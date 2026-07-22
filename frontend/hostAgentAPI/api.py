@@ -147,6 +147,16 @@ try:
 except Exception as _e:
     print(f"[hostapi] mcp mount failed: {_e}")
 
+# 阶段48-22: v2 上传管线 (前端 HealthUploader.jsx 调 /v2/upload/file, /v2/upload/files, /v2/upload/file/{id})
+try:
+    from A2AServer.v2.upload_pipeline import router as v2_upload_router
+    app.include_router(v2_upload_router)
+    print("[hostapi] v2 upload mounted: /v2/upload/file, /v2/upload/files, /v2/upload/file/{id}")
+except Exception as _e:
+    import traceback
+    print(f"[hostapi] v2 upload mount failed: {_e}")
+    traceback.print_exc()
+
 # 阶段41-3: Skill/MCP 注册表管理（增删改）
 try:
     from A2AServer.v2.registry_endpoints import router as registry_router

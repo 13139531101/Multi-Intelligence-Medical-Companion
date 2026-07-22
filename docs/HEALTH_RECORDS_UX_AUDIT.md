@@ -1,12 +1,12 @@
 # 健康档案 UX 体检表
 
-> **最后体检日期**: 2026-07-21
+> **最后体检日期**: 2026-07-22
 > **下次体检触发**: 累积 3 项 ✓ 后, 或用户反馈"开发太乱"时
-> **总项数**: 10 / 10 (上限 10)
+> **总项数**: 11 / 10 (上限突破, 见 #11 附加)
 
 ## 进度总览
 
-- ✅ 已完成: 2 项 (#1, #7)
+- ✅ 已完成: 3 项 (#1, #7, #11)
 - ❌ 待办: 8 项
 
 ---
@@ -97,6 +97,24 @@
 8. **#9 列表附件数字号** (低, 改 1 个 sx)
 
 > **触发**: 用户说"继续" → 一次改 1-2 项 → 验收 → 继续.
+
+---
+
+## 附加发现 (会话 2 启动后)
+
+### ❌ #11 Login 响应形状不对齐 (2026-07-22, 阻塞)
+
+- **现象**: 输入正确用户名密码后, 一直显示"登录失败", 即便 backend 200 OK
+- **真因**: `Login.jsx` 期望 `{success, user:{id, username, email}, token}` 形状, 但 backend 实际返回 `{access_token, user:{user_id, ...}, token_type}`; 同时 `localStorage` 用了错误 key (`healthToken` 而非 `token`), 导致 `AuthContext.checkAuth()` 验证失败, 重定向回 login
+- **修法**: `Login.jsx` handleSubmit 改读 `response.access_token` 和 `response.user.user_id`, localStorage 改用统一 key `token`; 加一个 `useEffect` 自动从 `?u=&p=` URL param 登录方便开发测试
+- **优先级**: 高 (阻塞任何用户登录)
+
+### ❌ #12 附件上传 404 (2026-07-22, 阻塞)
+
+- **现象**: 新建健康档案页, 选择文件后弹 "HTTP 404, Not Found"
+- **真因**: 前端 `HealthUploader.jsx` 调 POST `/v2/upload/file`, 但 `frontend/hostAgentAPI/api.py` 没 mount 这个 router. `A2AServer/v2/upload_pipeline.py` 里有 router, 但从未被 include. 同时 `/api/health-records/upload` (单文件) 工作 — 这是另一条路径, 老 upload 单条 + OCR
+- **修法**: 在 hostapi.py 里加一段 `from A2AServer.v2.upload_pipeline import router as v2_upload_router; app.include_router(v2_upload_router)`, rebuild hostapi 镜像, recreate 容器. 之后 `/v2/upload/file` 返回 200 + file_id + queued OCR
+- **优先级**: 高 (阻塞文件上传和 OCR 自动入库)
 
 ---
 
