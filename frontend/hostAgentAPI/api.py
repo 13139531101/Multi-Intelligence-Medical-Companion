@@ -157,6 +157,16 @@ except Exception as _e:
     print(f"[hostapi] v2 upload mount failed: {_e}")
     traceback.print_exc()
 
+# 阶段48-22 v2: 单步健康档案创建/更新 + 关联附件 (前端 HealthRecordForm.jsx 调 /api/v2/create-record-and-attach, /api/v2/update-record-and-attach)
+try:
+    from A2AServer.v2.record_create_api import router as v2_record_create_router
+    app.include_router(v2_record_create_router)
+    print("[hostapi] v2 record-create mounted: /api/v2/create-record-and-attach, /api/v2/update-record-and-attach")
+except Exception as _e:
+    import traceback
+    print(f"[hostapi] v2 record-create mount failed: {_e}")
+    traceback.print_exc()
+
 # 阶段41-3: Skill/MCP 注册表管理（增删改）
 try:
     from A2AServer.v2.registry_endpoints import router as registry_router

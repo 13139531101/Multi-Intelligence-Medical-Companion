@@ -2,11 +2,11 @@
 
 > **最后体检日期**: 2026-07-22
 > **下次体检触发**: 累积 3 项 ✓ 后, 或用户反馈"开发太乱"时
-> **总项数**: 11 / 10 (上限突破, 见 #11 附加)
+> **总项数**: 12 / 10 (上限突破, 见 #11 #12 附加)
 
 ## 进度总览
 
-- ✅ 已完成: 3 项 (#1, #7, #11)
+- ✅ 已完成: 4 项 (#1, #7, #11, #12)
 - ❌ 待办: 8 项
 
 ---
@@ -115,6 +115,13 @@
 - **真因**: 前端 `HealthUploader.jsx` 调 POST `/v2/upload/file`, 但 `frontend/hostAgentAPI/api.py` 没 mount 这个 router. `A2AServer/v2/upload_pipeline.py` 里有 router, 但从未被 include. 同时 `/api/health-records/upload` (单文件) 工作 — 这是另一条路径, 老 upload 单条 + OCR
 - **修法**: 在 hostapi.py 里加一段 `from A2AServer.v2.upload_pipeline import router as v2_upload_router; app.include_router(v2_upload_router)`, rebuild hostapi 镜像, recreate 容器. 之后 `/v2/upload/file` 返回 200 + file_id + queued OCR
 - **优先级**: 高 (阻塞文件上传和 OCR 自动入库)
+
+### ❌ #13 单步创建健康档案 404 (2026-07-22, 阻塞)
+
+- **现象**: 点"新增健康档案 → 填好点保存" 后, 弹 "one-step create failed: 404 Not Found"
+- **真因**: 前端 `HealthRecordForm.jsx` 调 POST `/api/v2/create-record-and-attach` (用 user_id query param). backend `A2AServer/v2/record_create_api.py` 里有 router = APIRouter(prefix='/api/v2'), 但跟 #12 一样, hostapi 没 mount 这个 router. 同文件里还有 PUT `/api/v2/update-record-and-attach` (编辑用), 也未 mount
+- **修法**: hostapi.py 在 v2_upload_router 之后, registry_router 之前, 再加一段 `from A2AServer.v2.record_create_api import router as v2_record_create_router; app.include_router(v2_record_create_router)`. rebuild + recreate. 现在 `/api/v2/create-record-and-attach?user_id=...` POST 200, 返回 record_id, attached_count=0
+- **优先级**: 高 (阻塞任何新建/编辑健康档案动作)
 
 ---
 
