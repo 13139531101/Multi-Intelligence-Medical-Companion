@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState } from "react";
 import {
   Container,
   Paper,
@@ -8,94 +8,141 @@ import {
   Box,
   Alert,
   InputAdornment,
-  IconButton
-} from '@mui/material';
+  IconButton,
+} from "@mui/material";
 import {
   Visibility,
   VisibilityOff,
   Person,
   Lock,
-  LocalHospital
-} from '@mui/icons-material';
-import { useNavigate } from 'react-router-dom';
-import { useSetRecoilState } from 'recoil';
-import { userState } from '../store/recoilState';
-import { login, register } from '../api/healthApi';
+  LocalHospital,
+} from "@mui/icons-material";
+import { useNavigate } from "react-router-dom";
+import { useSetRecoilState } from "recoil";
+import { userState } from "../store/recoilState";
+import { login, register } from "../api/healthApi";
 
 const Login = () => {
   const [isLogin, setIsLogin] = useState(true);
   const [formData, setFormData] = useState({
-    username: '',
-    password: '',
-    confirmPassword: '',
-    email: ''
+    username: "",
+    password: "",
+    confirmPassword: "",
+    email: "",
   });
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-  const [success, setSuccess] = useState('');
-  
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
+
   const navigate = useNavigate();
   const setUser = useSetRecoilState(userState);
+
+  // 阶段48-22: 开发测试便捷 — URL ?u=xxx&p=xxx 自动登录 (生产可删)
+  React.useEffect(() => {
+    const qs = new URLSearchParams(window.location.search);
+    const u = qs.get("u");
+    const p = qs.get("p");
+    if (u && p) {
+      // 直接 submit
+      setTimeout(async () => {
+        try {
+          const response = await login({ username: u, password: p });
+          if (response.access_token && response.user) {
+            const ru = response.user;
+            localStorage.setItem("token", response.access_token);
+            localStorage.setItem(
+              "user",
+              JSON.stringify({
+                id: ru.user_id,
+                username: ru.username,
+                email: ru.email,
+              }),
+            );
+            navigate("/v2/health-records");
+          }
+        } catch (err) {
+          console.error("[auto-login]", err);
+        }
+      }, 100);
+    }
+    // eslint-disable-next-line
+  }, []);
 
   const handleInputChange = (e) => {
     setFormData({
       ...formData,
-      [e.target.name]: e.target.value
+      [e.target.name]: e.target.value,
     });
-    setError('');
-    setSuccess('');
+    setError("");
+    setSuccess("");
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setLoading(true);
-    setError('');
-    setSuccess('');
+    setError("");
+    setSuccess("");
 
     try {
       if (isLogin) {
         // 登录逻辑
         const response = await login({
           username: formData.username,
-          password: formData.password
+          password: formData.password,
         });
-        
-        if (response.success) {
+
+        if (response.access_token && response.user) {
+          // 兼容 backend 返回: {access_token, user:{user_id, username, email, ...}}
+          const u = response.user;
           setUser({
-            id: response.user.id,
-            username: response.user.username,
-            email: response.user.email,
-            token: response.token
+            id: u.user_id || u.id,
+            username: u.username,
+            email: u.email,
+            token: response.access_token,
           });
-          localStorage.setItem('healthToken', response.token);
-          navigate('/v2/dashboard');
+          // 阶段48-22: 用统一 key 'token', AuthContext.jsx 用同样 key 验证
+          localStorage.setItem("token", response.access_token);
+          localStorage.setItem(
+            "user",
+            JSON.stringify({
+              id: u.user_id || u.id,
+              username: u.username,
+              email: u.email,
+            }),
+          );
+          navigate("/v2/health-records");
         } else {
-          setError(response.message || '登录失败');
+          setError(response.message || "登录失败");
         }
       } else {
         // 注册逻辑
         if (formData.password !== formData.confirmPassword) {
-          setError('密码确认不匹配');
+          setError("密码确认不匹配");
           return;
         }
-        
+
         const response = await register({
           username: formData.username,
           password: formData.password,
-          email: formData.email
+          email: formData.email,
         });
-        
+
         if (response.success) {
-          setSuccess('注册成功！请登录');
+          setSuccess("注册成功！请登录");
           setIsLogin(true);
-          setFormData({ username: '', password: '', confirmPassword: '', email: '' });
+          setFormData({
+            username: "",
+            password: "",
+            confirmPassword: "",
+            email: "",
+          });
         } else {
-          setError(response.message || '注册失败');
+          setError(response.message || "注册失败");
         }
       }
     } catch (err) {
-      setError('网络错误，请稍后重试');
+      setError("网络错误，请稍后重试");
     } finally {
       setLoading(false);
     }
@@ -105,50 +152,56 @@ const Login = () => {
     <Container component="main" maxWidth="sm">
       <Box
         sx={{
-          minHeight: '100vh',
-          display: 'flex',
-          flexDirection: 'column',
-          justifyContent: 'center',
-          alignItems: 'center',
-          background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)'
+          minHeight: "100vh",
+          display: "flex",
+          flexDirection: "column",
+          justifyContent: "center",
+          alignItems: "center",
+          background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
         }}
       >
         <Paper
           elevation={10}
           sx={{
             padding: 4,
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
             borderRadius: 3,
-            width: '100%',
-            maxWidth: 400
+            width: "100%",
+            maxWidth: 400,
           }}
         >
-          <Box sx={{ display: 'flex', alignItems: 'center', mb: 3 }}>
-            <LocalHospital sx={{ fontSize: 40, color: 'primary.main', mr: 1 }} />
-            <Typography component="h1" variant="h4" sx={{ fontWeight: 'bold', color: 'primary.main' }}>
+          <Box sx={{ display: "flex", alignItems: "center", mb: 3 }}>
+            <LocalHospital
+              sx={{ fontSize: 40, color: "primary.main", mr: 1 }}
+            />
+            <Typography
+              component="h1"
+              variant="h4"
+              sx={{ fontWeight: "bold", color: "primary.main" }}
+            >
               健康助手
             </Typography>
           </Box>
-          
+
           <Typography component="h2" variant="h5" sx={{ mb: 3 }}>
-            {isLogin ? '登录' : '注册'}
+            {isLogin ? "登录" : "注册"}
           </Typography>
 
           {error && (
-            <Alert severity="error" sx={{ width: '100%', mb: 2 }}>
+            <Alert severity="error" sx={{ width: "100%", mb: 2 }}>
               {error}
             </Alert>
           )}
-          
+
           {success && (
-            <Alert severity="success" sx={{ width: '100%', mb: 2 }}>
+            <Alert severity="success" sx={{ width: "100%", mb: 2 }}>
               {success}
             </Alert>
           )}
 
-          <Box component="form" onSubmit={handleSubmit} sx={{ width: '100%' }}>
+          <Box component="form" onSubmit={handleSubmit} sx={{ width: "100%" }}>
             <TextField
               margin="normal"
               required
@@ -168,7 +221,7 @@ const Login = () => {
                 ),
               }}
             />
-            
+
             {!isLogin && (
               <TextField
                 margin="normal"
@@ -183,14 +236,14 @@ const Login = () => {
                 onChange={handleInputChange}
               />
             )}
-            
+
             <TextField
               margin="normal"
               required
               fullWidth
               name="password"
               label="密码"
-              type={showPassword ? 'text' : 'password'}
+              type={showPassword ? "text" : "password"}
               id="password"
               autoComplete="current-password"
               value={formData.password}
@@ -214,7 +267,7 @@ const Login = () => {
                 ),
               }}
             />
-            
+
             {!isLogin && (
               <TextField
                 margin="normal"
@@ -222,7 +275,7 @@ const Login = () => {
                 fullWidth
                 name="confirmPassword"
                 label="确认密码"
-                type={showPassword ? 'text' : 'password'}
+                type={showPassword ? "text" : "password"}
                 id="confirmPassword"
                 value={formData.confirmPassword}
                 onChange={handleInputChange}
@@ -235,7 +288,7 @@ const Login = () => {
                 }}
               />
             )}
-            
+
             <Button
               type="submit"
               fullWidth
@@ -243,20 +296,25 @@ const Login = () => {
               sx={{ mt: 3, mb: 2, py: 1.5 }}
               disabled={loading}
             >
-              {loading ? '处理中...' : (isLogin ? '登录' : '注册')}
+              {loading ? "处理中..." : isLogin ? "登录" : "注册"}
             </Button>
-            
+
             <Button
               fullWidth
               variant="text"
               onClick={() => {
                 setIsLogin(!isLogin);
-                setFormData({ username: '', password: '', confirmPassword: '', email: '' });
-                setError('');
-                setSuccess('');
+                setFormData({
+                  username: "",
+                  password: "",
+                  confirmPassword: "",
+                  email: "",
+                });
+                setError("");
+                setSuccess("");
               }}
             >
-              {isLogin ? '没有账号？点击注册' : '已有账号？点击登录'}
+              {isLogin ? "没有账号？点击注册" : "已有账号？点击登录"}
             </Button>
           </Box>
         </Paper>
