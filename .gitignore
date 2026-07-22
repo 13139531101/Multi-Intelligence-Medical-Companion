@@ -62,3 +62,4 @@ multiagent_front/
 !frontend/multiagent_front/
 !frontend/multiagent_front/src/
 !frontend/multiagent_front/src/**/
+scripts/login_state.json
