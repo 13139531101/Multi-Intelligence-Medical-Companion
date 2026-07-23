@@ -2,11 +2,11 @@
 
 > **最后体检日期**: 2026-07-22
 > **下次体检触发**: 累积 3 项 ✓ 后, 或用户反馈"开发太乱"时
-> **总项数**: 15 / 10 (上限突破, 见 #11 #12 #13 #14 #15 附加)
+> **总项数**: 16 / 10 (上限突破, 见 #11 #12 #13 #14 #15 #16 附加)
 
 ## 进度总览
 
-- ✅ 已完成: 7 项 (#1, #7, #11, #12, #13, #14, #15)
+- ✅ 已完成: 8 项 (#1, #7, #11, #12, #13, #14, #15, #16)
 - ❌ 待办: 8 项
 
 ---
@@ -135,8 +135,17 @@
 
 - **现象**: 上传文件提交后, OCR 要 5-15 秒. 这期间前端表单返回成功, 但页面"什么也没有", 用户不知道系统是在跑, 还是在卡. 健康档案页 (HealthRecords.jsx) 列表加载后, OCR 还没完成的附件连进度条都没有, user 必须在原地干等
 - **真因**: HealthRecords.jsx 老页面是阶段 28 的实现 — 顶层列表 fetch 完后即使用户看到附件 `ocr_status='pending'`, 也没有任何横幅/进度条. 后端 OCR 是异步 background task, 完成后 update 数据库. user 看不到状态变化, 必须手动刷新
-- **修法**: (1) 在 `<Header><Container>` 之间加一个 OCR 进度横幅. `records.some(r => r.files.some(f => f.ocr_status && !['done','failed','skipped'].includes(f.ocr_status)))` 时渲染: warning 色横幅 + CircularProgress spin + "X 个待处理" 计数 + 一句话文案 (1 行). (2) 加 `useEffect` 监听 records 变化, 任意 pending 时启动 5 秒 setInterval 调 fetchRecords, 全部 done/failed/skipped 时 clearInterval. (3) vite dev server 因长时间构建后死了, 重启 vite. 现在 OCR 跑时: 顶部横幅可见, 5 秒后自动刷新列表, user 不需要任何手动操作
+- **修法**: (1) 在 `<Header><Container>` 之间加一个 OCR 进度横幅. `records.some(r => r.files.some(f => f.ocr_status && !['done','failed','skipped'].includes(f.ocr_status)))` 时渲染: warning 色横幅 + CircularProgress spin + "X 个待处理" 计数 + 一句话文案 (1 行). (2) 加 `useEffect` 监听 records 变化, 任意 pending 时启动 5 秒 setInterval 调 fetchRecords, 全部 done/failed/skipped 时 clearInterval. (3) vite dev server 因长时间构建后死了, 重启 vite
 - **优先级**: 中 (UX, 不阻塞功能, 但体验差)
+
+### ❌ #16 OCR 横幅不显示 (2026-07-22, 阻塞)
+
+- **现象**: 用户刷新后没看到 "正在识别附件内容" 横幅 (上一步 #15 加的)
+- **真因 (双层)**:
+  - **OCR 极快**: 真 PNG 只需 1-2 秒; 小测试 PNG 直接 `skipped`. 用户大图上传可能也 < 5s. 横幅只在 pending/running 时显示, 但自然 stale 等不到
+  - **错误数据源**: #15 我代码里读 `record.files[i].ocr_status`, 但实际数据 `ocr_status` 在 **`record.metadata._attached_files_meta[i].ocr_status`**. `toUiRecord()` 只取 `r.files || r.file_attachments || r.metadata.files` (都是空的或者只含字符串 file_id), 永远拿不到 `ocr_status`
+- **修法**: 重写 `toUiRecord()`, 优先 `record._attached_files_meta` (数据库 merge 后真实来源), 把每个 file 项 normalize 成 `{file_id, name, mime_type, ocr_status, ocr_text, public_url}`. 横幅判断还是同样 ocr_status. 这次 OCR 跑时就能看到横幅; OCR 完成的也能从 metadata 拿到 ocr_text 字段
+- **优先级**: 高 (横幅不显示, #15 等于没修)
 
 ---
 

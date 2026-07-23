@@ -132,16 +132,39 @@ const HealthRecords = () => {
     other: "other",
   };
 
-  const toUiRecord = (r) => ({
-    id: r.id,
-    title: r.title,
-    type: r.type || apiToUiRecordType[r.record_type] || "other",
-    date: r.date || r.record_date,
-    description: r.description || r.summary || r.content || "",
-    doctor: r.doctor || r.metadata?.doctor || "",
-    hospital: r.hospital || r.metadata?.hospital || "",
-    files: r.files || r.file_attachments || r.metadata?.files || [],
-  });
+  const toUiRecord = (r) => {
+    // 阶段48-22 v3+: 后端把 file 列表放在 metadata._attached_files_meta (with ocr_status).
+    // 这里拼装去 UI: 优先 file_attachments, 其次 metadata._attached_files_meta, 再次 r.files
+    const rawFiles =
+      r.file_attachments ||
+      (r.metadata && r.metadata._attached_files_meta) ||
+      r.files ||
+      [];
+    const filesNorm = (Array.isArray(rawFiles) ? rawFiles : []).map((f) => {
+      if (typeof f === "string") {
+        return { file_id: f, name: f };
+      }
+      return {
+        file_id: f.file_id || f.id || f.public_url,
+        name: f.file_name || f.name || f.filename || "附件",
+        mime_type: f.file_type || f.mime_type,
+        ocr_status: f.ocr_status, // critical: 上传横幅和缩略图读取这个
+        ocr_text: f.ocr_text,
+        public_url:
+          f.public_url || (f.file_id ? `/v2/files/${f.file_id}` : undefined),
+      };
+    });
+    return {
+      id: r.id,
+      title: r.title,
+      type: r.type || apiToUiRecordType[r.record_type] || "other",
+      date: r.date || r.record_date,
+      description: r.description || r.summary || r.content || "",
+      doctor: r.doctor || r.metadata?.doctor || "",
+      hospital: r.hospital || r.metadata?.hospital || "",
+      files: filesNorm,
+    };
+  };
 
   const toApiPayload = (form) => {
     const fileIds = (form.files || [])
