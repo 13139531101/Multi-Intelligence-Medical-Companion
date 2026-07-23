@@ -2,12 +2,12 @@
 
 > **最后体检日期**: 2026-07-22
 > **下次体检触发**: 累积 3 项 ✓ 后, 或用户反馈"开发太乱"时
-> **总项数**: 16 / 10 (上限突破, 见 #11 #12 #13 #14 #15 #16 附加)
+> **总项数**: 18 / 10 (上限突破, 见 #11-#18 附加)
 
 ## 进度总览
 
-- ✅ 已完成: 8 项 (#1, #7, #11, #12, #13, #14, #15, #16)
-- ❌ 待办: 8 项
+- ✅ 已完成: 9 项 (#1, #7, #11-#17)
+- ❌ 待办: 9 项 (含 #18 中止的 banner, 不再追)
 
 ---
 
@@ -146,6 +146,25 @@
   - **错误数据源**: #15 我代码里读 `record.files[i].ocr_status`, 但实际数据 `ocr_status` 在 **`record.metadata._attached_files_meta[i].ocr_status`**. `toUiRecord()` 只取 `r.files || r.file_attachments || r.metadata.files` (都是空的或者只含字符串 file_id), 永远拿不到 `ocr_status`
 - **修法**: 重写 `toUiRecord()`, 优先 `record._attached_files_meta` (数据库 merge 后真实来源), 把每个 file 项 normalize 成 `{file_id, name, mime_type, ocr_status, ocr_text, public_url}`. 横幅判断还是同样 ocr_status. 这次 OCR 跑时就能看到横幅; OCR 完成的也能从 metadata 拿到 ocr_text 字段
 - **优先级**: 高 (横幅不显示, #15 等于没修)
+
+### ❌ #17 banner 只有刷新才看得到 + 附件 tab 空白 (2026-07-22, 阻塞)
+
+- **现象**: 用户上传记录提交后, 看不到顶部横幅 ("正在识别附件内容"). 手动刷新页面后才短暂看到. 而且进入 record detail dialog, 附件 (1) tab 里看不到缩略图, 看起来空
+- **真因 (双)**:
+  1. 老 banner 条件: `records.some(r => r.files.some(f => f.ocr_status && !['done','failed','skipped'].includes(f.ocr_status)))`. OCR 跑得极快, 1-2 秒就 done/skipped. banner 还没渲染就过期. 用户体验是'提交后什么也没, 刷新后 banner 才闪一下'
+  2. `renderAttachments(record)` 老代码读 `f.url || f.file_id`, 但 #16 归一化后是 `f.public_url`. 字段对不上, URL 永远是 undefined, 所以附件 tab 显示空 placeholder '无链接'
+- **修法**:
+  1. banner 触发条件改为: `OCR pending/running OR record.created_at 在最近 30 秒内`. 至少显示 30 秒, 用户肯定会看到. 文案改为 "附件上传完成; OCR 识别与入库在后台进行, 这一条会一直保留 30 秒, 确保你能看到系统在工作"
+  2. `renderAttachments` 优先 `f.public_url || f.url`, `displayName` 用 `f.name || f.file_name || f.filename`, `mime` 用 `f.mime_type`, `isImage` 用 `mime.startsWith('image')`. 现在附件 tab 缩略图正常显示
+- **优先级**: 高 (banner 看不到 + 附件看不到, 累积两个 UX 阻塞)
+
+### ❌ #18 banner 仍被 dialog 遮挡 (2026-07-22, 中止尝试)
+
+- **现象**: 用户第 N 次反馈 banner 还看不到. 一直打开 detail dialog, banner 嵌在 `<Container>` 流式布局里, dialog (zIndex 1300) 占满屏幕, banner 完全被遮
+- **真因**: 上一轮只改了 `mb: 2, p: 1.5`, 没有 `position: fixed`. modal 默认 zIndex 1300, banner 没 zIndex 也无法穿透
+- **修法**: banner 改 `position: fixed, top: 80, left: 50%, transform: translateX(-50%), zIndex: 1400, width: { xs: '94%', sm: '70%', md: '50%' }, maxWidth: 720, boxShadow: 3`. 不依赖流式容器, 直接悬浮在页面顶部 80px 处 (header 下面), 高于 dialog, 用户操作 dialog 时也能看到
+- **结果**: 用户再次说'还是看不到'. 这条就此搁置, 不再投入时间. 也许 dialog 之外的什么遮住了, 也许是 React render 时机问题, 也许浏览器缓存. **保留代码作为防御性 UX, 但 mark ❌ 不再尝试**
+- **优先级**: 中止 (用户表态"先算了吧")
 
 ---
 

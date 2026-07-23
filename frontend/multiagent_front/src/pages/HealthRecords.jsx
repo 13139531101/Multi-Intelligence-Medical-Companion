@@ -351,17 +351,20 @@ const HealthRecords = () => {
       <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 8 }}>
         {files.map((f, idx) => {
           const fileId = typeof f === "string" ? f : f.file_id || f.id;
-          const displayName =
-            typeof f === "string" ? f : f.name || f.filename || "文件";
+          // 阶段48-22 v3+: toUiRecord 已经把每个 file 归一化成 {file_id, name, mime_type, ocr_status, public_url}
+          // 优先用 f.public_url (来自 metadata._attached_files_meta), 然后 getAttachmentUrl(file_id) 兜底
           const url =
-            typeof f === "object" && f.url
-              ? f.url
-              : fileId
-                ? getAttachmentUrl(fileId)
-                : undefined;
+            (typeof f === "object" && (f.public_url || f.url)) ||
+            (fileId ? getAttachmentUrl(fileId) : undefined) ||
+            (typeof f === "object" && f.file_id
+              ? `/v2/files/${f.file_id}`
+              : undefined);
+          const displayName =
+            (typeof f === "object" && (f.name || f.file_name || f.filename)) ||
+            (typeof f === "string" ? f : "文件");
+          const mime = typeof f === "object" ? f.mime_type : "";
           const isImage =
-            (typeof f === "object" &&
-              (f.mime_type || "").startsWith("image")) ||
+            (mime && mime.startsWith("image")) ||
             (url &&
               /(\.(png|jpe?g|gif|bmp|webp|svg|heic|heif|tiff?))$/i.test(url));
           return (
@@ -466,20 +469,39 @@ const HealthRecords = () => {
         <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }}>
           {/* 阶段48-22 v3+: OCR 后台处理提示 — 当任意附件状态不是 done/failed/skipped
               时, 顶部加一条可见横幅, 并每 5 秒自动刷新一次列表.
-              user 不需要手动刷新页面, 也不用看着'白屏'不知道进度. */}
-          {records.some((r) =>
-            (r.files || []).some(
-              (f) =>
-                f &&
-                typeof f === "object" &&
-                f.ocr_status &&
-                !["done", "failed", "skipped"].includes(f.ocr_status),
-            ),
-          ) && (
+              user 不需要手动刷新页面, 也不用看着'白屏'不知道进度.
+              横幅用 fixed 定位 + 高 z-index, 这样即使 dialog 打开也能看到. */}
+          {(() => {
+            const now = Date.now();
+            const RECENT_UPLOAD_WINDOW_MS = 30 * 1000; // 30 秒内上传的都算"刚刚处理"
+            const isRunning = (rec) =>
+              (rec.files || []).some(
+                (f) =>
+                  f &&
+                  typeof f === "object" &&
+                  f.ocr_status &&
+                  !["done", "failed", "skipped"].includes(f.ocr_status),
+              );
+            const isRecent = (rec) => {
+              if (!rec.created_at) return false;
+              const t = Date.parse(rec.created_at);
+              if (Number.isNaN(t)) return false;
+              return now - t < RECENT_UPLOAD_WINDOW_MS;
+            };
+            const pending = records.filter((r) => isRunning(r) || isRecent(r));
+            if (pending.length === 0) return false;
+            return true;
+          })() && (
             <Box
               data-testid="ocr-progress-banner"
               sx={{
-                mb: 2,
+                position: "fixed",
+                top: 80,
+                left: "50%",
+                transform: "translateX(-50%)",
+                zIndex: 1400,
+                width: { xs: "94%", sm: "70%", md: "50%" },
+                maxWidth: 720,
                 p: 1.5,
                 borderRadius: 2,
                 bgcolor: "warning.light",
@@ -488,6 +510,7 @@ const HealthRecords = () => {
                 alignItems: "center",
                 gap: 1.5,
                 animation: "ocrPulse 1.6s ease-in-out infinite",
+                boxShadow: 3,
                 "@keyframes ocrPulse": {
                   "0%,100%": { opacity: 1 },
                   "50%": { opacity: 0.55 },
@@ -496,8 +519,8 @@ const HealthRecords = () => {
             >
               <CircularProgress size={18} sx={{ color: "inherit" }} />
               <Typography variant="body2" sx={{ flex: 1 }}>
-                正在识别附件内容，完成后会自动显示 —
-                你可以继续其他操作，不必等在这里
+                附件上传完成；OCR 识别与入库在后台进行， 这一条会一直保留 30
+                秒，确保你能看到系统在工作 — 完成后这里会自动消失
               </Typography>
               <Typography variant="caption">
                 {
@@ -511,7 +534,7 @@ const HealthRecords = () => {
                         !["done", "failed", "skipped"].includes(f.ocr_status),
                     ).length
                 }{" "}
-                个待处理
+                个识别中
               </Typography>
             </Box>
           )}

@@ -1,0 +1,12 @@
+fix(stage48-22 v13): OCR banner zIndex 1400 + position fixed (#18)
+
+用户反映 #17 banner 即使刷新也看不到. 实际原因:
+打开 detail dialog 占满页面 (zIndex 默认 1300),
+原先的 banner 嵌在 Container 内, 被 dialog 遮住.
+
+修法: banner 改为 position: fixed / top: 80 / zIndex: 1400,
+确保高于 dialog, 在 dialog 之上仍可见. 用户拍 dialog 内也可以看到.
+
+体检表更新: 加 #18 项, 标记 ✅.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
