@@ -1,0 +1,23 @@
+refactor(stage48-22 v14): 原 UX 体检 #2 #4 #5 #6 #10 — 头部紧凑 + FAB 缩小 + header 浅色 + 搜索间距 + Tab 对齐
+
+按 docs/HEALTH_RECORDS_UX_AUDIT.md 原始 8 项 (高严重度 + 中严重度) 开始.
+
+#2 头部紧凑: 标题 + 添加记录按钮 — 已经在 flex space-between 行 (无需改动).
+
+#4 FAB 智能助手按钮缩小: 把 HealthRecords.jsx 的 size="medium" 改为 "small";
+   AgentAssistant.jsx getSizeConfig() 的 small 改返回 fabSize: 'small' (之前是 medium).
+   边距 bottom: 24 -> 16, right: 24 -> 16 (更深角, 不抢眼).
+   opacity 0.85 (hover 1.0) - 半透明, 不抢视线.
+
+#5 header #1976d2 -> primary.light: HealthHeader.jsx AppBar bgcolor='primary.main' -> 'primary.light',
+   color='primary.contrastText' 保留对比度, 但浅一档.
+
+#6 搜索 vs tab 间距: HealthRecords.jsx 搜索 Card mb: 3 -> mb: 2 (24px -> 16px).
+
+#10 Tab 文字对齐: NewHealthRecords.jsx 详情 dialog Tabs 加 sx={minHeight: 36,
+   & .MuiTab-root: { minHeight: 36, padding: '6px 16px', fontSize: '0.875rem' }},
+   让基础信息/正文/附件三个 tab 字号 + 内边距统一.
+
+体检表更新: #2 (无变化, 已合规), #4 #5 #6 #10 标记 ✅ 完成.
+
+Co-Authored-By: Claude <noreply@anthropic.com>

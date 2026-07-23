@@ -560,7 +560,7 @@ const HealthRecords = () => {
           </Box>
 
           {/* 搜索和筛选 */}
-          <Card sx={{ mb: 3 }}>
+          <Card sx={{ mb: 2 }}>
             <CardContent>
               <Grid container spacing={2} alignItems="center">
                 <Grid item xs={12} md={6}>
@@ -910,7 +910,7 @@ const HealthRecords = () => {
           agentType="health_records"
           contextPrompt="当前用户正在查看健康档案页面，可能需要关于健康记录管理、数据录入、档案查询等方面的帮助。"
           position="bottom-right"
-          size="medium"
+          size="small"
         />
       </Box>
     </LocalizationProvider>

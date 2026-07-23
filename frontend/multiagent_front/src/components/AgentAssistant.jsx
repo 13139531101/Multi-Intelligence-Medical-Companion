@@ -142,10 +142,10 @@ const AgentAssistant = ({
         text = event.content.parts
           .map((p) =>
             p.type === "text"
-              ? p.text ?? ""
+              ? (p.text ?? "")
               : typeof p.data === "string"
-              ? p.data
-              : JSON.stringify(p.data)
+                ? p.data
+                : JSON.stringify(p.data),
           )
           .join("");
       }
@@ -323,26 +323,26 @@ const AgentAssistant = ({
 
     switch (position) {
       case "bottom-right":
-        return { ...baseStyles, bottom: 24, right: 24 };
+        return { ...baseStyles, bottom: 16, right: 16 };
       case "bottom-left":
-        return { ...baseStyles, bottom: 24, left: 24 };
+        return { ...baseStyles, bottom: 16, left: 16 };
       case "top-right":
-        return { ...baseStyles, top: 24, right: 24 };
+        return { ...baseStyles, top: 16, right: 16 };
       case "top-left":
-        return { ...baseStyles, top: 24, left: 24 };
+        return { ...baseStyles, top: 16, left: 16 };
       default:
-        return { ...baseStyles, bottom: 24, right: 24 };
+        return { ...baseStyles, bottom: 16, right: 16 };
     }
   };
 
   const getSizeConfig = () => {
     switch (size) {
       case "small":
-        return { width: 320, height: 400, fabSize: "medium" };
+        return { width: 320, height: 400, fabSize: "small" };
       case "large":
         return { width: 480, height: 600, fabSize: "large" };
       default:
-        return { width: 400, height: 500, fabSize: "large" };
+        return { width: 360, height: 480, fabSize: "medium" };
     }
   };
 
@@ -359,9 +359,10 @@ const AgentAssistant = ({
           ...getPositionStyles(),
           zIndex: 1200,
           bgcolor: currentAgent.color,
+          opacity: 0.85,
           "&:hover": {
             bgcolor: currentAgent.color,
-            opacity: 0.9,
+            opacity: 1,
           },
         }}
         size={sizeConfig.fabSize}
@@ -527,8 +528,8 @@ const AgentAssistant = ({
                               message.sender === "user"
                                 ? "primary.main"
                                 : message.isError
-                                ? "error.light"
-                                : "grey.100",
+                                  ? "error.light"
+                                  : "grey.100",
                             color:
                               message.sender === "user" || message.isError
                                 ? "white"

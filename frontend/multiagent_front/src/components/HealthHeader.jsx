@@ -124,7 +124,10 @@ const HealthHeader = () => {
   const unreadCount = realNotifications.filter((n) => n.unread).length;
 
   return (
-    <AppBar position="static" sx={{ bgcolor: "primary.main" }}>
+    <AppBar
+      position="static"
+      sx={{ bgcolor: "primary.light", color: "primary.contrastText" }}
+    >
       <Toolbar>
         {/* Logo和标题 */}
         <Box sx={{ display: "flex", alignItems: "center", flexGrow: 0, mr: 4 }}>

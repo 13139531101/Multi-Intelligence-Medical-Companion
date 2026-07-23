@@ -6,8 +6,8 @@
 
 ## 进度总览
 
-- ✅ 已完成: 9 项 (#1, #7, #11-#17)
-- ❌ 待办: 9 项 (含 #18 中止的 banner, 不再追)
+- ✅ 已完成: 13 项 (#1, #2, #4, #5, #6, #7, #10, #11-#17)
+- ❌ 待办: 5 项 (含 #18 中止的 banner, 不再追)
 
 ---
 
@@ -29,17 +29,17 @@
 
 ## 中严重度 (影响观感)
 
-### ❌ #2 头部紧凑
+### ✅ #2 头部紧凑 (2026-07-22 完成)
 
-- **现象**: "健康档案"标题 + "共 17 条记录" + "刷新/新增档案" 按钮 — 分两行不紧凑
-- **建议**: Stack direction="row" justifyContent="space-between" + 缩小按钮 size
-- **优先级**: 中 (等下一轮验收 #7 后再做)
+- **现象**: "健康档案"标题 + "添加记录" 按钮 — 原以为两行, 实查已是 `display: flex, justifyContent: space-between` 一行内布局
+- **修法**: 无需改 CSS, 文档保留为 ✅ 合规
+- **commit**: 包含在 v14 提交
 
-### ❌ #4 智能助手按钮缩小
+### ✅ #4 智能助手按钮缩小 (2026-07-22 完成)
 
-- **现象**: 右下角蓝色圆形 FAB 按钮, 太大太抢眼, 把用户视线吸走
-- **建议**: 缩小 + 半透明 + 移到右下角边缘更深处
-- **优先级**: 中
+- **现象**: 右下角蓝色 FAB 太大太抢眼 (size="medium" + opacity 1.0 + bottom/right: 24)
+- **修法**: HealthRecords.jsx `size="medium"` -> `"small"`; AgentAssistant.jsx `getSizeConfig().small` 返回 fabSize: 'small' (之前 medium); 边距 bottom/right: 24 -> 16; opacity: 0.85 (hover 1.0)
+- **commit**: 包含在 v14 提交
 
 ### ❌ #8 OcrSummaryBlock 顶卡片
 
@@ -57,17 +57,17 @@
 - **建议**: 合并到头像 Badge 或去掉 pill
 - **优先级**: 低
 
-### ❌ #5 顶部 header 调浅
+### ✅ #5 顶部 header 调浅 (2026-07-22 完成)
 
 - **现象**: 蓝色 #1976d2 太亮, 跟下面白色卡片对比突兀
-- **建议**: 用主题色 alpha 0.7 调浅
-- **优先级**: 低
+- **修法**: HealthHeader.jsx AppBar `bgcolor: primary.main` -> `bgcolor: primary.light`, text 保留 `primary.contrastText`
+- **commit**: 包含在 v14 提交
 
-### ❌ #6 搜索 vs 标签栏间距
+### ✅ #6 搜索 vs 标签栏间距 (2026-07-22 完成)
 
-- **现象**: 搜索框跟下方"全部/诊断/检查..." 间距大, 中间留空
-- **建议**: 减少间距 16 → 8
-- **优先级**: 低
+- **现象**: 搜索 Card 跟下方 tab 间距 24px (`mb: 3`), 中间留空
+- **修法**: HealthRecords.jsx 搜索 `<Card sx={{ mb: 3 }}>` -> `<Card sx={{ mb: 2 }}>` (24px -> 16px)
+- **commit**: 包含在 v14 提交
 
 ### ❌ #9 列表卡片附件数字号
 
@@ -75,11 +75,11 @@
 - **建议**: 同一 caption, 不变
 - **优先级**: 低
 
-### ❌ #10 Tab 文字对齐
+### ✅ #10 Tab 文字对齐 (2026-07-22 完成)
 
-- **现象**: "正文" 跟 "附件 (1)" 文字大小不齐
-- **建议**: `<Tabs>` 用 sx={{ minHeight: 36 }}, `<Tab>` 用 sx={{ minHeight: 36, padding: '6px 16px' }}
-- **优先级**: 低
+- **现象**: NewHealthRecords.jsx 详情 dialog `<Tab label="基础信息">` 等三个, MUI 默认 minHeight 48px, 字号略大, 视觉不齐
+- **修法**: `<Tabs sx={{ minHeight: 36, '& .MuiTab-root': { minHeight: 36, padding: '6px 16px', fontSize: '0.875rem' }}}>`
+- **commit**: 包含在 v14 提交
 
 ---
 

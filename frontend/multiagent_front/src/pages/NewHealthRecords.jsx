@@ -1226,6 +1226,14 @@ export default function NewHealthRecords() {
                     onChange={(_, v) => setDetailTab(v)}
                     variant="scrollable"
                     scrollButtons="auto"
+                    sx={{
+                      minHeight: 36,
+                      "& .MuiTab-root": {
+                        minHeight: 36,
+                        padding: "6px 16px",
+                        fontSize: "0.875rem",
+                      },
+                    }}
                   >
                     {/* 阶段48-22 v6: 用户视角 — 不暴露 OCR/解析术语, 简化到 3 个 tab */}
                     <Tab label="基础信息" />
