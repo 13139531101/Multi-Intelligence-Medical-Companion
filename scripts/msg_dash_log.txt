@@ -1,0 +1,31 @@
+fix(stage48-22 v19): Dashboard fetchAll try/catch + score debug (#22)
+
+背景: 用户 #21 反馈"健康评分怎么一直是进度条", 然后用户问
+     "为什么没有评分, 缺少数据吗" — 说明 stats?.score 还是 null
+     (Number.isFinite false), 进入 "—" + "数据收集中" 状态
+
+诊断:
+  fetchAll 是 async 函数但没有 try/catch. 一旦 buildHealthTrend() 抛错
+  (例如 localStorage pha_health_history_v1 数据结构不一致,
+  或者 recentScores.length<2 时 computeCompliance 返回 undefined), 异常
+  会 propagate 到 React event loop 没 handler 的地方. setStats 不会
+  被调用, stats stays null → 永远 "数据收集中".
+
+修法 (1 commit):
+  Dashboard.jsx:
+    (1) fetchAll 加 try/catch, catch 里:
+        console.error + setStats(score=0) 兜底, 至少不让 UI 卡死
+    (2) 加 console.log("[Dashboard] computed:", { recCount, medCount,
+        medTaken, score, components }) — 用户打开 console 可以看到分数
+        是怎么算的, 调试方便
+
+真实场景验证 (curl):
+  GET /api/health-records -> 200 + 17 records (用户 17 个档案)
+  GET /api/medication-reminders?today=true&user_id=... -> 200 + 8 reminders
+                              (用户 8 次/天服药, 0 已服)
+  跑 mock 算法: cov=20%(档案覆盖只有1类), comp=0%(今天没服), score=15
+  真实分数应该是 15 左右.
+
+体检表更新: 加 #22 项, 标记 ✅.
+
+Co-Authored-By: Claude <noreply@anthropic.com>

@@ -2,11 +2,11 @@
 
 > **最后体检日期**: 2026-07-22
 > **下次体检触发**: 累积 3 项 ✓ 后, 或用户反馈"开发太乱"时
-> **总项数**: 21 / 10 (上限突破, 见 #11-#21 附加)
+> **总项数**: 22 / 10 (上限突破, 见 #11-#22 附加)
 
 ## 进度总览
 
-- ✅ 已完成: 19 项 (#1, #2, #3, #4, #5, #6, #7, #9, #10, #11-#17, #19, #20, #21)
+- ✅ 已完成: 20 项 (#1, #2, #3, #4, #5, #6, #7, #9, #10, #11-#17, #19, #20, #21, #22)
 - ❌ 待办: 2 项 (含 #18 中止)
 
 ---
@@ -194,6 +194,20 @@
 - **真因**: 上一轮 #20 给 LinearProgress 加了 fallback `variant={Number.isFinite(stats?.score) ? 'determinate' : 'indeterminate'}`. `computeHealthScore()` 把 score clamp 到 Math.round(Math.max(0, Math.min(100, raw))), 所以 score 永远是 finite. 但如果实在没数据 (本地缓存空), 偶尔 `stats.score` 可能是 null, 此时切到 indeterminate, 那条永远横滚的条看起来就 "loading". 而且** 14 分的 determinate 也很小**, 用户分不清是 progress 还是 idle
 - **修法**: 删除 `indeterminate` 分支, 永远用 `variant="determinate"`. 加一行 caption "X 分 (良好/中等/待关注)" 或 "数据收集中 — 上传档案后立即显示". progress bar 是真分数比例, 不再有"indeterminate 永远横滚"假象
 - **优先级**: 高 (loading 假象是糟糕 UX 信号)
+
+### ✅ #22 fetchAll 抛错没兜底 + 加 console.log 调试 (#22)
+
+- **现象**: 用户 #21 修复后又问 "为什么没有评分, 缺少数据吗" — stats.score 仍然是 null, 进入 "—" + "数据收集中" 状态
+- **真因**: fetchAll 是 async 函数, 没有 try/catch. 一旦 buildHealthTrend() 抛错 (例如 localStorage pha_health_history_v1 数据结构不一致, recentScores 长度 < 2 时 computeCompliance 抛 undefined, 等), 整个 callback 异常, setStats 不会被调用, stats 永远 null. **前端永远看不到错误**, 用户也不知道哪里出问题
+- **修法**:
+  - Dashboard.jsx fetchAll 加 try/catch, catch 里 console.error + setStats({score: 0, ...}) 兜底, 至少不让 UI 卡在 "数据收集中"
+  - 加 console.log("[Dashboard] computed:", { recCount, medCount, medTaken, score, components }) — 用户打开 console 可以看到分数是怎么算的
+- **真实数据 curl 验证**:
+  - GET /api/health-records -> 200 + 17 records (用户 17 个档案)
+  - GET /api/medication-reminders?today=true&user_id=... -> 200 + 8 reminders (今天 8 次药, 0 已服)
+  - 跑 mock 算法: cov=20%, comp=0%, activity=?, score=15 左右
+- **下一步**: 用户刷新 Dashboard, 打开 console (F12), 应该看到 `[Dashboard] computed: { recCount: 17, medCount: 8, medTaken: 0, score: 15, components: ... }`. 如果没看到就是 fetchAll 没跑到那行 (API 失败/未登录)
+- **优先级**: 高 (没调试手段 = 没法定位前端 bug)
 
 ---
 

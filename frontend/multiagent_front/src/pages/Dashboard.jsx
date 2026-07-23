@@ -164,62 +164,84 @@ export default function Dashboard() {
 
   const fetchAll = async () => {
     setLoading(true);
-    const tasks = [
-      getHealthRecords().catch(() => []),
-      getMedicationReminders({ today: true }).catch(() => []),
-      getHealthTrends({ days: 30 }).catch(() => null),
-      getConsultationHistory({ limit: 4 }).catch(() => []),
-    ];
-    const [recs, meds, trend, convs] = await Promise.all(tasks);
+    try {
+      const tasks = [
+        getHealthRecords().catch(() => []),
+        getMedicationReminders({ today: true }).catch(() => []),
+        getHealthTrends({ days: 30 }).catch(() => null),
+        getConsultationHistory({ limit: 4 }).catch(() => []),
+      ];
+      const [recs, meds, trend, convs] = await Promise.all(tasks);
 
-    const recList = Array.isArray(recs) ? recs : recs?.records || [];
-    const medList = Array.isArray(meds) ? meds : meds?.reminders || [];
-    const medTaken = medList.filter(
-      (m) => m.taken || m.status === "taken",
-    ).length;
-    const medTotal = medList.length;
+      const recList = Array.isArray(recs) ? recs : recs?.records || [];
+      const medList = Array.isArray(meds) ? meds : meds?.reminders || [];
+      const medTaken = medList.filter(
+        (m) => m.taken || m.status === "taken",
+      ).length;
+      const medTotal = medList.length;
 
-    setRecords({ total: recList.length });
-    setMed({ taken: medTaken, total: medTotal });
+      setRecords({ total: recList.length });
+      setMed({ taken: medTaken, total: medTotal });
 
-    // 阶段48-8: 用真实算法替换 mock — 先算 trendResult, 因为 setStats 要用
-    const trendResult = buildHealthTrend({
-      records: recList,
-      reminders: medList,
-      consultations: Array.isArray(convs) ? convs : [],
-    });
+      // 阶段48-8: 用真实算法替换 mock — 先算 trendResult, 因为 setStats 要用
+      const trendResult = buildHealthTrend({
+        records: recList,
+        reminders: medList,
+        consultations: Array.isArray(convs) ? convs : [],
+      });
 
-    setStats({
-      score: trendResult.today.score,
-      records: recList.length,
-      exams: recList.filter((r) => r.record_type === "examination").length,
-      allergies: recList.filter((r) => r.record_type === "allergy").length,
-      reports: recList.filter((r) => r.record_type === "report").length,
-    });
+      setStats({
+        score: trendResult.today.score,
+        records: recList.length,
+        exams: recList.filter((r) => r.record_type === "examination").length,
+        allergies: recList.filter((r) => r.record_type === "allergy").length,
+        reports: recList.filter((r) => r.record_type === "report").length,
+      });
+      // 阶段48-22 v4+: 调试 — 让用户在 console 看到 score 是怎么算出来的
+      console.log("[Dashboard] computed:", {
+        recCount: recList.length,
+        medCount: medList.length,
+        medTaken,
+        score: trendResult.today.score,
+        components: trendResult.today.components,
+      });
 
-    // 把 days 转成 weeks 格式 (前端用)
-    const weeks = trendResult.days.map((d) => ({
-      day: d.label,
-      value: d.score ?? trendResult.today.score,
-      date: d.date,
-    }));
+      // 把 days 转成 weeks 格式 (前端用)
+      const weeks = trendResult.days.map((d) => ({
+        day: d.label,
+        value: d.score ?? trendResult.today.score,
+        date: d.date,
+      }));
 
-    setTrends({
-      weeks,
-      score: trendResult.today.score,
-      cov: Math.round(trendResult.components.coverage),
-      comp: Math.round(trendResult.components.compliance),
-      act: Math.round(trendResult.components.activity),
-      stab: Math.round(trendResult.components.stability),
-      slope: trendResult.trend.slope,
-      r: trendResult.trend.r,
-      trendLabel: trendResult.trend.label,
-      trendColor: trendResult.trend.color,
-      historicalN: trendResult.trend.n,
-      comparison: trendResult.comparison,
-    });
-    setRecentConvs(Array.isArray(convs) ? convs.slice(0, 4) : []);
-    setLoading(false);
+      setTrends({
+        weeks,
+        score: trendResult.today.score,
+        cov: Math.round(trendResult.components.coverage),
+        comp: Math.round(trendResult.components.compliance),
+        act: Math.round(trendResult.components.activity),
+        stab: Math.round(trendResult.components.stability),
+        slope: trendResult.trend.slope,
+        r: trendResult.trend.r,
+        trendLabel: trendResult.trend.label,
+        trendColor: trendResult.trend.color,
+        historicalN: trendResult.trend.n,
+        comparison: trendResult.comparison,
+      });
+      setRecentConvs(Array.isArray(convs) ? convs.slice(0, 4) : []);
+      setLoading(false);
+    } catch (e) {
+      // 阶段48-22 v4+: 真算法跑失败 (buildHealthTrend 抛错), 兜底:
+      // 设一个 0 分占位, 至少不让 "数据收集中" 卡死
+      console.error("[Dashboard] fetchAll failed:", e);
+      setStats({
+        score: 0,
+        records: recList?.length || 0,
+        exams: 0,
+        allergies: 0,
+        reports: 0,
+      });
+      setLoading(false);
+    }
   };
 
   useEffect(() => {
