@@ -2,12 +2,12 @@
 
 > **最后体检日期**: 2026-07-22
 > **下次体检触发**: 累积 3 项 ✓ 后, 或用户反馈"开发太乱"时
-> **总项数**: 20 / 10 (上限突破, 见 #11-#20 附加)
+> **总项数**: 21 / 10 (上限突破, 见 #11-#21 附加)
 
 ## 进度总览
 
-- ✅ 已完成: 18 项 (#1, #2, #3, #4, #5, #6, #7, #9, #10, #11-#17, #19, #20)
-- ❌ 待办: 2 项 (含 #18 中止, + #20 设计修复)
+- ✅ 已完成: 19 项 (#1, #2, #3, #4, #5, #6, #7, #9, #10, #11-#17, #19, #20, #21)
+- ❌ 待办: 2 项 (含 #18 中止)
 
 ---
 
@@ -182,11 +182,18 @@
   - 有数: 显示数字 + 颜色
   - 没数: 显示 "—" 占位符 + text.disabled 灰色 + 友好提示文案
   - 7 天柱图: 灰色 + 高度 8% 占位
-  - 综合分: "—" / 100 + LinearProgress indeterminate (跳动进度)
+  - 综合分: "—" / 100
   - 健康评分顶部 chip: "记录中" 灰色 + "健康评分 — / 100"
   - 总结 caption: "刚开始记录 — 7 天后才有趋势; 90 天后做置信度评估"
     关键设计原则: **没数据用 "—" + 文案, 不用 0 + 红色**. 0 = 系统跑出 0 = "我看过你的数据, 你身体 0 分"; "—" = "我没看过, 别担心, 反正下次会补"
 - **优先级**: 高 (Dashboard 是 home, 用户第一眼看到, 严重影响 trust)
+
+### ✅ #21 健康评分 LinearProgress 永远滚动 (2026-07-22 修复)
+
+- **现象**: 用户反馈 "健康评分怎么一直是进度条". Dashboard 底部 LinearProgress 看起来一直在滚动, 像 loading 卡死
+- **真因**: 上一轮 #20 给 LinearProgress 加了 fallback `variant={Number.isFinite(stats?.score) ? 'determinate' : 'indeterminate'}`. `computeHealthScore()` 把 score clamp 到 Math.round(Math.max(0, Math.min(100, raw))), 所以 score 永远是 finite. 但如果实在没数据 (本地缓存空), 偶尔 `stats.score` 可能是 null, 此时切到 indeterminate, 那条永远横滚的条看起来就 "loading". 而且** 14 分的 determinate 也很小**, 用户分不清是 progress 还是 idle
+- **修法**: 删除 `indeterminate` 分支, 永远用 `variant="determinate"`. 加一行 caption "X 分 (良好/中等/待关注)" 或 "数据收集中 — 上传档案后立即显示". progress bar 是真分数比例, 不再有"indeterminate 永远横滚"假象
+- **优先级**: 高 (loading 假象是糟糕 UX 信号)
 
 ---
 

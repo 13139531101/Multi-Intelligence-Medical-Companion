@@ -1,0 +1,19 @@
+fix(stage48-22 v18): Dashboard 健康评分 LinearProgress — 移除 indeterminate fallback (#21)
+
+背景: 用户反馈 健康评分 一直是进度条, 看起来卡死.
+
+诊断:
+  上一轮 #20 改用 LinearProgress variant={'determinate' if number else 'indeterminate'},
+  没数据时让进度条 indeterminate (永远横滚). 看起来像卡死.
+  实际上 score 总是 finite number (computeHealthScore 用 Math.round clamp 0-100),
+  所以 isFinite 应该恒真. 但用户视觉上看到的是 '14 分' 的小槽 — 看起来像进度条.
+
+修法 (1 commit):
+  Dashboard.jsx:
+    - 移除 indeterminate fallback, 永远用 variant='determinate', value=stats.score
+    - 加一行 caption 说明: 'X 分 (良好/中等/待关注)' 或 '数据收集中 — 上传档案后立即显示'
+    - 用户能看到 progress 真在动 (因为 stats.score 是真实算法跑出来的, 14 = 14/100 = 14% 比例)
+
+体检表更新: 加 #21 项, 标记 ✅.
+
+Co-Authored-By: Claude <noreply@anthropic.com>

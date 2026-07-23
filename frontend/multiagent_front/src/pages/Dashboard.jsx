@@ -1278,14 +1278,19 @@ export default function Dashboard() {
             <Divider orientation="vertical" flexItem sx={{ mx: 2 }} />
             <Box sx={{ flex: 1 }}>
               <LinearProgress
-                variant={
-                  Number.isFinite(stats?.score)
-                    ? "determinate"
-                    : "indeterminate"
-                }
+                variant="determinate"
                 value={Number.isFinite(stats?.score) ? stats.score : 0}
-                sx={{ height: 8, borderRadius: 4 }}
+                sx={{ height: 8, borderRadius: 4, mb: 0.5 }}
               />
+              <Typography
+                variant="caption"
+                color="text.disabled"
+                sx={{ display: "block", mt: 0.5 }}
+              >
+                {Number.isFinite(stats?.score)
+                  ? `${stats.score} 分 (${stats.score >= 70 ? "良好" : stats.score >= 40 ? "中等" : "待关注"})`
+                  : "数据收集中 — 上传档案或服药后立即显示"}
+              </Typography>
               <Stack
                 direction="row"
                 spacing={2}
