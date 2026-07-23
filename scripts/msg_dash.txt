@@ -1,0 +1,34 @@
+fix(stage48-22 v17): Dashboard.jsx — NaN/0% 改 "—" 占位, 不恐吓用户 (#20)
+
+背景: 用户反馈 Dashboard 整屏是 NaN, 0%, 0/100 — 不好看, 用户会陷入恐慌
+
+诊断:
+  Dashboard.jsx 4 处直接展示 number 但没 NaN 检查:
+    1. 7天柱图 Math.round(v) — v=null 时 NaN
+    2. 综合分 CircularProgress value=stats?.score || 0 — score=null 时 0
+    3. cov/comp/act/stab 渲染 'X%' — null/0 时 '0%' 看起来吓人
+    4. LinearProgress value=stats?.score || 0 — 同样 0
+  健康指标数据来源是 buildHealthTrend() — 历史无数据时
+  score=null; 周天数 NaN/缺数据; cov/comp/act/stab 默认 0
+
+修法 (1 commit):
+  Dashboard.jsx 4 处都加 Number.isFinite(v) 检查:
+    - 有数: 显示数字, 颜色保留 (green/orange/red)
+    - 没数: 显示 "—" 占位符 + 灰色 text.disabled + 友好提示文案
+    - 7 天柱图: 灰色 + 高度 8% 占位 (不再 0% 红色吓人)
+    - 综合分: "—" / 100 + LinearProgress indeterminate (跳动 progress)
+    - 健康评分顶部 chip: "记录中" 灰色 + "健康评分 — / 100"
+    - 横向 LinearProgress 同样的 NaN 检查
+    - 之前没用的 t-test chip 隐藏掉, 避免 "t=-0.x" 这种数字掩盖没数据的真相
+  总结性 caption 改: '刚开始记录 — 7 天后才有趋势; 90 天后做置信度评估'
+
+验收 (人眼):
+  - 综合分 = '—' + '暂无数据' 而不是 '0 / 100'
+  - 7 天柱图 5/7 显示 "—" + 灰色, 2/7 有数据 (今天和昨天) 显示数字 + 颜色
+  - 历史 N = 0 时: '刚开始记录 — 7 天后才有趋势; 90 天后做置信度评估'
+  - 历史 N = 1-6: '已积累 N 天数据 — 还需要几天历史才能给趋势'
+  - 历史 N >= 7: '趋势已稳定'
+
+体检表更新: 加 #20 项, 标记 ✅.
+
+Co-Authored-By: Claude <noreply@anthropic.com>

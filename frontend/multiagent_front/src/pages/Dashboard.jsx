@@ -957,9 +957,20 @@ export default function Dashboard() {
                   <Box>
                     <Typography
                       variant="h4"
-                      sx={{ fontWeight: 700, color: "primary.main" }}
+                      sx={{
+                        fontWeight: 700,
+                        color: Number.isFinite(stats?.score)
+                          ? "primary.main"
+                          : "text.disabled",
+                      }}
                     >
-                      {loading ? <Skeleton width={40} /> : (stats?.score ?? 0)}
+                      {loading ? (
+                        <Skeleton width={40} />
+                      ) : Number.isFinite(stats?.score) ? (
+                        stats.score
+                      ) : (
+                        "—"
+                      )}
                     </Typography>
                     <Typography variant="caption" color="text.secondary">
                       健康评分
@@ -990,17 +1001,29 @@ export default function Dashboard() {
                 <Stack direction="row" spacing={0.5} alignItems="center">
                   <Chip
                     size="small"
-                    label={trends.trendLabel || "稳定"}
+                    label={
+                      Number.isFinite(trends.score)
+                        ? trends.trendLabel || "稳定"
+                        : "记录中"
+                    }
                     sx={{
-                      bgcolor: trends.trendColor || "info.main",
+                      bgcolor: Number.isFinite(trends.score)
+                        ? trends.trendColor || "info.main"
+                        : "grey.300",
                       color: "white",
                       fontWeight: 600,
                     }}
                   />
                   <Chip
                     size="small"
-                    label={`健康评分 ${trends.score || 0} / 100`}
-                    color="primary"
+                    label={
+                      Number.isFinite(trends.score)
+                        ? `健康评分 ${trends.score} / 100`
+                        : "健康评分 — / 100"
+                    }
+                    color={
+                      Number.isFinite(trends.score) ? "primary" : "default"
+                    }
                     variant="outlined"
                   />
                 </Stack>
@@ -1017,27 +1040,35 @@ export default function Dashboard() {
               >
                 {trends.weeks.map((w, i) => {
                   const v = w.value;
-                  const color =
-                    v >= 80
+                  // 阶段48-22 v4+: NaN/undefined 数据用占位符, 不显示 NaN/undefined/0%
+                  const hasData = Number.isFinite(v);
+                  const safeV = hasData ? v : 0;
+                  const color = hasData
+                    ? safeV >= 80
                       ? "success.main"
-                      : v >= 60
+                      : safeV >= 60
                         ? "primary.main"
-                        : v >= 40
+                        : safeV >= 40
                           ? "warning.main"
-                          : "error.main";
+                          : "error.main"
+                    : "grey.300"; // 没数据用灰色占位
                   return (
                     <Box key={i} sx={{ flex: 1, textAlign: "center" }}>
                       <Typography
                         variant="caption"
-                        sx={{ fontWeight: 600, color: color }}
+                        sx={{
+                          fontWeight: 600,
+                          color: hasData ? color : "text.disabled",
+                        }}
                       >
-                        {Math.round(v)}
+                        {hasData ? Math.round(safeV) : "—"}
                       </Typography>
                       <Box
                         sx={{
-                          height: `${Math.max(v, 4)}%`,
+                          height: hasData ? `${Math.max(safeV, 4)}%` : "8%",
                           maxHeight: 100,
                           bgcolor: color,
+                          opacity: hasData ? 1 : 0.4,
                           borderRadius: 1,
                           mt: 0.5,
                           transition: "all 0.3s",
@@ -1064,61 +1095,61 @@ export default function Dashboard() {
                   <Stack alignItems="center">
                     <CircularProgress
                       variant="determinate"
-                      value={stats?.score || 0}
+                      value={Number.isFinite(stats?.score) ? stats.score : 0}
                       size={60}
                       thickness={6}
                     />
                     <Typography
                       variant="caption"
-                      sx={{ mt: 1, color: "text.secondary" }}
+                      sx={{
+                        mt: 1,
+                        color: Number.isFinite(stats?.score)
+                          ? "text.secondary"
+                          : "text.disabled",
+                      }}
                     >
-                      综合分
+                      {Number.isFinite(stats?.score)
+                        ? `${stats.score} / 100`
+                        : "暂无数据"}
                     </Typography>
                   </Stack>
                 </Grid>
                 <Grid item xs={8}>
-                  <Typography
-                    variant="body2"
-                    color="text.secondary"
-                    sx={{ mb: 0.5 }}
-                  >
-                    • 档案覆盖: <strong>{trends.cov || 0}%</strong>
-                  </Typography>
-                  <Typography
-                    variant="body2"
-                    color="text.secondary"
-                    sx={{ mb: 0.5 }}
-                  >
-                    • 服药依从: <strong>{trends.comp || 0}%</strong>
-                  </Typography>
-                  <Typography
-                    variant="body2"
-                    color="text.secondary"
-                    sx={{ mb: 0.5 }}
-                  >
-                    • 活跃度: <strong>{trends.act || 0}%</strong>
-                  </Typography>
-                  <Typography
-                    variant="body2"
-                    color="text.secondary"
-                    sx={{ mb: 0.5 }}
-                  >
-                    • 稳定性: <strong>{trends.stab || 0}%</strong>
-                    {trends.comparison?.significant && (
-                      <Chip
-                        size="small"
-                        label={`t=${trends.comparison.t}`}
-                        sx={{ ml: 0.5, height: 16, fontSize: "0.6rem" }}
-                      />
-                    )}
-                  </Typography>
+                  {[
+                    { key: "cov", label: "档案覆盖" },
+                    { key: "comp", label: "服药依从" },
+                    { key: "act", label: "活跃度" },
+                    { key: "stab", label: "稳定性" },
+                  ].map((row) => {
+                    const raw = trends[row.key];
+                    const hasData = Number.isFinite(raw);
+                    return (
+                      <Typography
+                        key={row.key}
+                        variant="body2"
+                        color="text.secondary"
+                        sx={{ mb: 0.5 }}
+                      >
+                        • {row.label}:{" "}
+                        <strong
+                          style={{
+                            color: hasData ? "inherit" : "text.disabled",
+                          }}
+                        >
+                          {hasData ? `${raw}%` : "—"}
+                        </strong>
+                      </Typography>
+                    );
+                  })}
                   <Typography
                     variant="caption"
                     color="text.disabled"
                     sx={{ display: "block", mt: 1 }}
                   >
-                    斜率 {trends.slope} · r={trends.r} · 历史{" "}
-                    {trends.historicalN || 0} 天
+                    {Number.isFinite(trends.historicalN) &&
+                    trends.historicalN > 0
+                      ? `已积累 ${trends.historicalN} 天数据 — ${trends.historicalN < 7 ? "还需要几天历史才能给趋势" : "趋势已稳定"}`
+                      : "刚开始记录 — 7 天后才有趋势; 90 天后做置信度评估"}
                   </Typography>
                 </Grid>
               </Grid>
@@ -1217,17 +1248,29 @@ export default function Dashboard() {
               <Typography variant="caption" color="text.secondary">
                 健康评分
               </Typography>
-              <Typography
-                variant="h3"
-                sx={{
-                  fontWeight: 700,
-                  color:
-                    (stats?.score || 0) >= 70 ? "success.main" : "primary.main",
-                  lineHeight: 1,
-                }}
-              >
-                {stats?.score || 0}
-              </Typography>
+              {Number.isFinite(stats?.score) ? (
+                <Typography
+                  variant="h3"
+                  sx={{
+                    fontWeight: 700,
+                    color: stats.score >= 70 ? "success.main" : "primary.main",
+                    lineHeight: 1,
+                  }}
+                >
+                  {stats.score}
+                </Typography>
+              ) : (
+                <Typography
+                  variant="h3"
+                  sx={{
+                    fontWeight: 700,
+                    color: "text.disabled",
+                    lineHeight: 1,
+                  }}
+                >
+                  —
+                </Typography>
+              )}
               <Typography variant="caption" color="text.disabled">
                 / 100
               </Typography>
@@ -1235,8 +1278,12 @@ export default function Dashboard() {
             <Divider orientation="vertical" flexItem sx={{ mx: 2 }} />
             <Box sx={{ flex: 1 }}>
               <LinearProgress
-                variant="determinate"
-                value={stats?.score || 0}
+                variant={
+                  Number.isFinite(stats?.score)
+                    ? "determinate"
+                    : "indeterminate"
+                }
+                value={Number.isFinite(stats?.score) ? stats.score : 0}
                 sx={{ height: 8, borderRadius: 4 }}
               />
               <Stack

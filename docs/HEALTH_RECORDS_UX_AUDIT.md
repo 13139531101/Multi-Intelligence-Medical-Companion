@@ -2,12 +2,12 @@
 
 > **最后体检日期**: 2026-07-22
 > **下次体检触发**: 累积 3 项 ✓ 后, 或用户反馈"开发太乱"时
-> **总项数**: 19 / 10 (上限突破, 见 #11-#19 附加)
+> **总项数**: 20 / 10 (上限突破, 见 #11-#20 附加)
 
 ## 进度总览
 
-- ✅ 已完成: 17 项 (#1, #2, #3, #4, #5, #6, #7, #9, #10, #11-#17, #19)
-- ❌ 待办: 2 项 (含 #18 中止)
+- ✅ 已完成: 18 项 (#1, #2, #3, #4, #5, #6, #7, #9, #10, #11-#17, #19, #20)
+- ❌ 待办: 2 项 (含 #18 中止, + #20 设计修复)
 
 ---
 
@@ -173,6 +173,20 @@
 - **修法**: hostapi.py 在 v2_file_router 之后加 `from A2AServer.v2.manifest_endpoints import router as v2_manifest_router; app.include_router(v2_manifest_router)`. rebuild hostapi + recreate 容器
 - **验证**: GET /v2/manifest -> 200 + {"domain_name":"pha_legacy","host_agent":"health_advisor",...}; GET /v2/manifest/list -> 200 + {"manifests":[]}
 - **优先级**: 高 (虽然不阻塞主功能, 但用户首次发现, 严重影响信任)
+
+### ✅ #20 Dashboard 整屏 NaN 0% 吓唬用户 (2026-07-22 修复)
+
+- **现象**: Dashboard "近 7 天健康趋势" 卡片整屏是 NaN/0%/0/100, 视觉非常糟, 用户第一眼陷入恐慌
+- **真因**: Dashboard.jsx 直接渲染 number, 没 NaN 检查. `buildHealthTrend()` 在历史无数据时返回 score=null. 老代码用 `||` 兜底 0, 结果全是 0; 用 `Math.round(null)` 是 NaN; 显示在 7 天柱图 + 综合分 + 4 个组件 (cov/comp/act/stab) + LinearProgress, 几乎全是空数据
+- **修法**: Dashboard.jsx 4 处都加 `Number.isFinite(v)` 检查:
+  - 有数: 显示数字 + 颜色
+  - 没数: 显示 "—" 占位符 + text.disabled 灰色 + 友好提示文案
+  - 7 天柱图: 灰色 + 高度 8% 占位
+  - 综合分: "—" / 100 + LinearProgress indeterminate (跳动进度)
+  - 健康评分顶部 chip: "记录中" 灰色 + "健康评分 — / 100"
+  - 总结 caption: "刚开始记录 — 7 天后才有趋势; 90 天后做置信度评估"
+    关键设计原则: **没数据用 "—" + 文案, 不用 0 + 红色**. 0 = 系统跑出 0 = "我看过你的数据, 你身体 0 分"; "—" = "我没看过, 别担心, 反正下次会补"
+- **优先级**: 高 (Dashboard 是 home, 用户第一眼看到, 严重影响 trust)
 
 ---
 
