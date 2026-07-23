@@ -30,6 +30,7 @@ import {
   Tabs,
   Tab,
   Collapse,
+  CircularProgress,
 } from "@mui/material";
 import {
   Add,
@@ -171,6 +172,27 @@ const HealthRecords = () => {
   useEffect(() => {
     fetchRecords();
   }, []);
+
+  // 阶段48-22 v3+: OCR 自动轮询 — 任意附件处于 pending/running 状态时,
+  // 每 5 秒自动刷新一次列表, 直到所有附件完成 (done/failed/skipped).
+  // 这样 user 不需要手动刷新也能看到结果.
+  useEffect(() => {
+    const hasPending = records.some((r) =>
+      (r.files || []).some(
+        (f) =>
+          f &&
+          typeof f === "object" &&
+          f.ocr_status &&
+          !["done", "failed", "skipped"].includes(f.ocr_status),
+      ),
+    );
+    if (!hasPending) return undefined;
+    const t = setInterval(() => {
+      fetchRecords();
+    }, 5000);
+    return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [records]);
 
   const fetchRecords = async () => {
     try {
@@ -419,7 +441,57 @@ const HealthRecords = () => {
       <Box sx={{ flexGrow: 1, bgcolor: "#f5f5f5", minHeight: "100vh" }}>
         <Header />
         <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }}>
-          {/* 页面标题和操作 */}
+          {/* 阶段48-22 v3+: OCR 后台处理提示 — 当任意附件状态不是 done/failed/skipped
+              时, 顶部加一条可见横幅, 并每 5 秒自动刷新一次列表.
+              user 不需要手动刷新页面, 也不用看着'白屏'不知道进度. */}
+          {records.some((r) =>
+            (r.files || []).some(
+              (f) =>
+                f &&
+                typeof f === "object" &&
+                f.ocr_status &&
+                !["done", "failed", "skipped"].includes(f.ocr_status),
+            ),
+          ) && (
+            <Box
+              data-testid="ocr-progress-banner"
+              sx={{
+                mb: 2,
+                p: 1.5,
+                borderRadius: 2,
+                bgcolor: "warning.light",
+                color: "warning.contrastText",
+                display: "flex",
+                alignItems: "center",
+                gap: 1.5,
+                animation: "ocrPulse 1.6s ease-in-out infinite",
+                "@keyframes ocrPulse": {
+                  "0%,100%": { opacity: 1 },
+                  "50%": { opacity: 0.55 },
+                },
+              }}
+            >
+              <CircularProgress size={18} sx={{ color: "inherit" }} />
+              <Typography variant="body2" sx={{ flex: 1 }}>
+                正在识别附件内容，完成后会自动显示 —
+                你可以继续其他操作，不必等在这里
+              </Typography>
+              <Typography variant="caption">
+                {
+                  records
+                    .flatMap((r) => r.files || [])
+                    .filter(
+                      (f) =>
+                        f &&
+                        typeof f === "object" &&
+                        f.ocr_status &&
+                        !["done", "failed", "skipped"].includes(f.ocr_status),
+                    ).length
+                }{" "}
+                个待处理
+              </Typography>
+            </Box>
+          )}
           <Box
             sx={{
               display: "flex",

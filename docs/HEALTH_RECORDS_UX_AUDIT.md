@@ -2,11 +2,11 @@
 
 > **最后体检日期**: 2026-07-22
 > **下次体检触发**: 累积 3 项 ✓ 后, 或用户反馈"开发太乱"时
-> **总项数**: 14 / 10 (上限突破, 见 #11 #12 #13 #14 附加)
+> **总项数**: 15 / 10 (上限突破, 见 #11 #12 #13 #14 #15 附加)
 
 ## 进度总览
 
-- ✅ 已完成: 6 项 (#1, #7, #11, #12, #13, #14)
+- ✅ 已完成: 7 项 (#1, #7, #11, #12, #13, #14, #15)
 - ❌ 待办: 8 项
 
 ---
@@ -130,6 +130,13 @@
 - **修法**: hostapi.py 在 v2_record_create_router 后, registry_router 前, 再加一段 `from A2AServer.v2.upload_pipeline import file_router as v2_file_router; app.include_router(v2_file_router)`. 现在 `/v2/files/<file_id>` GET 返回 200 + 内容 (curl 验过)
 - **优先级**: 高 (图片/附件不可见)
 - **附带 OCR 问题**: Qwen-VL 报告 "The image format is illegal" 只对真 PNG/JPG 触发. 如果你传的是合法图片, OCR 会被处理并入 `uploaded_files.ocr_text`. 前端轮询 `/v2/upload/files/<fid>/parsed?user_id=...`, 200 + `parsed` + `raw_text`(取前 5000 字). OCR 是异步, 几条后过, 直接刷新页面重试即可.
+
+### ❌ #15 OCR 处理中页面无反馈 (2026-07-22, UX)
+
+- **现象**: 上传文件提交后, OCR 要 5-15 秒. 这期间前端表单返回成功, 但页面"什么也没有", 用户不知道系统是在跑, 还是在卡. 健康档案页 (HealthRecords.jsx) 列表加载后, OCR 还没完成的附件连进度条都没有, user 必须在原地干等
+- **真因**: HealthRecords.jsx 老页面是阶段 28 的实现 — 顶层列表 fetch 完后即使用户看到附件 `ocr_status='pending'`, 也没有任何横幅/进度条. 后端 OCR 是异步 background task, 完成后 update 数据库. user 看不到状态变化, 必须手动刷新
+- **修法**: (1) 在 `<Header><Container>` 之间加一个 OCR 进度横幅. `records.some(r => r.files.some(f => f.ocr_status && !['done','failed','skipped'].includes(f.ocr_status)))` 时渲染: warning 色横幅 + CircularProgress spin + "X 个待处理" 计数 + 一句话文案 (1 行). (2) 加 `useEffect` 监听 records 变化, 任意 pending 时启动 5 秒 setInterval 调 fetchRecords, 全部 done/failed/skipped 时 clearInterval. (3) vite dev server 因长时间构建后死了, 重启 vite. 现在 OCR 跑时: 顶部横幅可见, 5 秒后自动刷新列表, user 不需要任何手动操作
+- **优先级**: 中 (UX, 不阻塞功能, 但体验差)
 
 ---
 
