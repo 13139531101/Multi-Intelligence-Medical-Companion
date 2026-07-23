@@ -27,12 +27,12 @@
  *  - 每类至少一份: 6 类 (examination/report/allergy/diagnosis/medication/visit)
  */
 export const RECORDS_TYPES = [
-  "examination",  // 体检
-  "report",       // 报告
-  "allergy",      // 过敏
-  "diagnosis",    // 诊断
-  "medication",   // 用药史
-  "visit",        // 就诊
+  "examination", // 体检
+  "report", // 报告
+  "allergy", // 过敏
+  "diagnosis", // 诊断
+  "medication", // 用药史
+  "visit", // 就诊
 ];
 
 export function computeCoverage(records = []) {
@@ -111,30 +111,52 @@ export function computeActivity(consultations = []) {
 export const SCORE_WEIGHTS = {
   compliance: 0.35,
   coverage: 0.25,
-  activity: 0.20,
-  stability: 0.20,
+  activity: 0.2,
+  stability: 0.2,
 };
 
-export function computeHealthScore({ records, reminders, consultations, historicalScores = [] }) {
+export function computeHealthScore({
+  records,
+  reminders,
+  consultations,
+  historicalScores = [],
+}) {
   const compliance = computeCompliance(reminders).today;
   const coverage = computeCoverage(records);
   const activity = computeActivity(consultations);
 
+  // 阶段48-22 v4+: 防御性 — historicalScores 可能含 NaN/null (来自 localStorage 旧数据).
+  //   过一道 Number.isFinite 过滤, 避免 mean/variance 算 NaN 把整个 score 拖到 NaN.
+  //   同时验证 historicalScores 是合法数组, 不是字符串 (上一轮 #22 用户 trace 发现 NaN 就是这么来的).
+  let safeHistorical = [];
+  if (Array.isArray(historicalScores)) {
+    safeHistorical = historicalScores
+      .filter((s) => {
+        const v = typeof s === "object" && s ? s.score : s;
+        return Number.isFinite(v);
+      })
+      .map((s) => (typeof s === "object" && s ? s.score : s))
+      .slice(-7);
+  }
+
   // 稳定性 = 当前分数和过去 7 天平均分对比
   // 如果无历史数据, 用今天一天代替
-  const past = historicalScores.slice(-7);
+  const past = safeHistorical;
+  let stability;
   if (past.length < 2) {
     // 无数据时稳定性 = 50 (中性)
-    var stability = 50;
+    stability = 50;
   } else {
     const mean = past.reduce((a, b) => a + b, 0) / past.length;
-    const variance = past.reduce((s, x) => s + (x - mean) ** 2, 0) / past.length;
+    const variance =
+      past.reduce((s, x) => s + (x - mean) ** 2, 0) / past.length;
     const std = Math.sqrt(variance) || 1;
     // 当前分数偏离越大 → 稳定性越差
     // 稳定性 = 100 / (1 + |current - mean| / std)
-    const current = (compliance * SCORE_WEIGHTS.compliance) +
-      (coverage * SCORE_WEIGHTS.coverage) +
-      (activity * SCORE_WEIGHTS.activity);
+    const current =
+      compliance * SCORE_WEIGHTS.compliance +
+      coverage * SCORE_WEIGHTS.coverage +
+      activity * SCORE_WEIGHTS.activity;
     stability = Math.round(100 / (1 + Math.abs(current - mean) / std));
   }
 
@@ -144,8 +166,10 @@ export function computeHealthScore({ records, reminders, consultations, historic
     activity * SCORE_WEIGHTS.activity +
     stability * SCORE_WEIGHTS.stability;
 
+  // 阶段48-22 v4+: 防御 — raw 可能是 NaN (上一步 components 任一非 finite), 兜底成 0
+  const safeRaw = Number.isFinite(raw) ? raw : 0;
   return {
-    score: Math.round(Math.max(0, Math.min(100, raw))),
+    score: Math.round(Math.max(0, Math.min(100, safeRaw))),
     components: { compliance, coverage, activity, stability },
     weights: SCORE_WEIGHTS,
   };
@@ -166,7 +190,11 @@ export function computeHealthScore({ records, reminders, consultations, historic
 export function linearRegression(values) {
   const n = values.length;
   if (n < 2) return { slope: 0, r: 0, n };
-  let sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0, sumY2 = 0;
+  let sumX = 0,
+    sumY = 0,
+    sumXY = 0,
+    sumX2 = 0,
+    sumY2 = 0;
   for (let i = 0; i < n; i++) {
     sumX += i;
     sumY += values[i];
@@ -174,11 +202,13 @@ export function linearRegression(values) {
     sumX2 += i * i;
     sumY2 += values[i] * values[i];
   }
-  const denom = (n * sumX2 - sumX * sumX);
+  const denom = n * sumX2 - sumX * sumX;
   const slope = denom !== 0 ? (n * sumXY - sumX * sumY) / denom : 0;
   // Pearson
-  const numerR = (n * sumXY - sumX * sumY);
-  const denomR = Math.sqrt((n * sumX2 - sumX * sumX) * (n * sumY2 - sumY * sumY));
+  const numerR = n * sumXY - sumX * sumY;
+  const denomR = Math.sqrt(
+    (n * sumX2 - sumX * sumX) * (n * sumY2 - sumY * sumY),
+  );
   const r = denomR !== 0 ? numerR / denomR : 0;
   return { slope, r, n };
 }
@@ -210,7 +240,8 @@ export function slopeLabel(slope) {
  *   pApprox: 用 t 值的近似 (我们的 n 通常 7, 不严格计算 p)
  */
 export function welchTTest(arr1, arr2) {
-  const n1 = arr1.length, n2 = arr2.length;
+  const n1 = arr1.length,
+    n2 = arr2.length;
   if (n1 < 2 || n2 < 2) return { t: 0, significant: false };
   const m1 = arr1.reduce((a, b) => a + b, 0) / n1;
   const m2 = arr2.reduce((a, b) => a + b, 0) / n2;
@@ -260,31 +291,60 @@ export function buildHealthTrend({ records, reminders, consultations }) {
   } catch (e) {
     history = [];
   }
+  // 阶段48-22 v4+: 防御 — 旧 localStorage 可能含 {date, score: NaN} 或 {score: null}
+  // 把这些条全过滤掉, 只留下历史上确实是 finite 数字的分数
+  if (Array.isArray(history)) {
+    history = history.filter(
+      (h) =>
+        h &&
+        typeof h === "object" &&
+        Number.isFinite(h.score) &&
+        typeof h.date === "string",
+    );
+  } else {
+    history = [];
+  }
 
   // 计算今日分数并 push 进 history
   const today_str = today.toISOString().slice(0, 10);
-  const todayScore = computeHealthScore({ records, reminders, consultations, historicalScores: history });
+  const todayScore = computeHealthScore({
+    records,
+    reminders,
+    consultations,
+    historicalScores: history,
+  });
   // 去重同日
   history = history.filter((h) => h.date !== today_str);
-  history.push({ date: today_str, score: todayScore.score });
+  // 阶段48-22 v4+: 只在 todayScore.score 是 finite 时 push, 避免污染历史
+  if (Number.isFinite(todayScore.score)) {
+    history.push({ date: today_str, score: todayScore.score });
+  }
   // 保留 30 天
   if (history.length > 30) history = history.slice(-30);
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(history));
-  } catch (e) { /* quota exceeded — ignore */ }
+  } catch (e) {
+    /* quota exceeded — ignore */
+  }
 
   // 把 days 数组合并
   const dayList = days.map((d) => {
     const hit = history.find((h) => h.date === d.date);
     return {
       ...d,
-      score: hit ? hit.score : null, // null = 没数据
+      // 阶段48-22 v4+: 真没数据用 null (前端有判断显示"—"), 有数据但非 finite 也归 null 别污染
+      score: hit && Number.isFinite(hit.score) ? hit.score : null,
     };
   });
 
   // 用最近 14 天历史分数做回归, 没有则用今天的合规性代理
-  const recentScores = dayList.map((d) => d.score).filter((s) => s != null);
-  const slopeResult = linearRegression(recentScores.length >= 2 ? recentScores : [todayScore.score]);
+  // 阶段48-22 v4+: filter isFinite 而不是 != null, 确保 historicalScores 没有 NaN 污染回归
+  const recentScores = dayList
+    .map((d) => d.score)
+    .filter((s) => Number.isFinite(s));
+  const slopeResult = linearRegression(
+    recentScores.length >= 2 ? recentScores : [todayScore.score],
+  );
   const label = slopeLabel(slopeResult.slope);
 
   // Welch's t-test: 后 3 天 vs 前 4 天
@@ -331,7 +391,8 @@ export function fillTrendGaps(days, todayScore) {
   }
   // 简单: 用首尾线性插值
   const first = scores.findIndex((s) => s != null);
-  const last = scores.length - 1 - [...scores].reverse().findIndex((s) => s != null);
+  const last =
+    scores.length - 1 - [...scores].reverse().findIndex((s) => s != null);
   if (first === last) return days.map(() => todayScore.score);
 
   for (let i = 0; i < scores.length; i++) {

@@ -2,11 +2,11 @@
 
 > **最后体检日期**: 2026-07-22
 > **下次体检触发**: 累积 3 项 ✓ 后, 或用户反馈"开发太乱"时
-> **总项数**: 22 / 10 (上限突破, 见 #11-#22 附加)
+> **总项数**: 23 / 10 (上限突破, 见 #11-#23 附加)
 
 ## 进度总览
 
-- ✅ 已完成: 20 项 (#1, #2, #3, #4, #5, #6, #7, #9, #10, #11-#17, #19, #20, #21, #22)
+- ✅ 已完成: 21 项 (#1, #2, #3, #4, #5, #6, #7, #9, #10, #11-#17, #19, #20, #21, #22, #23)
 - ❌ 待办: 2 项 (含 #18 中止)
 
 ---
@@ -208,6 +208,21 @@
   - 跑 mock 算法: cov=20%, comp=0%, activity=?, score=15 左右
 - **下一步**: 用户刷新 Dashboard, 打开 console (F12), 应该看到 `[Dashboard] computed: { recCount: 17, medCount: 8, medTaken: 0, score: 15, components: ... }`. 如果没看到就是 fetchAll 没跑到那行 (API 失败/未登录)
 - **优先级**: 高 (没调试手段 = 没法定位前端 bug)
+
+### ✅ #23 historicalScores NaN 污染 score (2026-07-22 修复)
+
+- **现象**: 用户按 F12 看 console 反馈: `score: NaN, components: { compliance: 0, coverage: 0, activity: 14, stability: NaN }`. 数据全 OK (recCount=17, medCount=8). 老的 try/catch 兜底 score=0 触发不了, 因为 setStats(todayScore.score) 那行的 score 是 NaN
+- **真因**: healthMetrics.js 多处没防御 NaN:
+  - `computeHealthScore` 直接用 `historicalScores.slice(-7)`, 旧 localStorage 数据含 {score: NaN} 项时 mean=NaN, 稳定性=NaN
+  - `Math.round(Math.min(100, NaN))` 返回 NaN 而非 0 (JS Math.round 对 NaN 不 fallback)
+  - `buildHealthTrend` 把 todayScore.score (NaN) push 回 history, 自我污染
+  - `recentScores.filter(s => s != null)` 过滤不掉 NaN (NaN != null 是 true)
+- **修法**: healthMetrics.js 3 处加 Number.isFinite 防御:
+  (1) `computeHealthScore` 安全过滤 historicalScores 进 safeHistorical, 只允许 finite
+  (2) `computeHealthScore` 最终 raw 兜底 `Number.isFinite(raw) ? raw : 0`
+  (3) `buildHealthTrend` 历史加载过滤 + 不 push NaN score + dayList.score 用 isFinite + recentScores filter 用 isFinite
+- **副作用**: 用户的 localStorage 历史已经污染 (含 NaN 项), 我们的 filter 会自动清掉, 但之前的 stale history 会让 "近 7 天" 柱图历史数据全清空, 当作新用户
+- **优先级**: 高 (核心算法, 健康评分彻底不能用)
 
 ---
 

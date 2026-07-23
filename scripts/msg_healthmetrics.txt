@@ -1,0 +1,41 @@
+fix(stage48-22 v20): healthMetrics.js — historicalScores NaN 污染 score (#23)
+
+背景: 用户反馈 "为什么没有评分". Console 显示
+     score: NaN, components: { compliance: 0, coverage: 0, activity: 14, stability: NaN }
+     recCount=17, medCount=8 数据齐全
+
+诊断:
+  healthMetrics.js computeHealthScore:
+    - historicalScores 从 localStorage 读 (旧 pha_health_history_v1)
+    - 旧数据可能含 {date, score: NaN} 或 {score: null} (新版本跑出过 NaN 然后写到 localStorage)
+    - past = historicalScores.slice(-7), 若含 NaN 项, mean = NaN
+    - stability = 100 / (1 + |current - NaN| / 1) = NaN
+    - raw = ... + NaN * 0.20 = NaN
+    - Math.round(Math.min(100, NaN)) = NaN (Math.round 对 NaN 不会 fallback 0)
+
+  buildHealthTrend 同样问题:
+    - 把 todayScore.score (NaN) push 进 history, 污染
+    - dayList.score 可能是 NaN, recentScores.filter(s != null) 过滤不掉 NaN (NaN != null 是 true)
+
+修法 (1 commit):
+  healthMetrics.js 3 处防御:
+    (1) computeHealthScore: 用 safeHistorical = historicalScores
+         .filter(s => Number.isFinite(s.score ?? s))
+         .map(...) 后再算 past. NaN/null 历史项不进回归.
+    (2) computeHealthScore: 最终 score = Math.round(Math.min(100,
+         Number.isFinite(raw) ? raw : 0)) 兜底.
+    (3) buildHealthTrend:
+         - 加载 history 时过滤掉 {score: NaN/null/非 string date} 项
+         - 只在 todayScore.score 是 finite 时 push 进 history (避免污染)
+         - dayList.score = hit && Number.isFinite(hit.score) ? hit.score : null
+         - recentScores filter 用 Number.isFinite
+
+验证路径 (用户刷新后):
+  - console 应看到 score 是 finite 数字 (~15-30), 不是 NaN
+  - 健康评分 chip 显示数字, 不是 "—"
+  - 7 天柱图至少今天(7/23) 应该有红色数字
+  - "稳定性: —" 因为历史只有今天
+
+体检表更新: 加 #23 项, 标记 ✅.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
