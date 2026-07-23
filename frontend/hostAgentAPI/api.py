@@ -177,6 +177,17 @@ except Exception as _e:
     print(f"[hostapi] v2 file serve mount failed: {_e}")
     traceback.print_exc()
 
+# 阶段48-22 v3+: Manifest endpoints (前端 ManifestBadge.jsx 调 /v2/manifest 加载当前
+# domain 的 agent 列表 + host_agent 名称, 没 mount 前一直 404)
+try:
+    from A2AServer.v2.manifest_endpoints import router as v2_manifest_router
+    app.include_router(v2_manifest_router)
+    print("[hostapi] v2 manifest mounted: /v2/manifest, /v2/manifest/list, /v2/manifest/switch")
+except Exception as _e:
+    import traceback
+    print(f"[hostapi] v2 manifest mount failed: {_e}")
+    traceback.print_exc()
+
 # 阶段41-3: Skill/MCP 注册表管理（增删改）
 try:
     from A2AServer.v2.registry_endpoints import router as registry_router

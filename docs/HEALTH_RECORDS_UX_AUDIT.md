@@ -2,12 +2,12 @@
 
 > **最后体检日期**: 2026-07-22
 > **下次体检触发**: 累积 3 项 ✓ 后, 或用户反馈"开发太乱"时
-> **总项数**: 18 / 10 (上限突破, 见 #11-#18 附加)
+> **总项数**: 19 / 10 (上限突破, 见 #11-#19 附加)
 
 ## 进度总览
 
-- ✅ 已完成: 16 项 (#1, #2, #3, #4, #5, #6, #7, #9, #10, #11-#17)
-- ❌ 待办: 2 项 (含 #18 中止, #8 跳过)
+- ✅ 已完成: 17 项 (#1, #2, #3, #4, #5, #6, #7, #9, #10, #11-#17, #19)
+- ❌ 待办: 2 项 (含 #18 中止)
 
 ---
 
@@ -165,6 +165,14 @@
 - **修法**: banner 改 `position: fixed, top: 80, left: 50%, transform: translateX(-50%), zIndex: 1400, width: { xs: '94%', sm: '70%', md: '50%' }, maxWidth: 720, boxShadow: 3`. 不依赖流式容器, 直接悬浮在页面顶部 80px 处 (header 下面), 高于 dialog, 用户操作 dialog 时也能看到
 - **结果**: 用户再次说'还是看不到'. 这条就此搁置, 不再投入时间. 也许 dialog 之外的什么遮住了, 也许是 React render 时机问题, 也许浏览器缓存. **保留代码作为防御性 UX, 但 mark ❌ 不再尝试**
 - **优先级**: 中止 (用户表态"先算了吧")
+
+### ✅ #19 健康咨询页 manifest load failed (2026-07-22 修复)
+
+- **现象**: 打开 /v2/health-consultation (健康咨询) 页面, 右上角有红条 "Error: manifest load failed: 404"
+- **真因**: ManifestBadge.jsx mount 时 fetch `/v2/manifest`. backend `A2AServer/v2/manifest_endpoints.py` 里有 router prefix='/v2/manifest', 但 hostapi 没 mount (跟 #12 #13 #14 同病 — 阶段 28 漏写, 这个 Error 不阻塞主对话流, 一直没人注意)
+- **修法**: hostapi.py 在 v2_file_router 之后加 `from A2AServer.v2.manifest_endpoints import router as v2_manifest_router; app.include_router(v2_manifest_router)`. rebuild hostapi + recreate 容器
+- **验证**: GET /v2/manifest -> 200 + {"domain_name":"pha_legacy","host_agent":"health_advisor",...}; GET /v2/manifest/list -> 200 + {"manifests":[]}
+- **优先级**: 高 (虽然不阻塞主功能, 但用户首次发现, 严重影响信任)
 
 ---
 

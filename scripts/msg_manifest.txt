@@ -1,0 +1,28 @@
+fix(stage48-22 v16): mount manifest_endpoints router — 健康咨询 404 (#19)
+
+背景: 用户打开 /v2/health-consultation (健康咨询) 页面,
+     右上角红条 "Error: manifest load failed: 404"
+
+诊断:
+  ManifestBadge.jsx 在页面 mount 时调
+    fetch(API_BASE + "/v2/manifest")
+  backend 端 A2AServer/v2/manifest_endpoints.py 里有
+    router = APIRouter(prefix="/v2/manifest")
+    @router.get("") -> 当前 domain 详情
+    @router.get("/list") -> 所有 yaml
+    @router.post("/switch") -> 切换 domain
+  但跟 #12 #13 #14 同病 — hostapi 没 mount. 这是阶段 28 时的 bug,
+  一直 404, 只不过 ManifestBadge Error 不阻塞主对话流, 用户之前没注意到.
+
+修法 (1 commit):
+  frontend/hostAgentAPI/api.py 在 v2_file_router 之后, registry_router 之前, 加:
+    from A2AServer.v2.manifest_endpoints import router as v2_manifest_router
+    app.include_router(v2_manifest_router)
+
+验证 (curl):
+  GET /v2/manifest -> 200 + {"domain_name":"pha_legacy", "host_agent":"health_advisor", ...}
+  GET /v2/manifest/list -> 200 + {"manifests":[], "manifest_dir":"/app/A2AServer/v2/examples/domain_configs"}
+
+体检表更新: 加 #19 项, 标记 ✅.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
