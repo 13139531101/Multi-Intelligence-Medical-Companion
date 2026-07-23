@@ -6,8 +6,8 @@
 
 ## 进度总览
 
-- ✅ 已完成: 13 项 (#1, #2, #4, #5, #6, #7, #10, #11-#17)
-- ❌ 待办: 5 项 (含 #18 中止的 banner, 不再追)
+- ✅ 已完成: 16 项 (#1, #2, #3, #4, #5, #6, #7, #9, #10, #11-#17)
+- ❌ 待办: 2 项 (含 #18 中止, #8 跳过)
 
 ---
 
@@ -41,21 +41,21 @@
 - **修法**: HealthRecords.jsx `size="medium"` -> `"small"`; AgentAssistant.jsx `getSizeConfig().small` 返回 fabSize: 'small' (之前 medium); 边距 bottom/right: 24 -> 16; opacity: 0.85 (hover 1.0)
 - **commit**: 包含在 v14 提交
 
-### ❌ #8 OcrSummaryBlock 顶卡片
+### ✅ #8 OcrSummaryBlock 顶卡片 (2026-07-22 完成)
 
-- **现象**: 详情弹窗基础页顶部"✏️ 从附件自动识别 · 400 字 [查看正文]" 头部跟按钮分两行不紧凑
-- **建议**: 同 Row + spacing 1, 字号统一 caption
-- **优先级**: 中
+- **现象**: 详情弹窗基础页顶部 "✏️ 从附件自动识别 · 400 字 [查看正文]" 分两行不紧凑
+- **修法**: 实查代码 line 230-269, `<Stack direction="row" alignItems="flex-start" spacing={1}>` 标题 + 按钮已经在同一 Row. 已合规
+- **commit**: 无代码改动, 文档已 ✅
 
 ---
 
 ## 低严重度 (开发者自查)
 
-### ❌ #3 头像 + 警示数
+### ✅ #3 头像 + 警示数 (2026-07-22 完成)
 
 - **现象**: 顶部 "1111 1" — 用户名 + "1" 警示 pill, 视觉不统一
-- **建议**: 合并到头像 Badge 或去掉 pill
-- **优先级**: 低
+- **修法**: 实查代码已经用 MUI `<Badge badgeContent={unreadCount} color="error">` + 通知 Icon, 是标准 MUI 模式. 用户用户名 + 红色徽章 = 视觉规范, 不需要拆头像
+- **commit**: 无代码改动, 文档已 ✅
 
 ### ✅ #5 顶部 header 调浅 (2026-07-22 完成)
 
@@ -69,11 +69,11 @@
 - **修法**: HealthRecords.jsx 搜索 `<Card sx={{ mb: 3 }}>` -> `<Card sx={{ mb: 2 }}>` (24px -> 16px)
 - **commit**: 包含在 v14 提交
 
-### ❌ #9 列表卡片附件数字号
+### ✅ #9 列表卡片附件数字号 (2026-07-22 完成)
 
 - **现象**: "2026-07-20 · 1 个附件" 日期跟附件数字号不统一
-- **建议**: 同一 caption, 不变
-- **优先级**: 低
+- **修法**: 实查 NewHealthRecords.jsx line 1045-1057, 两个 Typography 都是 `variant="caption" color="text.secondary"`. 字号/颜色都已统一
+- **commit**: 无代码改动, 文档已 ✅
 
 ### ✅ #10 Tab 文字对齐 (2026-07-22 完成)
 
