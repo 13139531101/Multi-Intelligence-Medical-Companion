@@ -26,6 +26,7 @@ import TestChat from "./pages/TestChat";
 import NewChat from "./pages/NewChat";
 import NewHealthRecords from "./pages/NewHealthRecords";
 import NewMedication from "./pages/NewMedication";
+import TodayDashboard from "./pages/TodayDashboard";
 
 // 组件
 import ProtectedRoute from "./components/ProtectedRoute";
@@ -106,6 +107,14 @@ function App() {
               }
             />
             <Route
+              path="/v2/today"
+              element={
+                <ProtectedRoute>
+                  <TodayDashboard />
+                </ProtectedRoute>
+              }
+            />
+            <Route
               path="/v2/chat"
               element={
                 <ProtectedRoute>
@@ -142,11 +151,11 @@ function App() {
             <Route path="/settings" element={<Settings />} />
             <Route path="/tasks" element={<TasksPage />} />
 
-            {/* 默认重定向到仪表板 */}
-            <Route path="/" element={<Navigate to="/v2/dashboard" replace />} />
+            {/* 默认重定向到今天 */}
+            <Route path="/" element={<Navigate to="/v2/today" replace />} />
 
             {/* 404页面 */}
-            <Route path="*" element={<Navigate to="/v2/dashboard" replace />} />
+            <Route path="*" element={<Navigate to="/v2/today" replace />} />
           </Routes>
 
           {/* 全局通知组件 */}
