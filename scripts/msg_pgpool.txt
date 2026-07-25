@@ -1,0 +1,30 @@
+fix(stage48-25): v2_runtime 用 AsyncConnectionPool 修 Postgres 长连断开 (#26)
+
+背景: 用户方向 — AI 深度融合 (PRODUCT_AI_FUSION.md)
+     验证时发现 /v2/chat/stream 永远只 emit routing+done, agent 不跑,
+     docker logs 显示 psycopg.OperationalError: the connection is closed
+
+诊断:
+  v2_runtime.py 用 AsyncPostgresSaver.from_conn_string(db_url) 单连接.
+  LangGraph checkpoint 在长 stream 中 (每次 LLM 调 tool/读取) 都复用同一连接.
+  PG server / docker 网络的 idle timeout (默认 1-5 分钟) 关掉连接, 但 client
+  不知道, 下次查询直接发 → OperationalError.
+  这是 LangGraph + Postgres 经典问题, 官方推荐用 ConnectionPool + max_idle.
+
+修法 (1 commit):
+  backend/A2AServer/src/A2AServer/v2/v2_runtime.py:
+    - import AsyncConnectionPool + dict_row (lazy, try/except ImportError)
+    - AsyncConnectionPool(min=2, max=10, max_idle=300.0, kwargs={"autocommit":True, "row_factory":dict_row}, open=False)
+    - pool.open() 后传给 AsyncPostgresSaver(pool), 调用 setup()
+    - 把 pool 挂 saver._pool 防止 GC
+    - 加 close() 方法, app 关闭时关 pool
+    - 保留回退: pool 不可用/初始化失败 → 单连接 (老路径)
+
+验证 (docker logs a2aserver-hostapi-1):
+  ✅ [v2_runtime] Checkpointer = AsyncPostgresSaver + ConnectionPool (min=2, max=10, max_idle=300)
+  ✅ health_records agent created (singleton): model=deepseek-chat, tools=9, middlewares=14
+  ✅ Postgres 连接不再 OperationalError
+  ⚠️ 新发现: DeepSeek API 现在只接 deepseek-v4-pro / deepseek-v4-flash, 老 deepseek-chat 失败
+    (不是本 PR 范围, 下一 PR 修)
+
+Co-Authored-By: Claude <noreply@anthropic.com>

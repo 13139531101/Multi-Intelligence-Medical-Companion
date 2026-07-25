@@ -134,24 +134,63 @@ class V2AgentRuntime:
         db_url = os.getenv("PHA_CHECKPOINT_DB_URL") or os.getenv("DATABASE_URL")
         if db_url and AsyncPostgresSaver is not None:
             try:
-                # 生产：PostgresSaver（langgraph-checkpoint-postgres 2.x API）
-                # 2.x 的 from_conn_string 返回 AsyncContextManager，需 async with
+                # 阶段48-25 fix: 用 AsyncConnectionPool + max_idle=300 防止 long-lived
+                # 单连接被 PG server idle timeout 关掉 (psycopg.OperationalError).
+                # 这是 LangChain 官方推荐做法 (langgraph-checkpoint-postgres).
+                # 单连接 (from_conn_string) 不带 pool, 长 stream 容易 OperationalError.
                 try:
-                    # 尝试 2.x API（async context manager）
+                    from psycopg.rows import dict_row
+                    from psycopg_pool import AsyncConnectionPool
+                except ImportError as _pool_err:
+                    logger.warning(f"[v2_runtime] psycopg_pool 不可用, 降级单连接: {_pool_err}")
+                    AsyncConnectionPool = None
+
+                if AsyncConnectionPool is not None:
+                    try:
+                        pool = AsyncConnectionPool(
+                            conninfo=db_url,
+                            min_size=2,
+                            max_size=10,
+                            max_idle=300.0,  # 5 分钟 idle 关掉, 防 stale
+                            kwargs={"autocommit": True, "row_factory": dict_row},
+                            open=False,
+                        )
+                        await pool.open()
+                        # 2.x API 用 pool 直接构造, 不是 from_conn_string
+                        try:
+                            self._checkpointer = AsyncPostgresSaver(pool)
+                            await self._checkpointer.setup()
+                            # 把 pool 挂到 saver 防止被 GC
+                            self._checkpointer._pool = pool
+                            logger.info(
+                                "[v2_runtime] Checkpointer = AsyncPostgresSaver + ConnectionPool "
+                                "(min=2, max=10, max_idle=300)"
+                            )
+                            return self._checkpointer
+                        except Exception as _pool_saver_err:
+                            logger.warning(f"[v2_runtime] 2.x saver-from-pool 失败, 回退单连接: {_pool_saver_err}")
+                            await pool.close()
+                            raise
+                    except Exception as _pool_init_err:
+                        logger.warning(
+                            f"[v2_runtime] ConnectionPool 初始化失败, 回退单连接: {_pool_init_err}"
+                        )
+
+                # 回退: 单连接 (老代码, 会触发 idle OperationalError)
+                try:
                     cm = AsyncPostgresSaver.from_conn_string(db_url)
                     saver = await cm.__aenter__()
                     try:
                         await saver.setup()
                     except Exception:
-                        pass  # setup 可能已被调过
+                        pass
                     self._checkpointer = saver
-                    logger.info("[v2_runtime] Checkpointer = AsyncPostgresSaver (langgraph-checkpoint-postgres 2.x)")
+                    logger.info("[v2_runtime] Checkpointer = AsyncPostgresSaver 单连接 (2.x)")
                     return self._checkpointer
                 except Exception:
-                    # 回退 1.x API
                     self._checkpointer = AsyncPostgresSaver.from_conn_string(db_url)
                     await self._checkpointer.setup()
-                    logger.info("[v2_runtime] Checkpointer = AsyncPostgresSaver (1.x)")
+                    logger.info("[v2_runtime] Checkpointer = AsyncPostgresSaver 单连接 (1.x)")
                     return self._checkpointer
             except Exception as e:
                 logger.warning(
@@ -161,6 +200,16 @@ class V2AgentRuntime:
         self._checkpointer = InMemorySaver()
         logger.info("[v2_runtime] Checkpointer = InMemorySaver (开发模式)")
         return self._checkpointer
+
+    async def close(self):
+        """关闭 runtime (含 pool) — 应用退出时调用"""
+        if self._checkpointer is not None and hasattr(self._checkpointer, "_pool"):
+            try:
+                await self._checkpointer._pool.close()
+                logger.info("[v2_runtime] ConnectionPool closed")
+            except Exception as e:
+                logger.warning(f"[v2_runtime] pool close failed: {e}")
+        self._checkpointer = None
 
     def get_middlewares(self, model: str, chat_model=None, agent_name: str = "default"):
         """获取标准 Middleware 列表（医疗场景）.
