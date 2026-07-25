@@ -1,0 +1,29 @@
+fix(stage48-22 v22): NewMedication.jsx fetchWeek/fetchHistory 覆盖真实 API (#25)
+
+背景: #24 修了 field 归一化后, 用户刷新用药管理页, "本周服药率" 和 "历史服药记录"
+     两个 tab 应该能看到自己真实数据, 但用户过去看到的永远是 mock
+     (60-95 随机 / 14 天 mock 列表)
+
+诊断:
+  fetchWeek (line 293) 和 fetchHistory (line 318) 老代码:
+    1. await getMedicationsHistory({days: 7}).catch(() => null)
+    2. if (Array.isArray(data)) setWeekData(data)   <- 设真实
+    3. // ... 紧跟着
+    4. setWeekData(days)                            <- mock 覆盖真实
+  第四行永远跑 (mock 计算), 所以真实 API 返回的 history 永远被扔掉,
+  用户看到的是 Math.random 的 60-95%, 不是自己真实服药率.
+
+修法 (1 commit):
+  fetchWeek 和 fetchHistory 都改 "early return" 模式:
+    let realData = null;
+    try { const data = await getMedicationsHistory({days}).catch(() => null);
+          if (Array.isArray(data) && data.length > 0) realData = data; }
+    catch {}
+    if (realData) { setWeekData(realData); return; }
+    // mock fallback only runs if realData is null
+    ...
+    setWeekData(days)
+
+体检表更新: 加 #25 项, 标记 ✅.
+
+Co-Authored-By: Claude <noreply@anthropic.com>

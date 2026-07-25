@@ -291,13 +291,20 @@ export default function NewMedication() {
   };
 
   const fetchWeek = async () => {
+    // 阶段48-22 v4+: 优先用真实 API; 真没数据才 mock. 老代码是覆盖 mock,
+    // 真实 history 全被扔掉, 用户看到永远 60-95 的随机数, 不是自己数据.
+    let realData = null;
     try {
       const data = await getMedicationsHistory({ days: 7 }).catch(() => null);
-      if (Array.isArray(data)) setWeekData(data);
+      if (Array.isArray(data) && data.length > 0) realData = data;
     } catch {
       /* ignore */
     }
-    // 用真实 stats 给一个合理的本周分布
+    if (realData) {
+      setWeekData(realData);
+      return;
+    }
+    // mock — 用真实 stats 给一个合理的本周分布
     const today = new Date();
     const days = [];
     for (let i = 6; i >= 0; i--) {
@@ -316,13 +323,19 @@ export default function NewMedication() {
   };
 
   const fetchHistory = async () => {
+    // 阶段48-22 v4+: 同 fetchWeek — 优先真实 API, 没数据才 mock.
+    let realData = null;
     try {
       const data = await getMedicationsHistory({ days: 30 }).catch(() => []);
-      if (Array.isArray(data)) setHistoryData(data);
+      if (Array.isArray(data) && data.length > 0) realData = data;
     } catch {
       /* ignore */
     }
-    // fallback
+    if (realData) {
+      setHistoryData(realData);
+      return;
+    }
+    // fallback mock
     const today = new Date();
     const items = [];
     for (let i = 0; i < 14; i++) {
