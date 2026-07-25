@@ -1,0 +1,39 @@
+feat(stage48-25 v3): CopilotKit 集成 + Python runtime (AG-UI 协议)
+
+背景: 用户方向 — AI 深度融合 (PRODUCT_AI_FUSION.md)
+     框架选择: CopilotKit (AG-UI 标准协议, CopilotKit 团队, 2026 行业标准).
+     方案 B: CopilotKit + 薄 Python runtime (不引入 Node.js 服务).
+
+实现 (1 commit):
+  后端 (frontend/hostAgentAPI/):
+    - 新文件 copilotkit_runtime.py (~140 行): 适配 AG-UI 协议 ↔ /v2/chat/stream
+      - 接收 CopilotKit RunAgentInput (messages[], thread_id, run_id)
+      - 调 /v2/chat/stream 内部走我们 Python agent
+      - 把我们 SSE event (routing/chunk/tool_call/tool_result/done) 翻译成 AG-UI:
+        RUN_STARTED / TEXT_MESSAGE_START / TEXT_MESSAGE_CONTENT / TEXT_MESSAGE_END
+        TOOL_CALL_START / TOOL_CALL_ARGS / TOOL_CALL_END / TOOL_CALL_RESULT
+        RUN_FINISHED / RUN_ERROR
+      - SSE parser 用 state machine 处理 event/data 双行 + 多行 data
+      - async generator + queue 避免 httpx stream 上下文问题
+    - api.py 加 mount: app.add_api_route("/api/copilotkit", copilotkit_endpoint)
+
+  前端 (frontend/multiagent_front/):
+    - 装包: npm install @copilotkit/react-core @copilotkit/react-ui (373 packages)
+    - App.jsx 加 <CopilotKit runtimeUrl="/api/copilotkit"> 包裹整个 app
+      + <CopilotPopup labels={{title: "健康小助手", initial: "..."}} />
+    - vite.config.js: proxy /api /v2 /auth /health → http://localhost:13002
+    - optimizeDeps.exclude: ["@a2ui/web_core"] (旧 esbuild 不支持 ES2025 import attr)
+
+  验证 (scripts/test_via_vite_proxy.py):
+    POST /api/copilotkit (经 vite proxy → hostapi → copilotkit_runtime → /v2/chat/stream)
+    -> status 200, content-type text/event-stream
+    -> 36 行 AG-UI 事件: RUN_STARTED, TOOL_CALL_START/ARGS/END/RESULT (3 个工具:
+       write_todos, MemoryIntegrationTool_get_health_history, search_symptom_info),
+       RUN_FINISHED
+    -> 端到端: vite proxy + Python runtime + AG-UI 翻译 + Python agent + DeepSeek 全通
+
+下一步 (Phase 6): 用户在任意页面打开 CopilotPopup, 直接发消息.
+Phase 7: 前端 register generative UI 组件 (例如 HealthRecordList), agent 调工具时
+         顺手触发组件渲染 → AI 操作 UI.
+
+Co-Authored-By: Claude <noreply@anthropic.com>

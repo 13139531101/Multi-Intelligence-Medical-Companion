@@ -64,6 +64,14 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 app = FastAPI()
 
+# 阶段48-25: CopilotKit runtime — 适配 AG-UI ↔ /v2/chat/stream
+try:
+    from copilotkit_runtime import copilotkit_endpoint
+    app.add_api_route("/api/copilotkit", copilotkit_endpoint, methods=["POST"])
+    logging.info("[CopilotKit] runtime mounted at /api/copilotkit")
+except Exception as _ck_err:
+    logging.warning(f"[CopilotKit] runtime not loaded: {_ck_err}")
+
 # 阶段14：集成 v2 监控端点（/health /health/deep /metrics /v2/status 等）
 try:
     sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "backend", "A2AServer", "src")))
