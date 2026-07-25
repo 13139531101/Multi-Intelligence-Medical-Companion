@@ -1,0 +1,40 @@
+fix(stage48-25 v2): DeepSeek 模型名 deepseek-chat 已下架, 改 deepseek-v4-flash (#27)
+
+背景: Phase 1 修 Postgres 后, agent 加载成功 (tools=9, middlewares=14),
+     但调 LLM 时 deepseek API 报:
+       "The supported API model names are deepseek-v4-pro or deepseek-v4-flash,
+        but you passed deepseek-chat"
+     DeepSeek 升级了 API, 老 deepseek-chat 已被新模型取代.
+
+诊断 (实测):
+  docker exec a2aserver-hostapi-1 curl ... api.deepseek.com/.../chat/completions
+  -> {"error": ... invalid_request_error ... model=deepseek-chat}
+  -> 直接确认是模型名问题, 不是网络/key 问题
+
+修法 (1 commit, 走环境变量):
+  docker-compose.yml 6 个 service 加 DEEPSEEK_MODEL + LLM_MODEL (默认 deepseek-v4-flash):
+    - hostapi (PHA_LLM_MODEL, DEEPSEEK_MODEL, PHA_SUMMARIZE_MODEL)
+    - health_advisor
+    - medication_reminder
+    - visit_summary
+    - health_records
+    - admin_backend
+
+  不改硬编码 default (multi_model.py 等), 因为 env 优先, 只追加 v4-flash default.
+  其他 .py 文件里的 "deepseek-chat" 留着 (被 LLM_MODEL env 覆盖, 不影响).
+
+验证 (chat_stream3.py 测试):
+  POST /v2/chat/stream message="你好, 我最近血压高"
+  -> event: routing agent=health_advisor
+  -> event: tool_call search_symptom_info / analyze_health_concern / get_disease_info
+  -> event: tool_result 真实 JSON 数据
+  -> event: chunk 中文流式输出 (完整回答高血压怎么管理)
+
+  ✅ AI 完全活过来: 路由→工具调用→工具结果→流式回答
+  ✅ PostgreSQL connection pool + DeepSeek v4-flash 协同工作
+
+下一步 (Phase 3): ChatDrawer 侧边浮窗 (所有页面都有 AI)
+Phase 4: 前端监听 tool_call 事件 → AI 操作 UI
+Phase 5: zustand shared state + CopilotKit 模式 generative UI
+
+Co-Authored-By: Claude <noreply@anthropic.com>

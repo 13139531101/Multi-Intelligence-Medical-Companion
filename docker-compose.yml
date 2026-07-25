@@ -45,6 +45,8 @@ services:
       - PORT=10011
       - HOST=0.0.0.0
       - PYTHONPATH=/app
+      - DEEPSEEK_MODEL=${DEEPSEEK_MODEL:-deepseek-v4-flash}
+      - LLM_MODEL=${LLM_MODEL:-deepseek-v4-flash}
       - DB_NAME=${POSTGRES_DB:-personal_health_assistant}
       - DB_HOST=${DB_HOST:-postgres}
       - DB_PORT=${DB_PORT:-5432}
@@ -86,6 +88,8 @@ services:
       - PORT=10012
       - HOST=0.0.0.0
       - PYTHONPATH=/app
+      - DEEPSEEK_MODEL=${DEEPSEEK_MODEL:-deepseek-v4-flash}
+      - LLM_MODEL=${LLM_MODEL:-deepseek-v4-flash}
       - DATABASE_URL=${DATABASE_URL:-postgresql://pha:pha_pass@postgres:5432/personal_health_assistant}
       - PG_DSN=${DATABASE_URL:-postgresql://pha:pha_pass@postgres:5432/personal_health_assistant}
       - A2A_CURRENT_USER_ID=${A2A_CURRENT_USER_ID:-111}
@@ -116,6 +120,8 @@ services:
       - PORT=10013
       - HOST=0.0.0.0
       - PYTHONPATH=/app
+      - DEEPSEEK_MODEL=${DEEPSEEK_MODEL:-deepseek-v4-flash}
+      - LLM_MODEL=${LLM_MODEL:-deepseek-v4-flash}
       - DATABASE_URL=${DATABASE_URL:-postgresql://pha:pha_pass@postgres:5432/personal_health_assistant}
       - DB_NAME=${POSTGRES_DB:-personal_health_assistant}
       - DB_HOST=${DB_HOST:-postgres}
@@ -148,6 +154,8 @@ services:
       - PORT=10010
       - HOST=0.0.0.0
       - PYTHONPATH=/app
+      - DEEPSEEK_MODEL=${DEEPSEEK_MODEL:-deepseek-v4-flash}
+      - LLM_MODEL=${LLM_MODEL:-deepseek-v4-flash}
       - DB_NAME=${POSTGRES_DB:-personal_health_assistant}
       - DB_HOST=${DB_HOST:-postgres}
       - DB_PORT=${DB_PORT:-5432}
@@ -194,6 +202,8 @@ services:
       - PORT=8000
       - HOST=0.0.0.0
       - PYTHONPATH=/app
+      - DEEPSEEK_MODEL=${DEEPSEEK_MODEL:-deepseek-v4-flash}
+      - LLM_MODEL=${LLM_MODEL:-deepseek-v4-flash}
       # 复用已有的数据库配置
       - DATABASE_URL=${DATABASE_URL:-postgresql://pha:pha_pass@postgres:5432/personal_health_assistant}
       - DB_NAME=${POSTGRES_DB:-personal_health_assistant}
@@ -251,6 +261,10 @@ services:
       - PYTHONPATH=/app:/app/backend
       - BACKEND_DIR=/app/backend
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+      # 阶段48-25 v2+: DeepSeek 老 deepseek-chat 下架, 默认 v4-flash
+      - DEEPSEEK_MODEL=${DEEPSEEK_MODEL:-deepseek-v4-flash}
+      - PHA_LLM_MODEL=${PHA_LLM_MODEL:-deepseek-v4-flash}
+      - PHA_SUMMARIZE_MODEL=${PHA_SUMMARIZE_MODEL:-deepseek-v4-flash}
       - USE_LLM_SUMMARY=${USE_LLM_SUMMARY:-false}
       - USE_LLM_INDICATOR_AUDIT=${USE_LLM_INDICATOR_AUDIT:-true}
       - LLM_BASE_URL=${LLM_BASE_URL:-}
