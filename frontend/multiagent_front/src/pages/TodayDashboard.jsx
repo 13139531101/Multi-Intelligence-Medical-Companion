@@ -55,7 +55,11 @@ const greeting = () => {
 export default function TodayDashboard() {
   const navigate = useNavigate();
   const { user } = useAuth();
-  const [todayMeds, setTodayMeds] = useState({ morning: [], noon: [], evening: [] });
+  const [todayMeds, setTodayMeds] = useState({
+    morning: [],
+    noon: [],
+    evening: [],
+  });
   const [loading, setLoading] = useState(true);
   const [marking, setMarking] = useState(null);
   const [showTomorrow, setShowTomorrow] = useState(false);
@@ -100,7 +104,9 @@ export default function TodayDashboard() {
         const next = { ...p };
         for (const k of Object.keys(next)) {
           next[k] = next[k].map((m) =>
-            m.id === med.id ? { ...m, taken, status: taken ? "taken" : "skipped" } : m
+            m.id === med.id
+              ? { ...m, taken, status: taken ? "taken" : "skipped" }
+              : m,
           );
         }
         return next;
@@ -126,7 +132,9 @@ export default function TodayDashboard() {
     ...todayMeds.noon,
     ...todayMeds.evening,
   ];
-  const takenCount = allToday.filter((m) => m.taken || m.status === "taken").length;
+  const takenCount = allToday.filter(
+    (m) => m.taken || m.status === "taken",
+  ).length;
   const skippedCount = allToday.filter((m) => m.status === "skipped").length;
   const totalCount = allToday.length;
 
@@ -137,7 +145,11 @@ export default function TodayDashboard() {
     <Box sx={{ bgcolor: "#F5F7FA", minHeight: "100vh", pb: 4 }}>
       {/* 顶部: 问候 + 通知 + 头像 */}
       <Paper sx={{ borderRadius: 0, py: 2, px: 3, mb: 2 }} elevation={0}>
-        <Stack direction="row" alignItems="center" justifyContent="space-between">
+        <Stack
+          direction="row"
+          alignItems="center"
+          justifyContent="space-between"
+        >
           <Typography variant="h6" sx={{ fontWeight: 600 }}>
             {greeting()}, {user?.username || "朋友"}
           </Typography>
@@ -187,7 +199,12 @@ export default function TodayDashboard() {
               bgcolor: "rgba(25, 118, 210, 0.04)",
             }}
           >
-            <Stack direction="row" alignItems="center" spacing={1.5} sx={{ mb: 1 }}>
+            <Stack
+              direction="row"
+              alignItems="center"
+              spacing={1.5}
+              sx={{ mb: 1 }}
+            >
               <Box
                 sx={{
                   width: 40,
@@ -245,9 +262,7 @@ export default function TodayDashboard() {
               {totalCount === 0 ? "今天没安排吃药" : "今天的药都吃完啦"}
             </Typography>
             <Typography variant="body2" color="text.secondary">
-              {totalCount === 0
-                ? "去添加药品, 让小助手帮你记着"
-                : "明天见"}
+              {totalCount === 0 ? "去添加药品, 让小助手帮你记着" : "明天见"}
             </Typography>
             {totalCount === 0 && (
               <Button
@@ -260,6 +275,93 @@ export default function TodayDashboard() {
             )}
           </Paper>
         )}
+
+        {/* AI 助手 Hero — 跟吃药同等待遇, 都是核心 */}
+        <Paper
+          sx={{
+            mt: 2,
+            p: 2.5,
+            borderRadius: 3,
+            border: "2px solid",
+            borderColor: "secondary.main",
+            bgcolor: "rgba(156, 39, 176, 0.04)",
+            cursor: "pointer",
+          }}
+          onClick={() => navigate("/v2/chat")}
+        >
+          <Stack
+            direction="row"
+            alignItems="center"
+            spacing={1.5}
+            sx={{ mb: 1 }}
+          >
+            <Box
+              sx={{
+                width: 40,
+                height: 40,
+                borderRadius: "50%",
+                bgcolor: "secondary.main",
+                color: "white",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
+              <SmartToy />
+            </Box>
+            <Box>
+              <Typography variant="h6" sx={{ fontWeight: 600 }}>
+                问问小助手
+              </Typography>
+              <Typography variant="body2" color="text.secondary">
+                报告看不懂? 药咋吃? 想问就问
+              </Typography>
+            </Box>
+          </Stack>
+          <Stack
+            direction="row"
+            spacing={1}
+            sx={{ flexWrap: "wrap", gap: 1, mb: 1.5 }}
+          >
+            <Chip
+              label="血压偏高怎么办?"
+              size="small"
+              onClick={(e) => {
+                e.stopPropagation();
+                navigate("/v2/chat", { state: { q: "血压偏高怎么办?" } });
+              }}
+              sx={{ cursor: "pointer" }}
+            />
+            <Chip
+              label="我的报告啥意思?"
+              size="small"
+              onClick={(e) => {
+                e.stopPropagation();
+                navigate("/v2/chat", { state: { q: "我的报告啥意思?" } });
+              }}
+              sx={{ cursor: "pointer" }}
+            />
+            <Chip
+              label="药能一起吃吗?"
+              size="small"
+              onClick={(e) => {
+                e.stopPropagation();
+                navigate("/v2/chat", { state: { q: "药能一起吃吗?" } });
+              }}
+              sx={{ cursor: "pointer" }}
+            />
+          </Stack>
+          <Button
+            fullWidth
+            variant="contained"
+            color="secondary"
+            size="large"
+            endIcon={<ChevronRight />}
+            sx={{ py: 1.5, fontWeight: 600 }}
+          >
+            去问问 →
+          </Button>
+        </Paper>
 
         {/* 今天的清单 */}
         {totalCount > 0 && (
@@ -343,7 +445,9 @@ export default function TodayDashboard() {
                                   ? "line-through"
                                   : "none",
                               color:
-                                m.status === "skipped" ? "text.disabled" : "text.primary",
+                                m.status === "skipped"
+                                  ? "text.disabled"
+                                  : "text.primary",
                             }}
                           >
                             {m.name} {m.dose}
@@ -403,7 +507,9 @@ export default function TodayDashboard() {
           />
         </Paper>
         <Collapse in={showTomorrow}>
-          <Paper sx={{ mt: 1, p: 2, borderRadius: 2, bgcolor: "rgba(0,0,0,0.02)" }}>
+          <Paper
+            sx={{ mt: 1, p: 2, borderRadius: 2, bgcolor: "rgba(0,0,0,0.02)" }}
+          >
             <Typography variant="body2" color="text.secondary">
               明天 7月26日 (周六) — 跟今天一样的药
             </Typography>
@@ -434,7 +540,9 @@ export default function TodayDashboard() {
           />
         </Paper>
         <Collapse in={showWeek}>
-          <Paper sx={{ mt: 1, p: 2, borderRadius: 2, bgcolor: "rgba(0,0,0,0.02)" }}>
+          <Paper
+            sx={{ mt: 1, p: 2, borderRadius: 2, bgcolor: "rgba(0,0,0,0.02)" }}
+          >
             <Typography variant="body2" color="text.secondary">
               本周服药详情 — 待接入真实历史 API
             </Typography>
