@@ -339,9 +339,7 @@ export function buildHealthTrend({ records, reminders, consultations }) {
 
   // 用最近 14 天历史分数做回归, 没有则用今天的合规性代理
   // 阶段48-22 v4+: filter isFinite 而不是 != null, 确保 historicalScores 没有 NaN 污染回归
-  const recentScores = dayList
-    .map((d) => d.score)
-    .filter((s) => Number.isFinite(s));
+  const recentScores = dayList.map((d) => d.score).filter((s) => Number.isFinite(s));
   const slopeResult = linearRegression(
     recentScores.length >= 2 ? recentScores : [todayScore.score],
   );

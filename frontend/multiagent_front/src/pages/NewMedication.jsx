@@ -204,7 +204,16 @@ export default function NewMedication() {
       const data = await getMedicationReminders({ today: true });
       const list = Array.isArray(data) ? data : data?.reminders || [];
       const grouped = { morning: [], noon: [], evening: [] };
-      list.forEach((m) => {
+      list.forEach((raw) => {
+        // 阶段48-22 v4+: 归一化 — backend 返回 medicationName/dosage/scheduledTime,
+        // 老代码用 name/dose 一直拿不到, 显示空白. 同时提取 stock 真实数据.
+        const m = {
+          ...raw,
+          name: raw.medicationName || raw.name || "未命名药品",
+          dose: raw.dosage || raw.dose || "",
+          time: raw.time || (raw.scheduledTime || "08:00").slice(11, 16),
+          stock: Number.isFinite(raw.stock) ? raw.stock : null,
+        };
         const hour = parseInt((m.time || "08:00").split(":")[0]);
         const period = hour < 11 ? "morning" : hour < 17 ? "noon" : "evening";
         grouped[period].push({ ...m, period });
@@ -777,7 +786,9 @@ export default function NewMedication() {
                               >
                                 {med.taken && med.takenAt
                                   ? `${med.takenAt} 已服`
-                                  : `${med.time} · 库存 ${med.stock || 30} 片${med.stock && med.stock < 7 ? " ⚠️" : ""}`}
+                                  : med.stock != null
+                                    ? `${med.time} · 库存 ${med.stock} 片${med.stock < 7 ? " ⚠️" : ""}`
+                                    : `${med.time}`}
                               </Typography>
                             </Box>
                             {!med.taken && (

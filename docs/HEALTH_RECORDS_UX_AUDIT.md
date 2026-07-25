@@ -2,11 +2,11 @@
 
 > **最后体检日期**: 2026-07-22
 > **下次体检触发**: 累积 3 项 ✓ 后, 或用户反馈"开发太乱"时
-> **总项数**: 23 / 10 (上限突破, 见 #11-#23 附加)
+> **总项数**: 24 / 10 (上限突破, 见 #11-#24 附加)
 
 ## 进度总览
 
-- ✅ 已完成: 21 项 (#1, #2, #3, #4, #5, #6, #7, #9, #10, #11-#17, #19, #20, #21, #22, #23)
+- ✅ 已完成: 22 项 (#1, #2, #3, #4, #5, #6, #7, #9, #10, #11-#17, #19, #20, #21, #22, #23, #24)
 - ❌ 待办: 2 项 (含 #18 中止)
 
 ---
@@ -223,6 +223,21 @@
   (3) `buildHealthTrend` 历史加载过滤 + 不 push NaN score + dayList.score 用 isFinite + recentScores filter 用 isFinite
 - **副作用**: 用户的 localStorage 历史已经污染 (含 NaN 项), 我们的 filter 会自动清掉, 但之前的 stale history 会让 "近 7 天" 柱图历史数据全清空, 当作新用户
 - **优先级**: 高 (核心算法, 健康评分彻底不能用)
+
+### ✅ #24 用药管理药品名/剂量空白 + 假库存 (2026-07-22 修复)
+
+- **现象**: 用户切到 /v2/medication. 之前可能显示的药品名/剂量空白 (比如 "undefined undefined 08:00"), 库存一律显示假默认 30 片
+- **真因**: backend `/api/medication-reminders` 返回字段 `{ id, medicationId, medicationName, dosage, scheduledTime, time, status, taken }`. JSX line 772-780 用 `med.name`, `med.dose`, `med.stock || 30` — 字段名完全对不上 backend
+- **修法**: NewMedication.jsx fetchMeds 内 list.forEach 加归一化:
+  - `m.name = raw.medicationName || raw.name || "未命名药品"`
+  - `m.dose = raw.dosage || raw.dose || ""`
+  - `m.time = raw.time || raw.scheduledTime.slice(11, 16)`
+  - `m.stock = Number.isFinite(raw.stock) ? raw.stock : null`
+    JSX 显示: 库存 null 时只显示时间, 不假装有 30 片
+- **验收**: GET /api/medication-reminders?today=true&user_id=...
+  -> 8 个药, medicationName=钙片/阿司匹林/..., dosage=500mg/100mg/..., time=07:00/08:00/...
+  -> 现在显示 "钙片 500mg" + "07:00" 而不是空白
+- **优先级**: 高 (核心功能没法用)
 
 ---
 

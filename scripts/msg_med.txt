@@ -1,0 +1,31 @@
+fix(stage48-22 v21): NewMedication.jsx — medication 字段归一化 (#24)
+
+背景: 用户切到用药管理 NewMedication 页. 之前可能显示的药品名/剂量空白,
+     库存一律显示假默认 30 片.
+
+诊断:
+  backend /api/medication-reminders 返回字段:
+    { id, medicationId, medicationName, dosage, scheduledTime, time, status, taken }
+  JSX line 772-780 用 `med.name`, `med.dose`, `med.stock || 30`:
+    - `med.name` 是 undefined (应读 medicationName)
+    - `med.dose` 是 undefined (应读 dosage)
+    - `med.stock` 是 undefined, 老代码 `|| 30` 兜底, 全显示 30 片 (假数据, 不存在)
+
+修法 (1 commit):
+  NewMedication.jsx fetchMeds 内 list.forEach 加归一化:
+    m.name = raw.medicationName || raw.name || "未命名药品"
+    m.dose = raw.dosage || raw.dose || ""
+    m.time = raw.time || raw.scheduledTime.slice(11, 16) (HH:MM)
+    m.stock = Number.isFinite(raw.stock) ? raw.stock : null (null 而非 fake)
+  JSX line 787-789 改:
+    库存不为 null 显示 "X 片", null 时只显示时间 (不假装有 30 片)
+
+验收 (curl):
+  GET /api/medication-reminders?today=true&user_id=...
+  -> [{medicationName: "钙片", dosage: "500mg", time: "07:00", stock: 未提供, ...},
+      {medicationName: "阿司匹林", dosage: "100mg", ...}]
+  现在前端会显示 "钙片 500mg", "阿司匹林 100mg" 而不是空白.
+
+体检表更新: 加 #24 项, 标记 ✅.
+
+Co-Authored-By: Claude <noreply@anthropic.com>
