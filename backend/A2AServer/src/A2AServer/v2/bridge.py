@@ -434,8 +434,8 @@ async def v2_process_message_stream(message) -> AsyncIterator[dict]:
         # 阶段48-12: 最大 stream 时间和最大 yield 次数限制, 防 LangGraph 死循环
         import time as _t
         _stream_started = _t.time()
-        _MAX_SEC = int(os.getenv("PHA_MAX_STREAM_SEC", "30"))
-        _MAX_YIELDS = int(os.getenv("PHA_MAX_STREAM_YIELDS", "200"))
+        _MAX_SEC = int(os.getenv("PHA_MAX_STREAM_SEC", "60"))  # 阶段48-27: 增加超时让 A2A 工具调用有足够时间
+        _MAX_YIELDS = int(os.getenv("PHA_MAX_STREAM_YIELDS", "300"))
 
         yield_count = 0
         async for ev in agent.stream(
@@ -533,6 +533,12 @@ async def v2_process_message_stream(message) -> AsyncIterator[dict]:
         # 阶段48-27: 如果工具返回了 page_update 指令，生成 PAGE_UPDATE 事件
         for tr in tool_results_log:
             output = tr.get("output")
+            # 解析 JSON 字符串
+            if isinstance(output, str):
+                try:
+                    output = json.loads(output)
+                except (json.JSONDecodeError, TypeError):
+                    pass
             if isinstance(output, dict) and output.get("page_update"):
                 pu = output["page_update"]
                 yield {

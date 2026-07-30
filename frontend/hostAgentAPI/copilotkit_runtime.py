@@ -171,7 +171,15 @@ async def _stream_agui(
             name = ev.get("name", "")
             tc_id = tool_call_ids.get(name) or str(uuid.uuid4())
             yield _agui_event("TOOL_CALL_END", {"toolCallId": tc_id})
-            result = ev.get("result")
+            # bridge 发送 output 字段，不是 result
+            raw_output = ev.get("output") or ev.get("result")
+            # 尝试解析 JSON 字符串
+            result = raw_output
+            if isinstance(raw_output, str):
+                try:
+                    result = json.loads(raw_output)
+                except (json.JSONDecodeError, TypeError):
+                    result = raw_output
             yield _agui_event(
                 "TOOL_CALL_RESULT",
                 {

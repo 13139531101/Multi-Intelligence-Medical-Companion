@@ -1,0 +1,27 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(netstat -ano)",
+      "Bash(netsh interface *)",
+      "Bash(netsh int *)",
+      "Bash(curl -s http://localhost:13002/v2/agents/health_advisor/status)",
+      "Bash(python -m json.tool)",
+      "Bash(curl -s http://localhost:13002/v2/status)",
+      "Bash(curl -s \"http://localhost:13002/v2/agents/status\")",
+      "Bash(curl -s \"http://localhost:13002/v2/agents/health_advisor/status\")",
+      "Bash(curl -s \"http://localhost:13002/v2/agents/health_records/status\")",
+      "Bash(curl -s \"http://localhost:13002/v2/agents/medication_reminder/status\")",
+      "Bash(curl -s \"http://localhost:13002/v2/agents/visit_summary/status\")",
+      "Bash(curl -s http://localhost:11011/.well-known/agent.json)",
+      "Bash(curl -s http://localhost:11011/tools)",
+      "Bash(curl -s http://localhost:13002/v2/mcp/tools?agent=health_advisor)",
+      "Bash(curl -s http://localhost:13002/v2/tools)",
+      "Bash(python -c ' *)",
+      "Bash(curl -s -X POST http://localhost:13002/auth/login -H 'Content-Type: application/json' -d '{\"username\":\"demo\",\"password\":\"demo123\"}')",
+      "Bash(curl -s \"http://localhost:13002/health/deep\")",
+      "Bash(python3 -m json.tool)",
+      "Bash(curl -s http://localhost:13002/v2/mcp/tools)",
+      "Bash(curl -s -X POST http://localhost:13002/auth/login -H 'Content-Type: application/json' -d '{\"username\":\"test\",\"password\":\"test123\"}')"
+    ]
+  }
+}
