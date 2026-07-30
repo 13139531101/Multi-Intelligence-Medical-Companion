@@ -374,16 +374,16 @@ class V2Agent:
             try:
                 stream_iter = agent.astream(
                     {"messages": [{"role": "user", "content": query}]},
-                    config={**cfg, "recursion_limit": 50},
+                    config={**cfg, "recursion_limit": 100},
                     stream_mode="messages",
                 )
-                logger.warning(f"[v2_agent:trace] USING messages mode, recursion_limit=50")
+                logger.debug(f"[v2_agent:trace] USING messages mode, recursion_limit=100")
                 using_messages_mode = True
             except Exception as _e_mode:
                 logger.warning(f"[v2_agent] stream_mode=messages 失败, 退回 values + 去重: {_e_mode}")
                 stream_iter = agent.astream(
                     {"messages": [{"role": "user", "content": query}]},
-                    config=cfg,
+                    config={**cfg, "recursion_limit": 100},
                     stream_mode="values",
                 )
                 using_messages_mode = False

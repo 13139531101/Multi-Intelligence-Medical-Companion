@@ -24,6 +24,8 @@ langchain-core>=1.2.0
 langchain-openai>=1.0.0
 # LangGraph StateGraph 编排
 langgraph>=0.6.0
+# LangChain MCP 适配器 (stdio / streamable_http transport 必需)
+langchain-mcp-adapters>=0.1.0
 # LangGraph Postgres checkpointer（阶段30：长时间任务持久化）
 langgraph-checkpoint-postgres>=2.0.0
 psycopg[binary,pool]>=3.2

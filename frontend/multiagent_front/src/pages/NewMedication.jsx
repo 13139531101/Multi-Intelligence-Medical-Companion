@@ -326,7 +326,7 @@ export default function NewMedication() {
     // 阶段48-22 v4+: 同 fetchWeek — 优先真实 API, 没数据才 mock.
     let realData = null;
     try {
-      const data = await getMedicationsHistory({ days: 30 }).catch(() => []);
+      const data = await getMedicationsHistory({ days: 30, detail: true }).catch(() => []);
       if (Array.isArray(data) && data.length > 0) realData = data;
     } catch {
       /* ignore */

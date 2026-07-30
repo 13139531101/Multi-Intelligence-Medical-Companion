@@ -2,7 +2,7 @@
 
 > 所有 v2 阶段变更记录。版本按 git tag 排序。
 >
-> **当前版本**：v2.0-stage48-19（48 阶段 + PhaCore 重构立项）
+> **当前版本**：v2.0-stage48-26（修 LangChain MCP 适配器缺失 + 接 getMedicationsHistory 真数据）
 
 ---
 
@@ -701,6 +701,168 @@ backend health: ✓ `auth: 200`
 - **v2.3**：CI/CD (GitHub Actions / ArgoCD)
 - **v2.4**：HTTPS 证书 (cert-manager)
 - **v3.0**：模型分流 / 多模型协同
+
+---
+
+## [未发布] - 阶段 48-25 - 撤掉 CopilotKit，自写 AI 浮窗 + SSE 流
+
+### 🎯 背景
+
+CopilotKit 前端需要 Node.js runtime + 大量依赖, 在我们的轻量 Vite + Mulang (MUI) 体系下难以集成. 之前是 CopilotKit 前端包了我们的 `hostapi` 的 `/api/copilotkit`, 但前端启动常常超时.
+
+### ✨ 新增
+
+- **自写 AI 浮窗**: `frontend/multiagent_front/src/components/ChatPanel.jsx`
+  - 右下角圆形按钮, 点击弹出对话框
+  - 仿 CopilotKit 的 UX 风格, 但用纯 React + MUI
+  - 浮窗只在登录后显示 (`AppShell` 里 `{user && <ChatPanel />}`)
+- **自写 SSE Chat store**: `frontend/multiagent_front/src/components/useChat.jsx`
+  - React Context + useReducer
+  - 用浏览器原生 `fetch + ReadableStream` 读 SSE
+  - 解析 AG-UI 协议 (`TEXT_MESSAGE_START/CONTENT/END`, `TOOL_CALL_START/ARGS/RESULT/END`, `RUN_STARTED/FINISHED/ERROR`)
+  - 同时兼容旧版 `/v2/chat/stream` 事件 (`routing/chunk/tool_call/tool_result/done`)
+  - 不依赖 zustand 或任何外部状态库
+- **默认首页**: `App.jsx` 里 `<Route path="/" element={<Navigate to="/v2/dashboard" replace />}/>` — 登录后直达 v2 dashboard
+
+### 🔧 改动
+
+- **后端 `v2_agent.py`**:
+  - `recursion_limit` 50 → 100 (LangGraph 递归锁), 修短上下文 fallback 后丢失工具调用结果
+  - 把 `USING messages mode` debug log 降为 debug (不再刷屏)
+- **后端 `copilotkit_runtime.py`**:
+  - SSE 解析从 `aiter_lines()` 改成 `aiter_bytes()` + 手动 `\n\n` 切分 (旧版在 async generator 嵌套时会丢 line)
+  - 把"chunk"事件的 `ev.get("content")` 改成 `ev.get("text") or ev.get("content")` (bridge 实际是 `text` 字段)
+  - 兼容两种 SSE 格式: 经典 `event: x \n data: {...}` 和简版 `data: {with "type"}`
+- **前端 `App.jsx`**:
+  - 去掉 `<CopilotKit runtimeUrl=... runtime=...>` 的 wrapper
+  - 用自写的 `<ChatProvider>` 包裹 router
+  - `<ChatPanel>` 只在 `user` 存在时挂载
+- **前端 `vite.config.js`**:
+  - proxy 仍指向 hostapi (`/api /v2 /auth /health` → 13002)
+  - 反代正常工作, 不需要改
+
+### 🐛 修了的 bug
+
+1. **AI 不出文本** (chat 流空响应) — bridge `chunk` 事件用 `text` 字段, runtime 错读 `content`
+2. **SSE 中途断流** (pump 只读 3 lines) — `aiter_lines` 在 async generator 里漏读, 改 `aiter_bytes` 修复
+3. **LangGraph recursion limit** (短 prompt 直接走 LLM 总结 fallback) — `recursion_limit=50` 太小, 提到 100
+4. **CopilotKit 安装 / Node runtime 缺失** — 全部撤掉, 前端纯 Vite + React 跑就行
+
+### 📁 新增 / 修改文件
+
+```
+frontend/multiagent_front/src/components/ChatPanel.jsx    (新增, ~150 行)
+frontend/multiagent_front/src/components/useChat.jsx     (新增, ~290 行)
+frontend/multiagent_front/src/App.jsx                     (改: 去掉 CopilotKit)
+frontend/multiagent_front/vite.config.js                  (改: 简化注释)
+frontend/hostAgentAPI/copilotkit_runtime.py               (改: SSE 解析 + chunk 字段)
+backend/A2AServer/src/A2AServer/v2/v2_agent.py            (改: recursion_limit)
+```
+
+### ⚠️ 注意
+
+- bridge 仍发 `routing → tool_call → tool_result → chunk → done` (5 种事件)
+- copilotkit_runtime 把这 5 种翻译成 AG-UI 的 16 种事件 (CopilotKit 旧前端可挂回)
+- 目前前端只用了 TEXT_MESSAGE_CONTENT / TOOL_CALL_START / TOOL_CALL_RESULT / RUN_FINISHED 4 种最关键的
+
+### ✅ 验证
+
+- E2E: 浏览器 demo 账号 → /v2/dashboard → 点击右下机器人 → 发出问题 → 收到 AI 文本 + 工具调用结果
+- 后端 curl: `/api/copilotkit` 输出 `TEXT_MESSAGE_CONTENT` 32+ events, 6435+ chars on "帮我看看体检报告并给我建议"
+- 旧路由兼容 (`/dashboard`, `/medication` 等) 仍然重定向到 `/v2/*`
+- 未登录时 `<ChatPanel />` 隐藏, 按钮不显示
+
+### 📝 待办 (后续)
+
+- 用户上下文持久化 (session_id, 让 AI 记得上一轮)
+- Markdown 渲染 (现在 AI 输出是 plain text)
+- 消息多轮上下文传递
+
+---
+
+## [未发布] - 阶段 48-26 - 修 MCP 工具加载（18→18）+ 接 getMedicationsHistory 真数据
+
+### 🎯 背景
+
+智能体 (HealthAdvisor) 代码里有 **18 个 `@mcp.tool()`**, 但 hostapi 日志只显示 **loaded 11 tools**. 7 个 tool 神秘丢失 — 严重影响 LLM 的能力面 (e.g. AI 没法查体检, 没法取药, 没法调记忆系统).
+
+同时, 前端 `TodayDashboard / NewMedication` 周图表显示的是 `[STUB] xxx` 硬编码数据, 不是用户自己的服药数据. 用户永远看不到真统计.
+
+### 🐛 修了的 bug
+
+#### Bug 1: MCP 18→11 (智能体工具丢失)
+
+**根因**: 启动时 `_load_real_mcp_tools` 走 chain:
+
+- `transport="streamable_http"` → `_load_http_mcp_tools` → 用 `langchain_mcp_adapters.load_mcp_tools` → **`No module named 'langchain_mcp_adapters'`** → 返 0 tools
+- fallback `transport="stdio"` → `_load_stdio_mcp_tools` → 用 `langchain_mcp_adapters.load_mcp_tools` → **同样报错** → 返 0 tools
+- 终极 fallback `_load_inprocess_mcp_tools` → 这个有 `SKIP_TOOLS = {a2a_integration_tool, memory_integration_tool, database_tool, storage_tool, async_analysis_tool}` → 5 个 tool file 被跳过
+- 最终拿到的 11 个 = 7 个非-SKIP tool file 里的工具 (knowledge_tool=6, diagnosis_tool=4, 其他=1)
+
+**修复**: [`frontend/hostAgentAPI/requirements.txt`](file:///i:/A2A/3/A2AServer/frontend/hostAgentAPI/requirements.txt#L26-L28) 加包:
+
+```diff
++ # LangChain MCP 适配器 (stdio / streamable_http transport 必需)
++ langchain-mcp-adapters>=0.1.0
+```
+
+装包后, `_load_http_mcp_tools` + `lc_load_tools` 走真 MCP, **18 个工具全加载** (无 SKIP 限制, 因为 MCP 协议动态 spawn server, in-process 限制也消失).
+
+#### Bug 2: getMedicationsHistory stub (前端假数据)
+
+**根因**: [`frontend/multiagent_front/src/api/healthApi.js`](file:///i:/A2A/3/A2AServer/frontend/multiagent_front/src/api/healthApi.js#L720-L731) 整个函数 return 硬编码 7 天数组 `[{day:"周一",value:85}, ...]`. TodayDashboard / NewMedication 都调它但永远显示假数.
+
+**修复**:
+
+- [`healthApi.js`](file:///i:/A2A/3/A2AServer/frontend/multiagent_front/src/api/healthApi.js#L720-L783) 重写 `getMedicationsHistory`:
+  - 默认按天聚合 (传 `days` ∈ [1, 30], **默认 7**)
+  - 并发拉 `GET /medication-reminders?date=YYYY-MM-DD` 每一天的记录
+  - 算 rate = taken / total × 100
+  - `detail=true` 返回明细列表 `{date, name, time, status}` (历史表格用)
+- 后端 `/medication-reminders?date=...` 已支持任意日期查询, 且从 `reminder_logs` 表 join 拿当天实际 taken 状态
+- [`pages/TodayDashboard.jsx`](file:///i:/A2A/3/A2AServer/frontend/multiagent_front/src/pages/TodayDashboard.jsx) 移除 hardcoded `"上周 5 天按时吃药"`, 改成 `weekHistory.filter(d.value >= 80).length`
+- [`pages/NewMedication.jsx`](file:///i:/A2A/3/A2AServer/frontend/multiagent_front/src/pages/NewMedication.jsx#L329) 调 `getMedicationsHistory({days: 30, detail: true})` 拿明细, 替换之前也走 mock 的 fallback
+
+### ✅ 验证
+
+**Browser E2E** (`/v2/medication` 本周 tab):
+
+- 周四 0%, 周五 0%, **周六 25%** (橙色条, 真 taken), 周日 0%, **周一 50%** (深蓝条), 周二 0%, 今日 (空)
+- 跟 DB 里 `reminder_logs` 实际记录数一致: 周一 4/8 = 50%, 周六 2/8 = 25%
+
+**后端 log 修复前**:
+
+```
+[mcp_discover] agent=health_advisor found 18 MCP tools in 5 files
+[mcp_tool_adapter] agent=health_advisor loaded 11 tools       ← 缺 7 个
+```
+
+**后端 log 修复后** (待验证, user 没跑 AI 触发):
+
+- 装 langchain-mcp-adapters 后, `_load_http_mcp_tools` 走通, 应该显示 18
+
+### ⚠️ 注意
+
+- **真 MCP 工具加载** 还需要 backend 重启 (`docker compose up -d hostapi` 之后)
+- 用户**已经收到消息**说装包 build 完了, 但**还没重启** hostapi, 所以**当前生产环境**仍是 11 个 tool. **下次 AI 对话**才会看到 18.
+
+### 📁 修改文件
+
+```
+frontend/hostAgentAPI/requirements.txt                         (加 langchain-mcp-adapters)
+frontend/multiagent_front/src/api/healthApi.js                 (重写 getMedicationsHistory)
+frontend/multiagent_front/src/pages/TodayDashboard.jsx         (weekSummary 真数据)
+frontend/multiagent_front/src/pages/NewMedication.jsx          (fetchHistory detail=true)
+```
+
+### 📝 待办 (下一阶段)
+
+1. **重启 hostapi** — 验证 18 tool 全加载, AI 拿到完整能力面
+2. **session_id 上下文** — AI 浮窗多轮记忆
+3. **MCP tools 真实调用验证** — 写 e2e test, e.g. "我血压偏高怎么办" → AI 应该调 `analyze_symptoms`, "我的体检报告" → AI 应该调 `get_health_records_history`
+4. **清理 NewMedication 其他残留 mock** — fetchWeek 的 fallback 还在 (仅当 real API 返回空时触发), 但已可正常工作
+5. **ANP 协议 expose** — 4 agent 暴露为 ANP 端点, 跨平台调用
+6. **PhaCore shared tools** — OCR / reminder / storage 真正共享到所有 agent
 
 ---
 

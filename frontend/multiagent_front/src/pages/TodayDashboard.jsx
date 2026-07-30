@@ -28,7 +28,11 @@ import {
   SmartToy,
 } from "@mui/icons-material";
 import { useAuth } from "../contexts/AuthContext";
-import { getMedicationReminders, markReminderTaken } from "../api/healthApi";
+import {
+  getMedicationReminders,
+  markReminderTaken,
+  getMedicationsHistory,
+} from "../api/healthApi";
 
 // 把今天分成早/中/晚三段
 const PERIODS = [
@@ -64,6 +68,7 @@ export default function TodayDashboard() {
   const [marking, setMarking] = useState(null);
   const [showTomorrow, setShowTomorrow] = useState(false);
   const [showWeek, setShowWeek] = useState(false);
+  const [weekHistory, setWeekHistory] = useState([]);
 
   // 加载今日用药
   const fetchMeds = async () => {
@@ -92,6 +97,10 @@ export default function TodayDashboard() {
 
   useEffect(() => {
     fetchMeds();
+    // 加载过去 7 天服药率 (用于 "上周 X 天按时吃药")
+    getMedicationsHistory({ days: 7 })
+      .then((rows) => setWeekHistory(rows || []))
+      .catch(() => setWeekHistory([]));
   }, []);
 
   // 标记吃药 / 跳过
@@ -138,8 +147,13 @@ export default function TodayDashboard() {
   const skippedCount = allToday.filter((m) => m.status === "skipped").length;
   const totalCount = allToday.length;
 
-  // 上周服药率 (mock — 真数据待 API 接好后接)
-  const weekSummary = "上周 5 天按时吃药"; // TODO: 接 getMedicationsHistory({days:7})
+  // 上周服药率 — 真数据来自 getMedicationsHistory (按天聚合 taken/total)
+  const daysOnTrack = weekHistory.filter(
+    (d) => d.date !== new Date().toISOString().slice(0, 10) && d.value >= 80,
+  ).length;
+  const weekSummary = weekHistory.length
+    ? `上周 ${daysOnTrack} 天按时吃药`
+    : "服药数据加载中...";
 
   return (
     <Box sx={{ bgcolor: "#F5F7FA", minHeight: "100vh", pb: 4 }}>

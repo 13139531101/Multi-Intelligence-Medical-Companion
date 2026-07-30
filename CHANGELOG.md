@@ -170,3 +170,99 @@ PHA v2 的所有重大变更记录。
 ## v1.0.0 / v1.0.1
 
 项目初始化版本。
+
+---
+
+## v2.0-stage48-25 - 2026-07-28 - 撤掉 CopilotKit，自写 AI 浮窗 + SSE 流
+
+### 🎯 背景
+CopilotKit 前端需要 Node.js runtime, 在我们的轻量 Vite 体系下集成度差; 之前常常启动超时. 这一阶段全部撤掉, 用纯 React + MUI + 自写 SSE store 替代.
+
+### ✨ 新增
+- 自写 AI 浮窗 `frontend/multiagent_front/src/components/ChatPanel.jsx` (~150 行)
+  - 右下角圆形按钮 + 弹出对话窗
+  - 仿 CopilotKit UX, 但纯 React + MUI
+  - 只在登录后显示 (`{user && <ChatPanel />}`)
+- 自写 SSE Chat store `frontend/multiagent_front/src/components/useChat.jsx` (~290 行)
+  - React Context + useReducer, 不依赖 zustand / CopilotKit
+  - 浏览器原生 `fetch + ReadableStream` 读 SSE
+  - 解析 AG-UI 协议 (TEXT_MESSAGE_*, TOOL_CALL_*, RUN_*)
+  - 同时兼容旧版 `/v2/chat/stream` (routing/chunk/tool_call/tool_result/done)
+- 默认首页 `/` → `/v2/dashboard`, 登录后直达 dashboard
+
+### 🔧 改动
+- `v2_agent.py`: recursion_limit 50 → 100 (修 LangGraph 短上下文自动 fallback 丢工具结果)
+- `copilotkit_runtime.py`: SSE 解析 `aiter_lines` → `aiter_bytes` + `\n\n` 切分 (修漏 line 问题), chunk 字段 `content` → `text`
+- `App.jsx`: 去掉 `<CopilotKit>` wrapper, 换 `<ChatProvider>`
+- `vite.config.js`: 简化注释
+
+### 🐛 修了的 bug
+1. **AI 不出文本** - bridge 发 `text` 字段, runtime 错读 `content`
+2. **SSE pump 漏 line** - async generator 嵌套时 `aiter_lines` 漏读
+3. **LangGraph recursion limit** - 50 太低, 提到 100
+
+### ⚠️ 注意
+- bridge 仍发 5 种事件 (`routing/tool_call/tool_result/chunk/done`)
+- runtime 翻译成 AG-UI 16 种事件 (向后兼容 CopilotKit 旧前端)
+- 前端只用了 4 种关键 event (TEXT_MESSAGE_CONTENT / TOOL_CALL_START / TOOL_CALL_RESULT / RUN_FINISHED)
+
+### ✅ 验证
+- E2E 浏览器 demo 账号 → /v2/dashboard → 浮窗对话 → 收到 AI 文本 + 工具调用
+- curl `/api/copilotkit`: 32+ TEXT_MESSAGE_CONTENT events / 6435+ bytes
+- 旧路由 (`/dashboard`, `/medication`) 仍重定向到 `/v2/*`
+- 未登录浮窗按钮隐藏
+
+### 📁 新增 / 修改文件
+```
+frontend/multiagent_front/src/components/ChatPanel.jsx    (新增 ~150 行)
+frontend/multiagent_front/src/components/useChat.jsx     (新增 ~290 行)
+frontend/multiagent_front/src/App.jsx                     (改: 去掉 CopilotKit)
+frontend/multiagent_front/vite.config.js                  (改: 简化注释)
+frontend/hostAgentAPI/copilotkit_runtime.py               (改: SSE 解析 + chunk 字段)
+backend/A2AServer/src/A2AServer/v2/v2_agent.py            (改: recursion_limit)
+```
+
+### 📝 待办
+- 用户上下文持久化 (session_id)
+- Markdown 渲染 AI 输出
+- 消息多轮上下文传递
+
+---
+
+## v2.0-stage48-26 - 2026-07-28 - 修 MCP 18→18 工具加载 + 前端 stub 接真数据
+
+### 🎯 背景
+- HealthAdvisor 代码里有 **18 个 `@mcp.tool()`** 装饰的 tool 函数, 但运行时 `loaded 11 tools`. 7 个 tool 神秘丢.
+- `getMedicationsHistory()` 整个函数 return 硬编码 7 天假数据, 所有图表显示随机数.
+
+### 🐛 修了的 bug
+
+**Bug 1: MCP 工具加载不全 (18→11)**
+- 根因: `langchain-mcp-adapters` 包没装. http / stdio transport 都因为 `No module named` 失败, 终极回退到 `_load_inprocess_mcp_tools` 但这有硬编码 `SKIP_TOOLS = {a2a_integration_tool, memory_integration_tool, database_tool, storage_tool, async_analysis_tool}` → 5 个 file 整个跳过 → 7 个 tool 丢.
+- 修复: `requirements.txt` 加 `langchain-mcp-adapters>=0.1.0`. 装包后 `_load_http_mcp_tools` 走真 MCP server, 18 tool 全加载 (SKIP 不生效因为 MCP 动态 spawn).
+
+**Bug 2: getMedicationsHistory stub**
+- 根因: 函数整个 return `[星期, 60-95]` 硬编码.
+- 修复: 重写为按天并发拉 `GET /medication-reminders?date=YYYY-MM-DD`, 聚合 taken 数, 算 rate. `params.detail=true` 返回明细列表. TodayDashboard 用真 rate, NewMedication 详情表格用 detail mode.
+
+### ✅ 验证
+- `/v2/medication` 本周 tab: 周六 25%, 周一 50% (真 taken 数) — **替代 60-95 随机数**
+- `docs/Chinese/AGENT_PROGRESS.md` 详细记录
+- 待 user 重启 hostapi 后, 18 tool log 验证
+
+### ⚠️ 当前待 user 启动
+```
+docker compose -f I:/A2A/3/A2AServer/docker-compose.yml up -d hostapi
+docker logs a2aserver-hostapi-1 --tail 50 | grep "loaded"
+# 应: [mcp_tool_adapter:http] agent=health_advisor loaded 18 tools
+```
+
+### 📁 修改文件
+```
+frontend/hostAgentAPI/requirements.txt                  (加 langchain-mcp-adapters)
+frontend/multiagent_front/src/api/healthApi.js          (重写 getMedicationsHistory)
+frontend/multiagent_front/src/pages/TodayDashboard.jsx  (weekSummary 真数据)
+frontend/multiagent_front/src/pages/NewMedication.jsx   (fetchHistory detail=true)
+docs/Chinese/AGENT_PROGRESS.md                          (新增详细进度报告)
+docs/Chinese/CHANGELOG.md                               (追加 48-26)
+```

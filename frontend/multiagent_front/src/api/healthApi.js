@@ -717,17 +717,75 @@ export const getHealthTrends = async (params = {}) => {
   return null; // no-op, 前端用 utils
 };
 
-// 获取服药历史 (未实现 - 给个兜底)
+// 获取服药历史
+// 默认: 每天一条聚合记录 {day, value, taken, total, date, isToday}
+// params.detail=true: 返回明细列表 {date, name, time, status} (历史表格用)
 export const getMedicationsHistory = async (params = {}) => {
-  return [
-    { day: "周一", value: 85 },
-    { day: "周二", value: 92 },
-    { day: "周三", value: 78 },
-    { day: "周四", value: 88 },
-    { day: "周五", value: 95 },
-    { day: "周六", value: 100 },
-    { day: "今日", value: 60 },
-  ];
+  const days = Math.max(1, Math.min(30, Number(params.days) || 7));
+  const cnWeekday = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+
+  const today = new Date();
+  const promises = [];
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date(today);
+    d.setDate(d.getDate() - i);
+    const iso = d.toISOString().slice(0, 10);
+    promises.push(
+      healthApi
+        .get("/medication-reminders", {
+          params: { date: iso, active_only: false },
+        })
+        .then((r) => Array.isArray(r.data) ? r.data : [])
+        .catch(() => []),
+    );
+  }
+
+  const rows = await Promise.all(promises);
+
+  if (params.detail) {
+    // 明细列表: 每条 taken/skipped/pending
+    const out = [];
+    rows.forEach((dayList, idx) => {
+      const d = new Date(today);
+      d.setDate(d.getDate() - (days - 1 - idx));
+      const date = d.toISOString().slice(0, 10);
+      dayList.forEach((r) => {
+        let status = "已计划";
+        if (r.taken || r.status === "taken" || r.status === "completed") {
+          status = "已服";
+        } else if (r.status === "skipped" || r.status === "missed") {
+          status = "跳过";
+        }
+        out.push({
+          date,
+          name: r.medicationName || r.medication_name || "",
+          time: r.time || "",
+          status,
+        });
+      });
+    });
+    return out;
+  }
+
+  // 默认: 按天聚合
+  const out = [];
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date(today);
+    d.setDate(d.getDate() - i);
+    const dayList = rows[days - 1 - i] || [];
+    const total = dayList.length;
+    const taken = dayList.filter((r) => r.taken || r.status === "taken").length;
+    const rate = total === 0 ? 0 : Math.round((taken / total) * 100);
+    out.push({
+      day: i === 0 ? "今日" : cnWeekday[d.getDay()],
+      value: rate,
+      taken,
+      total,
+      date: d.toISOString().slice(0, 10),
+      isToday: i === 0,
+    });
+  }
+  return out;
 };
 
 // === 智能路由 ===
