@@ -139,10 +139,11 @@ AGENT_ALIAS = {
 HEURISTIC_KEYWORDS = {
     "visit_summary": ["摘要", "总结", "就诊", "summary"],
     "medication_reminder": ["药", "吃药", "提醒", "medication", "服药", "用药", "剂量"],
-    "health_records": ["档案", "体检", "报告", "record", "检查单"],
+    "health_records": ["体检", "报告", "record", "检查单", "上传档案", "录入档案"],
     "health_advisor": [
         "头疼", "发烧", "痛", "医生", "建议", "咨询", "症状", "不舒服", "难受",
         "health", "symptom", "咳嗽", "感冒", "头晕", "头痛",
+        "档案", "健康档案", "有哪些档案", "查档案", "看档案",
     ],
 }
 
