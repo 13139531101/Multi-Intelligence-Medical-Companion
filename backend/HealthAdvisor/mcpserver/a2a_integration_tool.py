@@ -123,7 +123,18 @@ def get_medication_overview(agent_address: str, user_id: Optional[str] = "") -> 
     )
     try:
         data = _send_task(endpoint, instr, user_id=user_id)
-        return {"success": True, "agent": card.get("name"), "data": data}
+        # 阶段48-27: 如果有数据，加入 page_update 让前端渲染用药列表
+        page_update = None
+        if isinstance(data, dict):
+            meds = data.get("current", [])
+            if meds:
+                page_update = {
+                    "component": "TodayDashboard",
+                    "action": "setData",
+                    "params": {"type": "medications", "medications": meds, "title": "当前用药"},
+                    "summary": f"当前有 {len(meds)} 种用药",
+                }
+        return {"success": True, "agent": card.get("name"), "data": data, "page_update": page_update}
     except Exception as e:
         return {"success": False, "error": str(e)}
 
@@ -140,7 +151,17 @@ def get_visit_summary_overview(agent_address: str, user_id: Optional[str] = "", 
     )
     try:
         data = _send_task(endpoint, instr, user_id=user_id)
-        return {"success": True, "agent": card.get("name"), "data": data}
+        # 阶段48-27: 如果有数据，加入 page_update 让前端渲染就诊摘要
+        page_update = None
+        if isinstance(data, dict) and data.get("recent"):
+            summaries = data.get("recent", [])
+            page_update = {
+                "component": "TodayDashboard",
+                "action": "setData",
+                "params": {"type": "visit_summaries", "summaries": summaries, "title": f"最近{days}天就诊记录"},
+                "summary": f"最近 {len(summaries)} 条就诊记录",
+            }
+        return {"success": True, "agent": card.get("name"), "data": data, "page_update": page_update}
     except Exception as e:
         return {"success": False, "error": str(e)}
 
@@ -175,7 +196,17 @@ def get_health_records_history(agent_address: str, user_id: str, days: int = 180
     )
     try:
         data = _send_task(endpoint, instr, user_id=user_id)
-        return {"success": True, "agent": card.get("name"), "data": data}
+        # 阶段48-27: 如果有数据，加入 page_update 让前端渲染健康档案表格
+        page_update = None
+        if isinstance(data, dict) and data.get("recent"):
+            records = data.get("recent", [])
+            page_update = {
+                "component": "TodayDashboard",
+                "action": "setData",
+                "params": {"type": "health_records", "records": records, "title": f"最近{days}天健康档案"},
+                "summary": f"已加载 {len(records)} 条健康档案记录",
+            }
+        return {"success": True, "agent": card.get("name"), "data": data, "page_update": page_update}
     except Exception as e:
         return {"success": False, "error": str(e)}
 
