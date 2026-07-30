@@ -9,14 +9,16 @@ import {
   CircularProgress,
   Chip,
   Stack,
+  Alert,
 } from "@mui/material";
 import CloseIcon from "@mui/icons-material/Close";
 import SendIcon from "@mui/icons-material/Send";
 import SmartToyIcon from "@mui/icons-material/SmartToy";
+import VisibilityIcon from "@mui/icons-material/Visibility";
 import { useChat } from "./useChat.jsx";
 
 export default function ChatPanel() {
-  const { open, toggle, close, messages, isThinking, sendMessage } = useChat();
+  const { open, toggle, close, messages, isThinking, sendMessage, pageUpdates } = useChat();
   const [input, setInput] = useState("");
   const listRef = useRef(null);
 
@@ -113,6 +115,21 @@ export default function ChatPanel() {
               bgcolor: "grey.50",
             }}
           >
+            {/* AI 页面更新提示 */}
+            {pageUpdates.map((update, i) => (
+              <Alert
+                key={i}
+                severity="info"
+                icon={<VisibilityIcon />}
+                sx={{ mb: 1, fontSize: 12 }}
+              >
+                <strong>页面已更新:</strong> {update.summary}
+                <br />
+                <Typography variant="caption" color="text.secondary">
+                  组件 {update.component} 执行了 {update.action}
+                </Typography>
+              </Alert>
+            ))}
             {messages.map((m) => (
               <Bubble key={m.id} msg={m} />
             ))}

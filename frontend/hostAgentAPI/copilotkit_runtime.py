@@ -181,6 +181,29 @@ async def _stream_agui(
                     else result,
                 },
             )
+            # 如果工具返回包含 page_update 信息，生成 PAGE_UPDATE 事件
+            if isinstance(result, dict) and result.get("page_update"):
+                pu = result["page_update"]
+                yield _agui_event(
+                    "PAGE_UPDATE",
+                    {
+                        "component": pu.get("component", "page"),
+                        "action": pu.get("action", "setData"),
+                        "params": pu.get("params", {}),
+                        "displaySummary": pu.get("summary", ""),
+                    },
+                )
+        elif kind == "page_update":
+            # 直接的 page_update 事件
+            yield _agui_event(
+                "PAGE_UPDATE",
+                {
+                    "component": ev.get("component", "page"),
+                    "action": ev.get("action", "setData"),
+                    "params": ev.get("params", {}),
+                    "displaySummary": ev.get("summary", ""),
+                },
+            )
         elif kind == "done":
             if text_started:
                 yield _agui_event("TEXT_MESSAGE_END", {"messageId": msg_id})

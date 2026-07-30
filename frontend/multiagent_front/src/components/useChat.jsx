@@ -8,6 +8,7 @@ import React, {
   useReducer,
   useCallback,
 } from "react";
+import { componentRegistry } from "./ComponentRegistry";
 
 const initialState = {
   open: false,
@@ -19,6 +20,7 @@ const initialState = {
     },
   ],
   isThinking: false,
+  pageUpdates: [], // AI 触发的页面更新指令
 };
 
 function reducer(state, action) {
@@ -46,6 +48,7 @@ function reducer(state, action) {
           },
         ],
         isThinking: true,
+        pageUpdates: [], // 清空上次的页面更新
       };
     case "aiPatch":
       return {
@@ -56,6 +59,14 @@ function reducer(state, action) {
       };
     case "setThinking":
       return { ...state, isThinking: action.value };
+    case "pageUpdate":
+      // AI 触发的页面组件更新
+      return {
+        ...state,
+        pageUpdates: [...state.pageUpdates, action.update],
+      };
+    case "clearPageUpdates":
+      return { ...state, pageUpdates: [] };
     default:
       return state;
   }
@@ -277,6 +288,40 @@ export function ChatProvider({ children }) {
             patch: { content: curContent, isStreaming: false },
           });
           return;
+
+        // ===== AI 页面控制指令 =====
+        case "PAGE_UPDATE":
+          // AI 让页面组件执行操作，如 setData、navigateTo 等
+          // payload: { component, action, params, displaySummary }
+          if (payload.component && payload.action) {
+            console.log(`[useChat] PAGE_UPDATE: ${payload.component}.${payload.action}`, payload.params);
+            // 调用组件注册表
+            componentRegistry.call(payload.component, payload.action, payload.params);
+            // 同时记录到 state，让 ChatPanel 显示操作摘要
+            dispatch({
+              type: "pageUpdate",
+              update: {
+                component: payload.component,
+                action: payload.action,
+                params: payload.params,
+                summary: payload.displaySummary || `已执行 ${payload.action}`,
+              },
+            });
+          }
+          return;
+
+        // AI 返回要显示的内容摘要（用于浮窗展示）
+        case "DISPLAY_SUMMARY":
+          if (payload.content) {
+            curContent += `\n\n📊 ${payload.content}`;
+            dispatch({
+              type: "aiPatch",
+              id: aiId,
+              patch: { content: curContent },
+            });
+          }
+          return;
+
         default:
           return;
       }
@@ -298,9 +343,11 @@ export function useChat() {
     open: state.open,
     messages: state.messages,
     isThinking: state.isThinking,
+    pageUpdates: state.pageUpdates,       // AI 触发的页面更新指令
     toggle: () => dispatch({ type: "toggle" }),
     openPanel: () => dispatch({ type: "open" }),
     close: () => dispatch({ type: "close" }),
     sendMessage,
+    clearPageUpdates: () => dispatch({ type: "clearPageUpdates" }),
   };
 }

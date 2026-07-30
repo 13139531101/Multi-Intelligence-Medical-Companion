@@ -529,6 +529,28 @@ async def v2_process_message_stream(message) -> AsyncIterator[dict]:
             "tool_results": tool_results_log,
             "conversation_id": conversation_id,
         }
+
+        # 阶段48-27: 如果工具返回了 page_update 指令，生成 PAGE_UPDATE 事件
+        for tr in tool_results_log:
+            output = tr.get("output")
+            if isinstance(output, dict) and output.get("page_update"):
+                pu = output["page_update"]
+                yield {
+                    "event": "page_update",
+                    "component": pu.get("component", "page"),
+                    "action": pu.get("action", "setData"),
+                    "params": pu.get("params", {}),
+                    "summary": pu.get("summary", ""),
+                }
+            # 也支持直接返回 page_update 字段的结构
+            elif isinstance(output, dict) and output.get("component") and output.get("action"):
+                yield {
+                    "event": "page_update",
+                    "component": output.get("component"),
+                    "action": output.get("action"),
+                    "params": output.get("params", {}),
+                    "summary": output.get("summary", ""),
+                }
     except Exception as e:
         logger.exception("[v2_bridge] stream error")
         yield {"event": "error", "error": str(e)}

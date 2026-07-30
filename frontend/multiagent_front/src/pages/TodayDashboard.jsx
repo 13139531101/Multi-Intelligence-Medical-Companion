@@ -1,5 +1,6 @@
 // 阶段48-22 v23: Today First 首页 — 第一眼回答"今天我要做什么"
 // 设计原则: 今天/已做/明天/上周, 其他挪走. 情绪藏在数字里, 不评判.
+// 阶段48-27: AI 控制页面组件 — 支持 PAGE_UPDATE 指令控制页面显示
 import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import {
@@ -33,6 +34,7 @@ import {
   markReminderTaken,
   getMedicationsHistory,
 } from "../api/healthApi";
+import { usePageUpdater } from "../components/usePageUpdater";
 
 // 把今天分成早/中/晚三段
 const PERIODS = [
@@ -59,6 +61,23 @@ const greeting = () => {
 export default function TodayDashboard() {
   const navigate = useNavigate();
   const { user } = useAuth();
+
+  // ===== AI 页面控制: 注册组件到 ComponentRegistry =====
+  const [aiData, setAiData] = useState(null); // AI 设置的数据
+  usePageUpdater('TodayDashboard', {
+    // AI 可以调用这些方法来操作页面
+    setData: (params) => {
+      console.log('[TodayDashboard] AI setData:', params);
+      setAiData(params);
+    },
+    navigateTo: (params) => {
+      if (params?.path) navigate(params.path);
+    },
+    showAlert: (params) => {
+      alert(params?.message || '来自 AI 的提示');
+    },
+  });
+
   const [todayMeds, setTodayMeds] = useState({
     morning: [],
     noon: [],
@@ -286,6 +305,89 @@ export default function TodayDashboard() {
               >
                 去添加
               </Button>
+            )}
+          </Paper>
+        )}
+
+        {/* ===== AI 页面控制: 显示 AI 返回的数据 ===== */}
+        {aiData && (
+          <Paper
+            sx={{
+              mt: 2,
+              p: 2.5,
+              borderRadius: 3,
+              border: "2px solid",
+              borderColor: "info.main",
+              bgcolor: "rgba(0, 145, 234, 0.08)",
+            }}
+          >
+            <Stack direction="row" alignItems="center" spacing={1.5} sx={{ mb: 1 }}>
+              <Box
+                sx={{
+                  width: 40,
+                  height: 40,
+                  borderRadius: "50%",
+                  bgcolor: "info.main",
+                  color: "white",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                <SmartToy />
+              </Box>
+              <Box>
+                <Typography variant="h6" sx={{ fontWeight: 600 }}>
+                  AI 分析结果
+                </Typography>
+                {aiData.title && (
+                  <Typography variant="body2" color="text.secondary">
+                    {aiData.title}
+                  </Typography>
+                )}
+              </Box>
+            </Stack>
+            {/* 根据数据类型渲染 */}
+            {aiData.type === 'health_records' && aiData.records && (
+              <Box sx={{ mt: 1 }}>
+                <Typography variant="body2" sx={{ mb: 1 }}>
+                  共 {aiData.records.length} 条记录
+                </Typography>
+                {aiData.records.slice(0, 3).map((r, i) => (
+                  <Chip
+                    key={i}
+                    label={r.name || r.date || `记录 ${i + 1}`}
+                    size="small"
+                    sx={{ mr: 0.5, mb: 0.5 }}
+                  />
+                ))}
+                {aiData.records.length > 3 && (
+                  <Typography variant="caption" color="text.secondary">
+                    ... 还有 {aiData.records.length - 3} 条
+                  </Typography>
+                )}
+              </Box>
+            )}
+            {aiData.type === 'medications' && aiData.medications && (
+              <Box sx={{ mt: 1 }}>
+                <Typography variant="body2" sx={{ mb: 1 }}>
+                  当前用药 {aiData.medications.length} 种
+                </Typography>
+                {aiData.medications.map((m, i) => (
+                  <Chip
+                    key={i}
+                    label={`${m.name} ${m.dose || ''}`}
+                    size="small"
+                    color="primary"
+                    sx={{ mr: 0.5, mb: 0.5 }}
+                  />
+                ))}
+              </Box>
+            )}
+            {aiData.summary && (
+              <Typography variant="body2" sx={{ mt: 1 }}>
+                {aiData.summary}
+              </Typography>
             )}
           </Paper>
         )}
