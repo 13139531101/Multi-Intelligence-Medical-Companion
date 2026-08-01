@@ -2,7 +2,8 @@
 import React, { useState, useEffect } from "react";
 import { Wrench, Brain, Plug, RefreshCw } from "lucide-react";
 
-const SERVER_URL = import.meta.env.VITE_HOSTAGENT_API || 'http://127.0.0.1:13002';
+// Docker 部署时使用相对路径，通过 nginx 代理
+const SERVER_URL = import.meta.env.VITE_HOSTAGENT_API || '';
 
 export default function CapabilitiesPanel() {
   const [tools, setTools] = useState([]);

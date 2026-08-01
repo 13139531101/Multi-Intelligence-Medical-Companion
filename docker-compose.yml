@@ -319,6 +319,25 @@ services:
       health_records:
         condition: service_healthy
 
+  # multiagent_front: AI 浮窗前端 (阶段48-25+)
+  multiagent_front:
+    image: ${REGISTRY:-crpi-zr8m4m7ism94623a.cn-hangzhou.personal.cr.aliyuncs.com}/${NAMESPACE:-duozhiyiban}/${IMAGE_PREFIX:-a2aserver-}multiagent_front:${TAG:-latest}
+    pull_policy: missing
+    build:
+      context: frontend/multiagent_front
+      dockerfile: Dockerfile
+    ports:
+      - "5174:80"
+    depends_on:
+      - hostapi
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost/"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # hostapi (dev profile - 本地开发用):
   # hostapi:
   #   profiles: ["dev"]
   #   image: ${REGISTRY:-crpi-zr8m4m7ism94623a.cn-hangzhou.personal.cr.aliyuncs.com}/${NAMESPACE:-duozhiyiban}/${IMAGE_PREFIX:-a2aserver-}hostapi:${TAG:-latest}

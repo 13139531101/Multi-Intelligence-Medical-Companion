@@ -3,8 +3,9 @@ import axios from "axios";
 // 创建axios实例
 // 重要说明：不要为该实例设置默认的 'Content-Type'
 // 让 axios 根据请求体自动选择（JSON 或 multipart/form-data）。
+// 注意：VITE_HOSTAGENT_API 在 Docker 部署时使用相对路径 ""，通过 nginx 代理到 hostapi
 const healthApi = axios.create({
-  baseURL: import.meta.env.VITE_HOSTAGENT_API || "http://127.0.0.1:13002",
+  baseURL: import.meta.env.VITE_HOSTAGENT_API || "",
   timeout: 10000,
 });
 
@@ -13,7 +14,7 @@ const smartChatApi = axios.create({
   baseURL:
     import.meta.env.VITE_SMART_CHAT_API ||
     import.meta.env.VITE_HOSTAGENT_API ||
-    "http://127.0.0.1:13002",
+    "",
   timeout: 10000,
   headers: {
     "Content-Type": "application/json",
@@ -22,7 +23,7 @@ const smartChatApi = axios.create({
 
 // 认证API实例 - 使用hostAgentAPI的认证服务
 const authApi = axios.create({
-  baseURL: import.meta.env.VITE_HOSTAGENT_API || "http://127.0.0.1:13002",
+  baseURL: import.meta.env.VITE_HOSTAGENT_API || "",
   timeout: 10000,
   headers: {
     "Content-Type": "application/json",

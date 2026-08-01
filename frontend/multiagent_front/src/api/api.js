@@ -1,7 +1,8 @@
 import { v4 as uuidv4 } from 'uuid'
 import { fetchEventSource } from '@microsoft/fetch-event-source'
 
-const SERVER_URL = import.meta.env.VITE_HOSTAGENT_API || 'http://127.0.0.1:13002';
+// Docker 部署时使用相对路径，通过 nginx 代理
+const SERVER_URL = import.meta.env.VITE_HOSTAGENT_API || '';
 const SMART_CHAT_URL = import.meta.env.VITE_SMART_CHAT_API || SERVER_URL;
 const AGENT_CARD_PATH = '/.well-known/agent.json';
 

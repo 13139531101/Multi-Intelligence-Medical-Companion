@@ -40,6 +40,10 @@ jobs:
             context: backend/VisitSummaryGenerator
             dockerfile: backend/VisitSummaryGenerator/Dockerfile
             description: "Visit Summary MCP"
+          - name: multiagent_front
+            context: frontend/multiagent_front
+            dockerfile: frontend/multiagent_front/Dockerfile
+            description: "Multiagent Front (React AI UI)"
 
     steps:
       - uses: actions/checkout@v4
