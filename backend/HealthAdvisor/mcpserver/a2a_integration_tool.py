@@ -117,8 +117,8 @@ def get_medication_overview(agent_address: str, user_id: Optional[str] = "") -> 
     endpoint = _resolve_endpoint(agent_address)
     instr = (
         f"必须调用工具完成查询，不要输出说明文字。"
-        f"优先调用：ReminderTool_get_medication_reminders 或 MemoryIntegrationTool_get_medication_profile。"
-        f"请根据工具返回结果生成JSON：{{'current': [{{medication_name,dosage,frequency}}], 'inactive': [...]}}。"
+        f"优先调用：get_medication_reminders 或 get_today_reminders。"
+        f"请根据工具返回结果生成JSON：{{'current': [{{medication_name,dosage,frequency}}], 'inactive': [...]}。"
         f"禁止长文本生成，若工具不可用请返回 {{'error':'tool_unavailable'}}。"
     )
     try:
@@ -190,7 +190,7 @@ def get_health_records_history(agent_address: str, user_id: str, days: int = 180
     endpoint = _resolve_endpoint(agent_address)
     instr = (
         f"必须调用工具完成查询，不要输出说明文字。"
-        f"优先调用：StorageTool_get_health_records 或 MemoryIntegrationTool_get_health_history，参数仅包含当前用户与时间范围。"
+        f"优先调用：get_health_records 或 get_health_history，参数仅包含当前用户与时间范围。"
         f"请根据工具返回结果生成JSON：{{'stats': {{record_type: count}}, 'recent': [{{id,type,title,created_at,excerpt}}]}}，示例最多10条。"
         f"禁止长文本生成，若工具不可用请返回 {{'error':'tool_unavailable'}}。时间范围：最近 {days} 天。"
     )
