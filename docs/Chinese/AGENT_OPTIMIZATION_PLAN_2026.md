@@ -2,7 +2,7 @@
 
 > **目标**：让 PHA 智能体效果更好、用户使用更舒服
 >
-> **日期**：2026-08-01
+> **更新**：2026-08-02 — Agentic RAG Stage 1 完成
 >
 > **优先级说明**：🔴 高投入/高回报 | 🟡 中 | 🟢 低投入/高回报
 
@@ -59,7 +59,7 @@ def delete_record_node(state):
 
 | 阶段 | 内容 |
 |------|------|
-| **Stage 1** | Self-RAG 风格的"检索评估"，判断检索结果是否有用 |
+| **Stage 1** | Self-RAG 风格的"检索评估"，判断检索结果是否有用 | ✅ **已实现** (2026-08-02) |
 | **Stage 2** | 多跳检索：复杂问题跨档案/跨时间推理 |
 | **Stage 3** | 知识图谱增强：把档案里的实体关系抽出来 |
 
@@ -261,7 +261,7 @@ def clarify_node(state):
 ```
 2026-Q3 (8-9月)
 ├── PHASE 1: HITL + 主动询问澄清  ←── 最快出效果
-├── PHASE 2: Agentic RAG (Stage 1)  ←── 核心能力提升
+├── PHASE 2: Agentic RAG (Stage 1)  ←── 核心能力提升 ✅ 已完成
 └── PHASE 3: ReAct 反思模式
 
 2026-Q4 (10-12月)
@@ -281,8 +281,8 @@ def clarify_node(state):
 | 优先级 | 优化项 | 预估工时 | 预估收益 |
 |--------|--------|----------|----------|
 | 1 | 🟢 HITL 确认机制 | 2-3天 | 防止误操作，用户信任+ |
-| 2 | 🟢 主动询问澄清 | 1-2天 | 减少乱答，提升满意度 |
-| 3 | 🟡 Agentic RAG Stage 1 | 3-5天 | 检索准确率大幅提升 |
+| 2 | 🟢 主动询问澄清 | 1-2天 | 减少乱答，提升满意度 ✅ 已实现 |
+| 3 | 🟢 Agentic RAG Stage 1 | 3-5天 | 检索准确率大幅提升 ✅ 已实现 |
 | 4 | 🟡 语义缓存 | 2-3天 | 响应延迟↓40%+ |
 | 5 | 🟡 ReAct 反思 | 2-3天 | 错误率↓60% |
 | 6 | 🟢 推理过程可视化 | 2-3天 | 用户信任度显著提升 |
@@ -290,6 +290,39 @@ def clarify_node(state):
 
 ---
 
+
+
+## 十二、2026-08-02 实现记录
+
+### Magentic RAG Stage 1 ✅
+
+**新增文件**：
+- `backend/A2AServer/src/A2AServer/v2/magnetic_rag.py` — 核心 Self-RAG 逻辑
+
+**修改文件**：
+- `backend/A2AServer/src/A2AServer/v2/host_graph.py` — rag_retrieve 节点集成
+- `backend/A2AServer/src/A2AServer/v2/rag.py` — embedding API key 修复
+- `frontend/multiagent_front/src/components/AgentQuickFab.jsx` — tool call chip 渲染
+- `frontend/hostAgentAPI/Dockerfile` — 添加 PhaCore 支持
+- `docker-compose.yml` — healthcheck 修复
+
+**修复的 Bug**：
+1. `rag_path_map` 错误映射（agent name vs node name）
+2. `checkpointer` 编译顺序错误
+3. embedding API key 配置支持百炼 MAAS (1024维)
+
+**AI浮窗 tool call 显示**：
+- AgentQuickFab 新增 `event: tool_call` 和 `event: tool_result` 事件处理
+- tool call 以 chip 标签显示在回答上方
+
+**Embedding 配置（百炼 MAAS）**：
+- `EMBEDDING_API_BASE=https://llm-hq1pqpf6htncxt7n.cn-beijing.maas.aliyuncs.com/compatible-mode/v1`
+- `EMBEDDING_MODEL=text-embedding-v4`
+- `EMBEDDING_DIM=1024`（百炼要求 64-3072）
+- `EMBEDDING_API_KEY=sk-ws-...`（百炼 ws- 前缀 key）
+
+
+---
 ## 十二、参考资源
 
 - [LangGraph Human-in-the-Loop 官方指南](https://blog.csdn.net/zyctimes/article/details/159785786)
