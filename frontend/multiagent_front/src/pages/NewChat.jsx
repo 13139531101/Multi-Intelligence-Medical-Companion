@@ -697,6 +697,21 @@ export default function NewChat() {
                   newConvId = payload.conversation_id;
                 finish();
                 return;
+              } else if (event === "clarification") {
+                // 阶段48-29: 主动询问澄清 → 显示澄清问题，等待用户补充信息
+                setStreaming(false);
+                setMessages((p) => [
+                  ...p,
+                  {
+                    id: `clarify_${Date.now()}`,
+                    role: "ai",
+                    content: payload.content || payload.question || "请补充更多信息：",
+                    time: now(),
+                    thinking: null,
+                    clarification: true,
+                  },
+                ]);
+                return;
               } else if (event === "interrupt") {
                 // 阶段48-16: HITL 中断 → 弹 confirm dialog
                 setStreaming(false);

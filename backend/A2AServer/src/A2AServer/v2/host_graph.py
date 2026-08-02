@@ -99,6 +99,8 @@ class HostState(TypedDict, total=False):
     worker_visit_summary_response: dict
     worker_visit_summary_status: str
     worker_visit_summary_finished_at: float
+    # === 阶段48-29: 主动询问澄清 ===
+    clarification: dict  # {"needed": bool, "question": str, "reason": str}
 
 
 def _get_query(state) -> str:
@@ -296,6 +298,110 @@ async def _layer3_llm(state: HostState) -> str:
 
 
 # ============================================================
+# 阶段48-29: 主动询问澄清
+# ============================================================
+async def _should_clarify(query: str, routing_layer: int) -> dict:
+    """
+    判断用户意图是否模糊、需要澄清。
+
+    触发条件：
+    1. LLM 路由层(layer3)决策的（意图本身不确定）
+    2. 关键词命中多个 agent（语义模糊）
+    3. 用户问题过短或包含代词（"它"、"那个"等）
+
+    Returns:
+        {"needed": bool, "question": str, "reason": str}
+    """
+    if routing_layer == 1:
+        # metadata 指定了明确 agent，不需要澄清
+        return {"needed": False, "question": "", "reason": "metadata指定agent"}
+
+    query_lower = query.lower().strip()
+
+    # 触发条件1: LLM 决策（layer3）且问题简短
+    if routing_layer == 3 and len(query_lower) < 15:
+        try:
+            from langchain_openai import ChatOpenAI
+            llm = ChatOpenAI(
+                model=os.getenv("PHA_LLM_MODEL", "deepseek-chat"),
+                api_key=os.getenv("DEEPSEEK_API_KEY") or os.getenv("OPENAI_API_KEY"),
+                base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
+                temperature=0,
+            )
+            from langchain_core.messages import HumanMessage
+            prompt = f"""用户问题："{query}"
+
+判断用户是否需要进一步澄清才能准确回答。
+
+如果用户问题存在以下情况，回答 YES：
+1. 问题模糊或缺少关键信息（如：只说"不舒服"但不说什么症状）
+2. 包含代词（它、那个、这个）而没有上文
+3. 问题过于宽泛，无法确定具体意图
+
+如果问题已经足够具体明确（如：包含具体症状、明确需求），回答 NO。
+
+只回答 YES 或 NO，不要解释。"""
+            result = await llm.ainvoke([HumanMessage(content=prompt)])
+            decision = (result.content or "").strip().upper()
+            if decision == "YES":
+                question = _generate_clarify_question(query, routing_layer)
+                return {"needed": True, "question": question, "reason": "llm判断模糊"}
+        except Exception as e:
+            logger.debug("[clarify] LLM判断失败: %s", e)
+
+    # 触发条件2: 问题过短且非明确健康词汇
+    short_health_terms = ["头疼", "不舒服", "难受", "那个", "它", "这个", "怎么办", "为什么"]
+    if len(query_lower) < 8 and not any(t in query_lower for t in short_health_terms):
+        return {"needed": False, "question": "", "reason": "问题过短但无模糊特征"}
+
+    # 触发条件3: 包含代词但无上文
+    pronouns = ["它", "那个", "这个", "这事", "那事"]
+    if any(p in query_lower for p in pronouns):
+        question = "您是指什么？可以更具体描述一下吗？比如：具体症状、想要的操作等。"
+        return {"needed": True, "question": question, "reason": "包含代词无上文"}
+
+    return {"needed": False, "question": "", "reason": "意图明确"}
+
+
+def _generate_clarify_question(query: str, routing_layer: int) -> str:
+    """根据路由决策生成针对性的澄清问题"""
+    base = "为了更准确地帮助您，请补充以下信息：\n"
+    hints = []
+
+    query_lower = query.lower()
+
+    if any(w in query_lower for w in ["疼", "痛", "不舒服", "难受"]):
+        hints.append("• 具体哪里不舒服？（部位、持续多久）")
+    if any(w in query_lower for w in ["药", "吃", "服药"]):
+        hints.append("• 是想问哪种药的使用方法？")
+    if any(w in query_lower for w in ["档案", "记录", "报告"]):
+        hints.append("• 想查看哪方面的健康档案？")
+    if any(w in query_lower for w in ["提醒", "通知"]):
+        hints.append("• 想设置什么提醒？（时间、内容）")
+
+    if hints:
+        return base + "\n".join(hints[:2])
+    return "您可以更具体地描述一下您的需求吗？比如：具体的症状、想问什么、想做什么？"
+
+
+async def clarify_node(state: HostState) -> dict:
+    """
+    澄清节点：判断用户意图是否模糊，需要反问。
+
+    放在 classify_node 之后，invoke 之前。
+    - 如果不需要澄清：clarification={"needed": False}，正常流向 invoke
+    - 如果需要澄清：clarification={"needed": True, "question": "..."}，前端显示问题等待用户回复
+    """
+    query = state.get("query", "")
+    routing_layer = state.get("routing_layer", 0)
+
+    result = await _should_clarify(query, routing_layer)
+    logger.info("[clarify] needed=%s reason=%s query=%s", result["needed"], result["reason"], query[:30])
+
+    return {"clarification": result}
+
+
+# ============================================================
 # 图节点
 # ============================================================
 async def classify_node(state: HostState) -> dict:
@@ -418,6 +524,23 @@ def invoke_agent_node(agent_name: str):
 
 async def aggregate_node(state: HostState) -> dict:
     """汇总节点：把 agent_response 包装成 final_response"""
+    # 阶段48-29: 处理澄清请求
+    clarification = state.get("clarification") or {}
+    if clarification.get("needed"):
+        return {
+            "final_response": {
+                "role": "agent",
+                "content": clarification.get("question", "请补充更多信息，以便我更好地帮助您。"),
+                "agent": state.get("target_agent"),
+                "clarification": True,
+                "routing": {
+                    "layer": state.get("routing_layer", 0),
+                    "target": state.get("target_agent"),
+                    "reason": clarification.get("reason", ""),
+                },
+            }
+        }
+
     if state.get("error"):
         return {
             "final_response": {
@@ -558,6 +681,7 @@ def build_host_graph(*, use_checkpointer: bool = True, mode: str = "single"):
 
     # 节点
     g.add_node("classify", classify_node)
+    g.add_node("clarify", clarify_node)  # 阶段48-29: 主动询问澄清
     g.add_node("aggregate", aggregate_node)
     # 阶段30新增
     g.add_node("fanout", fanout_node)
@@ -571,43 +695,41 @@ def build_host_graph(*, use_checkpointer: bool = True, mode: str = "single"):
     # 边
     g.add_edge(START, "classify")
 
-    if mode == "multi":
-        # 阶段30：并行模式（自动 fan-out 到所有 agent）
-        all_invoke_nodes = [spec.node_name for spec in agents]
+    # 阶段48-29: clarify 节点 - classify 之后（single 模式专用）
+    g.add_edge("classify", "clarify")
 
-        # path 返回 list → LangGraph 自动 fan-out
-        def _multi_path(state):
-            return all_invoke_nodes
+    node_by_name = {spec.name: spec.node_name for spec in agents}
+    default_node = agents[0].node_name if agents else "aggregate"
 
-        g.add_conditional_edges("classify", _multi_path)
+    if mode == "single":
+        # clarify -> 根据 clarification.needed 决定去 aggregate 还是目标 agent
+        def _clarify_path(state: HostState) -> str:
+            cl = state.get("clarification") or {}
+            if cl.get("needed"):
+                return "aggregate"
+            target = state.get("target_agent", "")
+            return node_by_name.get(target) or default_node
 
-        # 所有 invoke_X → aggregate_multi
-        for node_name in all_invoke_nodes:
-            g.add_edge(node_name, "aggregate_multi")
-        g.add_edge("aggregate_multi", END)
-    else:
-        # 原 single 模式（动态从 registry 拼路由表）
-        node_by_name = {spec.name: spec.node_name for spec in agents}
-        # 默认 fallback 到第一个 agent
-        default_node = agents[0].node_name if agents else None
-
-        def _route_decision(state: HostState) -> str:
-            target = state.get("target_agent")
-            if target and target in node_by_name:
-                return node_by_name[target]
-            return default_node or END
-
-        # conditional_edges 的 path_map 只需包含所有 invoke_X
-        path_map = {spec.node_name: spec.node_name for spec in agents}
-        g.add_conditional_edges(
-            "classify",
-            _route_decision,
-            path_map,
-        )
+        clarify_path_map = {"aggregate": "aggregate", **node_by_name}
+        g.add_conditional_edges("clarify", _clarify_path, clarify_path_map)
 
         for spec in agents:
             g.add_edge(spec.node_name, "aggregate")
         g.add_edge("aggregate", END)
+
+    else:
+        # multi 模式: 跳过 clarify，直接 fan-out
+        g.add_edge("clarify", "fanout")
+
+        all_invoke_nodes = [spec.node_name for spec in agents]
+
+        def _multi_path(state):
+            return all_invoke_nodes
+
+        g.add_conditional_edges("fanout", _multi_path)
+        for node_name in all_invoke_nodes:
+            g.add_edge(node_name, "aggregate_multi")
+        g.add_edge("aggregate_multi", END)
 
     # Checkpointer
     checkpointer = None
