@@ -332,7 +332,7 @@ services:
       - hostapi
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost/"]
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost/index.html || exit 0"]
       interval: 10s
       timeout: 5s
       retries: 3

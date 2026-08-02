@@ -15,12 +15,14 @@ export default function AgentQuickFab() {
   const [reply, setReply] = useState("");
   const [agent, setAgent] = useState("");
   const [loading, setLoading] = useState(false);
+  const [toolCalls, setToolCalls] = useState([]); // [{type, name, args, output}]
 
   const send = async () => {
     if (!q.trim()) return;
     setLoading(true);
     setReply("");
     setAgent("");
+    setToolCalls([]);
     try {
       const token = localStorage.getItem("token") || "";
       const apiBase = (import.meta?.env?.VITE_API_BASE) || "http://localhost:13002";
@@ -54,6 +56,24 @@ export default function AgentQuickFab() {
               try {
                 const p = JSON.parse(m.slice(6));
                 if (p.agent) setAgent(p.agent);
+              } catch { /* ignore */ }
+            }
+          } else if (ev.includes('event: tool_call')) {
+            // 工具调用 chip
+            const m = ev.split('\n').find(l => l.startsWith('data: '));
+            if (m) {
+              try {
+                const p = JSON.parse(m.slice(6));
+                setToolCalls(tc => [...tc, { type: 'tool_call', name: p.name, args: p.args }]);
+              } catch { /* ignore */ }
+            }
+          } else if (ev.includes('event: tool_result')) {
+            // 工具结果 chip
+            const m = ev.split('\n').find(l => l.startsWith('data: '));
+            if (m) {
+              try {
+                const p = JSON.parse(m.slice(6));
+                setToolCalls(tc => [...tc, { type: 'tool_result', name: p.name, output: p.output }]);
               } catch { /* ignore */ }
             }
           }
@@ -117,6 +137,17 @@ export default function AgentQuickFab() {
                   <Stack direction="row" alignItems="center" spacing={0.5} sx={{ mb: 1 }}>
                     <Chip label={agent} size="small" color="primary" />
                     <Typography variant="caption" color="text.secondary">已响应</Typography>
+                  </Stack>
+                )}
+                {toolCalls.length > 0 && (
+                  <Stack direction="row" spacing={0.5} sx={{ flexWrap: "wrap", gap: 0.5, mb: 1 }}>
+                    {toolCalls.map((tc, i) => (
+                      tc.type === "tool_call" ? (
+                        <Chip key={i} size="small" label={"🔧 " + tc.name} sx={{ height: 20, fontSize: "0.65rem", bgcolor: "#FFF3E0", color: "#E65100", fontFamily: "monospace" }} />
+                      ) : (
+                        <Chip key={i} size="small" label={"📋 " + tc.name} sx={{ height: 20, fontSize: "0.65rem", bgcolor: "#E8F5E9", color: "#2E7D32", fontFamily: "monospace" }} />
+                      )
+                    ))}
                   </Stack>
                 )}
                 <Typography variant="body2" sx={{ whiteSpace: "pre-wrap" }}>{reply}</Typography>

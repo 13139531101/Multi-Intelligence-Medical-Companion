@@ -40,6 +40,7 @@ COPY backend/services ./backend/services
 COPY backend/api ./backend/api
 COPY backend/HealthRecordsManager ./backend/HealthRecordsManager
 COPY backend/AgentMemorySystem ./backend/AgentMemorySystem
+COPY backend/PhaCore ./backend/PhaCore
 
 # Provide A2AServer package required by Host API
 COPY backend/A2AServer/src/A2AServer ./A2AServer

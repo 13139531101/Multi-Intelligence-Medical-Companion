@@ -101,6 +101,9 @@ class HostState(TypedDict, total=False):
     worker_visit_summary_finished_at: float
     # === 阶段48-29: 主动询问澄清 ===
     clarification: dict  # {"needed": bool, "question": str, "reason": str}
+    # === Magentic RAG (Self-RAG Stage 1) ===
+    rag_result: dict          # {"chunks": [...], "score": float, "is_relevant": bool, "reason": str, "query": str}
+    rag_retrieve_needed: bool  # should_retrieve 判断结果
 
 
 def _get_query(state) -> str:
@@ -402,6 +405,96 @@ async def clarify_node(state: HostState) -> dict:
 
 
 # ============================================================
+# Magentic RAG 节点（Self-RAG Stage 1）
+# ============================================================
+async def rag_retrieve_node(state: HostState) -> dict:
+    """
+    Magentic RAG 检索节点：should_retrieve → retrieve → evaluate
+
+    放在 clarify_node 之后、invoke 之前。
+    - 如果不需要检索（clarification.needed=True）→ 跳过 RAG，直接到 aggregate
+    - 如果需要检索且相关 → 结果注入 state["rag_result"]
+    - 如果需要检索但不相关 → rag_result.is_relevant=False（agent 内部感知）
+
+    RAG 结果通过 state["rag_result"] 传递给后续节点，
+    invoke_agent_node 会将其注入到 system_prompt 上下文中。
+    """
+    query = state.get("query", "")
+    user_id = state.get("user_id", "default") or "default"
+    target_agent = state.get("target_agent", "health_advisor")
+    rag_retrieve_needed = state.get("rag_retrieve_needed")
+
+    # 如果需要澄清，跳过 RAG
+    clarification = state.get("clarification") or {}
+    if clarification.get("needed"):
+        return {
+            "rag_result": {
+                "chunks": [],
+                "score": 0.0,
+                "is_relevant": False,
+                "reason": "需要澄清，跳过检索",
+                "query": query,
+            },
+            "rag_retrieve_needed": False,
+        }
+
+    try:
+        from .magnetic_rag import magnetic_rag_search, format_rag_context
+
+        result = await magnetic_rag_search(
+            query=query,
+            user_id=user_id,
+            target_agent=target_agent,
+        )
+
+        rag_result = {
+            "chunks": [
+                {
+                    "chunk_id": c.chunk_id if hasattr(c, "chunk_id") else str(getattr(c, "id", "")),
+                    "score": c.score if hasattr(c, "score") else getattr(c, "score", 0.0),
+                    "text": getattr(c, "chunk_text", ""),
+                    "source": f"{getattr(c, 'source_type', '')}/{getattr(c, 'source_id', '')}",
+                    "title": getattr(c, "title", ""),
+                }
+                for c in result.chunks
+            ],
+            "score": result.score,
+            "is_relevant": result.is_relevant,
+            "reason": result.reason,
+            "query": result.query,
+            "retrieval_needed": result.retrieval_needed,
+            "rewrite_count": result.rewrite_count,
+            # 格式化后的上下文文本（用于注入 system_prompt）
+            "context_text": format_rag_context(result.chunks) if result.chunks else "",
+        }
+
+        logger.info(
+            "[rag_retrieve] is_relevant=%s score=%.2f chunks=%d rewrite=%d query=%s",
+            rag_result["is_relevant"], rag_result["score"],
+            len(rag_result["chunks"]), rag_result["rewrite_count"], query[:30]
+        )
+
+        return {
+            "rag_result": rag_result,
+            "rag_retrieve_needed": result.retrieval_needed,
+        }
+
+    except Exception as e:
+        logger.warning("[rag_retrieve] Magentic RAG 失败: %s", e)
+        return {
+            "rag_result": {
+                "chunks": [],
+                "score": 0.0,
+                "is_relevant": False,
+                "reason": f"RAG异常: {str(e)[:50]}",
+                "query": query,
+                "context_text": "",
+            },
+            "rag_retrieve_needed": False,
+        }
+
+
+# ============================================================
 # 图节点
 # ============================================================
 async def classify_node(state: HostState) -> dict:
@@ -454,8 +547,25 @@ def invoke_agent_node(agent_name: str):
             full_content = ""
             tool_calls = []
 
+            # Magentic RAG: 注入检索上下文到 query
+            user_query = state.get("query", "")
+            rag_result = state.get("rag_result") or {}
+            if rag_result.get("context_text"):
+                context_text = rag_result["context_text"]
+                enriched_query = (
+                    f"{context_text}\n\n"
+                    f"【用户问题】{user_query}\n\n"
+                    f"请基于上述参考档案回答用户问题。如果参考档案不相关，请忽略并基于你的知识回答。"
+                )
+                logger.info(
+                    "[rag_inject] query enriched with rag context: ctx_len=%d is_relevant=%s",
+                    len(context_text), rag_result.get("is_relevant", False)
+                )
+            else:
+                enriched_query = user_query
+
             async for event in agent.stream(
-                state.get("query", ""),
+                enriched_query,
                 state.get("conversation_id", "default"),
                 user_id=state.get("user_id"),
             ):
@@ -561,6 +671,14 @@ async def aggregate_node(state: HostState) -> dict:
             "routing": {
                 "layer": state.get("routing_layer"),
                 "target": state.get("target_agent"),
+            },
+            # Magentic RAG 元信息
+            "rag": {
+                "used": bool(state.get("rag_result", {}).get("chunks")),
+                "is_relevant": state.get("rag_result", {}).get("is_relevant", False),
+                "score": state.get("rag_result", {}).get("score", 0.0),
+                "reason": state.get("rag_result", {}).get("reason", ""),
+                "chunks_count": len(state.get("rag_result", {}).get("chunks", [])),
             },
         }
     }
@@ -682,6 +800,7 @@ def build_host_graph(*, use_checkpointer: bool = True, mode: str = "single"):
     # 节点
     g.add_node("classify", classify_node)
     g.add_node("clarify", clarify_node)  # 阶段48-29: 主动询问澄清
+    g.add_node("rag_retrieve", rag_retrieve_node)  # Magentic RAG (Self-RAG Stage 1)
     g.add_node("aggregate", aggregate_node)
     # 阶段30新增
     g.add_node("fanout", fanout_node)
@@ -694,31 +813,48 @@ def build_host_graph(*, use_checkpointer: bool = True, mode: str = "single"):
 
     # 边
     g.add_edge(START, "classify")
-
-    # 阶段48-29: clarify 节点 - classify 之后（single 模式专用）
     g.add_edge("classify", "clarify")
 
     node_by_name = {spec.name: spec.node_name for spec in agents}
     default_node = agents[0].node_name if agents else "aggregate"
+    logger.info("[build_graph] agents=%s node_by_name=%s default=%s", [s.name for s in agents], node_by_name, default_node)
 
     if mode == "single":
-        # clarify -> 根据 clarification.needed 决定去 aggregate 还是目标 agent
-        def _clarify_path(state: HostState) -> str:
+        # Magentic RAG: clarify → rag_retrieve → invoke/aggregate
+        g.add_edge("clarify", "rag_retrieve")
+
+        def _rag_path(state: HostState) -> str:
+            # 需要澄清时，跳过 agent 调用
             cl = state.get("clarification") or {}
             if cl.get("needed"):
                 return "aggregate"
-            target = state.get("target_agent", "")
-            return node_by_name.get(target) or default_node
+            # 标准化 target_agent（可能是别名如"健康顾问"）
+            target_raw = state.get("target_agent", "")
+            # 先尝试 AGENT_ALIAS，再尝试 AgentRegistry.by_alias
+            canonical = AGENT_ALIAS.get(target_raw, target_raw)
+            if canonical == target_raw:
+                try:
+                    from .agent_registry import AgentRegistry
+                    spec = AgentRegistry.by_alias(target_raw)
+                    if spec is not None:
+                        canonical = spec.name
+                except Exception:
+                    pass
+            result = node_by_name.get(canonical) or default_node
+            # 验证节点确实在 path_map 中
+            logger.info("[rag_path] %s -> %s", canonical, result)
+            return result
 
-        clarify_path_map = {"aggregate": "aggregate", **node_by_name}
-        g.add_conditional_edges("clarify", _clarify_path, clarify_path_map)
+        # rag_path_map: node_name -> node_name (path function returns node_name, must match a key)
+        rag_path_map = {"aggregate": "aggregate", **{v: v for v in node_by_name.values()}}  # {node: node}
+        g.add_conditional_edges("rag_retrieve", _rag_path, rag_path_map)
 
         for spec in agents:
             g.add_edge(spec.node_name, "aggregate")
         g.add_edge("aggregate", END)
 
     else:
-        # multi 模式: 跳过 clarify，直接 fan-out
+        # multi 模式: 跳过 rag_retrieve，直接 fan-out
         g.add_edge("clarify", "fanout")
 
         all_invoke_nodes = [spec.node_name for spec in agents]
@@ -731,13 +867,13 @@ def build_host_graph(*, use_checkpointer: bool = True, mode: str = "single"):
             g.add_edge(node_name, "aggregate_multi")
         g.add_edge("aggregate_multi", END)
 
-    # Checkpointer
+    # Checkpointer (declare before try so closure can reference it)
     checkpointer = None
-    if use_checkpointer:
-        try:
+    try:
+        if use_checkpointer:
             checkpointer = InMemorySaver()
-        except Exception as e:
-            logger.warning("[host_graph] Checkpointer 初始化失败: %s", e)
+    except Exception as e:
+        logger.warning("[host_graph] Checkpointer 初始化失败: %s", e)
 
     return g.compile(checkpointer=checkpointer)
 

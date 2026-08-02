@@ -41,7 +41,7 @@ EMBEDDING_PROVIDER = os.getenv("EMBEDDING_PROVIDER", "dashscope")
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-v4")
 EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIM", "384"))
 EMBEDDING_API_BASE = os.getenv("EMBEDDING_API_BASE", "https://dashscope.aliyuncs.com/compatible-mode/v1")
-DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY", "")
+DASHSCOPE_API_KEY = os.getenv("EMBEDDING_API_KEY", os.getenv("DASHSCOPE_API_KEY", ""))
 
 # Postgres（每次读取 env，避免 import 时固定导致测试错位 host）
 def _db_host():
