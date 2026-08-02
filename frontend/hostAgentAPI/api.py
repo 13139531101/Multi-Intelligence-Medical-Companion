@@ -5020,6 +5020,9 @@ async def v2_chat_stream(request: Request, user: dict = Depends(get_current_user
                 elif ev_type == "interrupt":
                     # 阶段48-16: HITL 中断 → 通知前端弹 confirm dialog
                     yield f"event: interrupt\ndata: {_json.dumps({'thread_id': ev.get('thread_id'), 'interrupt_data': ev.get('interrupt_data')}, ensure_ascii=False)}\n\n"
+                elif ev_type == "clarification":
+                    # 阶段48-29: 主动询问澄清 → 通知前端弹澄清问题
+                    yield f"event: clarification\ndata: {_json.dumps({'question': ev.get('question', ''), 'reason': ev.get('reason', '')}, ensure_ascii=False)}\n\n"
                 elif ev_type == "chunk":
                     content_for_db += ev.get("text", "")
                     yield f"event: chunk\ndata: {_json.dumps({'text': ev.get('text', '')}, ensure_ascii=False)}\n\n"

@@ -25,6 +25,10 @@ from typing import Any, Optional, AsyncIterator
 
 logger = logging.getLogger(__name__)
 
+# 阶段48-30: 触发 @register_agent 装饰器，确保 AgentRegistry 已填充
+from A2AServer.v2.agent_registry import discover_agents
+discover_agents()
+
 
 # 阶段48-13: LLM 总结工具结果
 async def _llm_summarize_tool_results(
@@ -411,6 +415,22 @@ async def v2_process_message_stream(message) -> AsyncIterator[dict]:
         "routing": {"layer": 1 if selected_agent else 2, "target": target_agent},
         "conversation_id": conversation_id,
     }
+
+    # 阶段48-29: 主动询问澄清 — routing 之后、stream 之前检查
+    routing_layer = 1 if selected_agent else 2
+    try:
+        from . import host_graph
+        cl_res = await host_graph._should_clarify(query, routing_layer)
+        if cl_res and cl_res.get("needed"):
+            question = cl_res.get("question", "请补充更多信息")
+            yield {
+                "event": "clarification",
+                "question": question,
+                "reason": cl_res.get("reason", ""),
+            }
+            return  # 终止，clarification 不走 agent.stream
+    except Exception as e:
+        logger.debug("[v2_stream] clarification check failed: %s", e)
 
     # Phase 2: 真流式调用 agent.stream
     try:

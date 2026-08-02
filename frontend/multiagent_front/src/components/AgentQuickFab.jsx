@@ -76,6 +76,15 @@ export default function AgentQuickFab() {
                 setToolCalls(tc => [...tc, { type: 'tool_result', name: p.name, output: p.output }]);
               } catch { /* ignore */ }
             }
+          } else if (ev.includes('event: clarification')) {
+            // 阶段48-29: 主动询问澄清
+            const m = ev.split('\n').find(l => l.startsWith('data: '));
+            if (m) {
+              try {
+                const p = JSON.parse(m.slice(6));
+                setReply(p.question || '请补充更多信息');
+              } catch { /* ignore */ }
+            }
           }
         }
       }
