@@ -331,7 +331,7 @@ class V2Agent:
 
         # thread_id = user_id:session_id（隔离多用户多会话）
         thread_id = f"{user_id or 'anon'}:{session_id}"
-        cfg = {"configurable": {"thread_id": thread_id}}
+        cfg = {"configurable": {"thread_id": thread_id, "checkpointer": None}}
 
         # 阶段12 限流检查
         if os.getenv("PHA_RATE_LIMIT", "true").lower() in {"true", "1", "yes", "on"}:
@@ -424,6 +424,7 @@ class V2Agent:
                     msg_type = getattr(msg, "type", "ai")
                     content = getattr(msg, "content", "")
                     tool_calls = getattr(msg, "tool_calls", []) or []
+                    tool_calls = getattr(msg, "tool_calls", []) or []
 
                     # 阶段48-12 重写: chunk 是 AIMessageChunk 增量, 同 msg_id 的多个 chunk 共享 run id
                     # 累积: 对每 msg_id 累加 content (str concat), 持续 yield 增量 (diff)
@@ -488,7 +489,7 @@ class V2Agent:
 
                     # ai 文本 — 直接 yield
                     # chunk.content 已是该 chunk 的有效 token (LangChain 不会累加)
-                    if msg_type == "ai" and content:
+                    if msg_type in ("ai", "AIMessageChunk") and content:
                         yield {
                             "is_task_complete": False,
                             "require_user_input": False,

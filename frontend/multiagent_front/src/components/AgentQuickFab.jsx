@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import ReactMarkdown from "react-markdown";
 import {
   Box, Drawer, Fab, IconButton, Typography, TextField, Button, Stack,
   Avatar, Paper, Chip, LinearProgress,
@@ -159,7 +160,9 @@ export default function AgentQuickFab() {
                     ))}
                   </Stack>
                 )}
-                <Typography variant="body2" sx={{ whiteSpace: "pre-wrap" }}>{reply}</Typography>
+                <Typography variant="body2" component="div" sx={{ whiteSpace: "pre-wrap" }}>
+                  <ReactMarkdown>{reply}</ReactMarkdown>
+                </Typography>
               </Paper>
             )}
             {loading && <LinearProgress sx={{ mt: 1 }} />}
