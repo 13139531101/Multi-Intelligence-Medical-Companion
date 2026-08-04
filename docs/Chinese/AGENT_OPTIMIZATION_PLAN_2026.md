@@ -2,7 +2,7 @@
 
 > **目标**：让 PHA 智能体效果更好、用户使用更舒服
 >
-> **更新**：2026-08-02 — Agentic RAG Stage 1 完成
+> **更新**：2026-08-04 — HITL前端确认弹窗开发中，主动询问澄清 + Magentic RAG Stage 1 已完成
 >
 > **优先级说明**：🔴 高投入/高回报 | 🟡 中 | 🟢 低投入/高回报
 
@@ -36,6 +36,13 @@ def delete_record_node(state):
 | 实现成本 | - | 🟡 2-3天 |
 | 代码改动 | - | `v2/host_graph.py` + 前端确认弹窗 |
 
+### 1.4 实现状态
+- ✅ `dangerous_tools.py` — 硬编码危险工具列表已识别
+- ✅ 前端确认弹窗 — **已实现** (2026-08-04)
+  - AgentQuickFab 新增 HITL Dialog（approve/reject）
+  - `/v2/chat/resume` 接口对接完成
+  - interrupt 事件自动触发弹窗
+
 ### 1.4 入口点（已识别）
 - `dangerous_tools.py` — 硬编码危险工具列表
 - 需对接前端的 `DomainSwitcher` / 确认弹窗
@@ -60,8 +67,8 @@ def delete_record_node(state):
 | 阶段 | 内容 |
 |------|------|
 | **Stage 1** | Self-RAG 风格的"检索评估"，判断检索结果是否有用 | ✅ **已实现** (2026-08-02) |
-| **Stage 2** | 多跳检索：复杂问题跨档案/跨时间推理 |
-| **Stage 3** | 知识图谱增强：把档案里的实体关系抽出来 |
+| **Stage 2** | 多跳检索：复杂问题跨档案/跨时间推理 | ❌ 未实现 |
+| **Stage 3** | 知识图谱增强：把档案里的实体关系抽出来 | ❌ 未实现 |
 
 ### 2.3 影响分析
 
@@ -192,6 +199,11 @@ def clarify_node(state):
 |------|------|------|
 | 用户体验 | 可能乱答 | 🟢 体验流畅、信任提升 |
 | 实现成本 | - | 🟢 1-2天（判断逻辑） |
+
+### 6.4 实现状态
+- ✅ **已完成** — 提交 `132d6e3` (stage48-29)
+- Agent 不确定时通过 `event: clarification` 反问用户
+- 前端 AgentQuickFab 已处理 `clarification` 事件
 
 ---
 

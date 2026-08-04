@@ -1,7 +1,8 @@
 import React, { useState } from "react";
 import {
   Box, Drawer, Fab, IconButton, Typography, TextField, Button, Stack,
-  Avatar, Paper, Chip, LinearProgress,
+  Avatar, Paper, Chip, LinearProgress, Dialog, DialogTitle, DialogContent,
+  DialogActions, Alert,
 } from "@mui/material";
 import { SmartToy, Close, Send, Bolt, History } from "@mui/icons-material";
 import { useNavigate } from "react-router-dom";
@@ -28,6 +29,10 @@ export default function AgentQuickFab() {
   const [agent, setAgent] = useState("");
   const [loading, setLoading] = useState(false);
   const [toolCalls, setToolCalls] = useState([]); // [{type, name, args, output}]
+  // 阶段48-16: HITL 确认弹窗
+  const [hitlOpen, setHitlOpen] = useState(false);
+  const [hitlData, setHitlData] = useState(null); // {thread_id, interrupt_data}
+  const [hitlLoading, setHitlLoading] = useState(false);
 
   const send = async () => {
     if (!q.trim()) return;
@@ -102,6 +107,17 @@ export default function AgentQuickFab() {
                 setReply(p.question || '请补充更多信息');
               } catch { /* ignore */ }
             }
+          } else if (ev.includes('event: interrupt')) {
+            // 阶段48-16: HITL 确认弹窗
+            const m = ev.split('\n').find(l => l.startsWith('data: '));
+            if (m) {
+              try {
+                const p = JSON.parse(m.slice(6));
+                setHitlData({ thread_id: p.thread_id, interrupt_data: p.interrupt_data });
+                setHitlOpen(true);
+                setLoading(false); // 暂停流式，等用户确认
+              } catch { /* ignore */ }
+            }
           }
         }
       }
@@ -115,6 +131,74 @@ export default function AgentQuickFab() {
     setOpen(false);
     if (q.trim()) navigate(`/v2/chat?q=${encodeURIComponent(q)}`);
     else navigate("/v2/chat");
+  };
+
+  // 阶段48-16: HITL 用户确认后继续流
+  const handleHitlApprove = async () => {
+    if (!hitlData) return;
+    setHitlOpen(false);
+    setHitlLoading(true);
+    try {
+      const token = localStorage.getItem("token") || "";
+      const apiBase = (import.meta?.env?.VITE_API_BASE) || "http://localhost:13002";
+      const resp = await fetch(apiBase + "/v2/chat/resume", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: token ? `Bearer ${token}` : "" },
+        body: JSON.stringify({
+          thread_id: hitlData.thread_id,
+          decisions: [{ type: "approve" }],
+        }),
+      });
+      // 复用 send 的流式读取逻辑
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const events = buffer.split("\n\n");
+        buffer = events.pop() || "";
+        for (const ev of events) {
+          if (ev.includes('event: chunk')) {
+            const m = ev.split('\n').find(l => l.startsWith('data: '));
+            if (m) {
+              try {
+                const p = JSON.parse(m.slice(6));
+                if (p.text) { setReply(r => r + p.text); }
+              } catch { /* ignore */ }
+            }
+          } else if (ev.includes('event: done')) {
+            break;
+          }
+        }
+      }
+    } catch (e) {
+      setReply("确认失败: " + e.message);
+    }
+    setHitlLoading(false);
+  };
+
+  const handleHitlReject = async () => {
+    if (!hitlData) return;
+    setHitlOpen(false);
+    setHitlLoading(true);
+    try {
+      const token = localStorage.getItem("token") || "";
+      const apiBase = (import.meta?.env?.VITE_API_BASE) || "http://localhost:13002";
+      await fetch(apiBase + "/v2/chat/resume", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: token ? `Bearer ${token}` : "" },
+        body: JSON.stringify({
+          thread_id: hitlData.thread_id,
+          decisions: [{ type: "reject", message: "用户拒绝此操作" }],
+        }),
+      });
+      setReply("已取消操作。");
+    } catch (e) {
+      setReply("取消失败: " + e.message);
+    }
+    setHitlLoading(false);
   };
 
   return (
@@ -205,6 +289,35 @@ export default function AgentQuickFab() {
           </Box>
         </Box>
       </Drawer>
+
+      {/* 阶段48-16: HITL 确认弹窗 */}
+      <Dialog open={hitlOpen} onClose={() => handleHitlReject()} maxWidth="sm" fullWidth>
+        <DialogTitle sx={{ bgcolor: "warning.main", color: "white" }}>
+          ⚠️ 操作需要确认
+        </DialogTitle>
+        <DialogContent sx={{ pt: 2 }}>
+          <Alert severity="warning" sx={{ mb: 2 }}>
+            AI 即将执行以下危险操作，请确认是否继续。
+          </Alert>
+          {hitlData?.interrupt_data && (
+            <Paper variant="outlined" sx={{ p: 1.5, fontFamily: "monospace", fontSize: "0.85rem" }}>
+              <pre style={{ margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-all" }}>
+                {typeof hitlData.interrupt_data === "string"
+                  ? hitlData.interrupt_data
+                  : JSON.stringify(hitlData.interrupt_data, null, 2)}
+              </pre>
+            </Paper>
+          )}
+        </DialogContent>
+        <DialogActions sx={{ px: 2, pb: 2 }}>
+          <Button onClick={handleHitlReject} color="inherit" disabled={hitlLoading}>
+            取消
+          </Button>
+          <Button onClick={handleHitlApprove} variant="contained" color="warning" disabled={hitlLoading}>
+            确认执行
+          </Button>
+        </DialogActions>
+      </Dialog>
     </>
   );
 }
