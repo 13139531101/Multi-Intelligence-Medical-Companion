@@ -1,5 +1,4 @@
 import React, { useState } from "react";
-import ReactMarkdown from "react-markdown";
 import {
   Box, Drawer, Fab, IconButton, Typography, TextField, Button, Stack,
   Avatar, Paper, Chip, LinearProgress,
@@ -9,6 +8,18 @@ import { useNavigate } from "react-router-dom";
 
 // 阶段48-6: 浮动智能体快速按钮 (FAB)
 // 任何页面都能调出 → 调用 /v2/chat/stream → 自动归属到合适的 agent
+
+// formatInline: 和 NewChat.jsx 一样的 markdown 行内渲染
+const formatInline = (text) => {
+  return text
+    .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+    .replace(
+      /`(.+?)`/g,
+      '<code style="background:rgba(0,0,0,0.06);padding:0 4px;border-radius:3px;font-family:monospace;font-size:0.9em">$1</code>',
+    )
+    .replace(/\n/g, "<br/>");
+};
+
 export default function AgentQuickFab() {
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
@@ -48,7 +59,12 @@ export default function AgentQuickFab() {
             if (m) {
               try {
                 const p = JSON.parse(m.slice(6));
-                if (p.text) { text += p.text; setReply(text); }
+                if (p.text) {
+                  console.log("[FAB] raw chunk:", JSON.stringify(p.text));
+                  text += p.text;
+                  setReply(text);
+                  console.log("[FAB] reply state:", JSON.stringify(text));
+                }
               } catch { /* ignore */ }
             }
           } else if (ev.includes('event: routing')) {
@@ -160,9 +176,11 @@ export default function AgentQuickFab() {
                     ))}
                   </Stack>
                 )}
-                <Typography variant="body2" component="div" sx={{ whiteSpace: "pre-wrap" }}>
-                  <ReactMarkdown>{reply}</ReactMarkdown>
-                </Typography>
+                <div
+                  dangerouslySetInnerHTML={{ __html: formatInline(reply) }}
+                  style={{ whiteSpace: "pre-wrap", fontFamily: "inherit" }}
+                  ref={el => { if (el) console.log("[FAB] rendered HTML:", el.innerHTML); }}
+                />
               </Paper>
             )}
             {loading && <LinearProgress sx={{ mt: 1 }} />}
