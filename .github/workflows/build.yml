@@ -59,12 +59,12 @@ jobs:
       - name: Verify Dockerfile exists
         id: check
         run: |
-          if [ -f "${{ matrix.target.dockerfile }}" ]; then
+          if [ -f "${{ matrix.dockerfile }}" ]; then
             echo "exists=true" >> $GITHUB_OUTPUT
-            echo "::notice::Building ${{ matrix.target.name }} from ${{ matrix.target.dockerfile }}"
+            echo "::notice::Building ${{ matrix.name }} from ${{ matrix.dockerfile }}"
           else
             echo "exists=false" >> $GITHUB_OUTPUT
-            echo "::error::Dockerfile not found: ${{ matrix.target.dockerfile }}"
+            echo "::error::Dockerfile not found: ${{ matrix.dockerfile }}"
           fi
 
       - name: Login to Aliyun Container Registry
@@ -84,12 +84,12 @@ jobs:
         if: steps.check.outputs.exists == 'true'
         uses: docker/build-push-action@v5
         with:
-          context: ${{ matrix.target.context }}
-          file: ${{ matrix.target.dockerfile }}
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
           push: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/refactor/v2' || startsWith(github.ref, 'refs/tags/v')) }}
           tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-${{ matrix.target.name }}:${{ steps.vars.outputs.sha }}
-            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-${{ matrix.target.name }}:latest
+            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-${{ matrix.name }}:${{ steps.vars.outputs.sha }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-${{ matrix.name }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
           platforms: linux/amd64
@@ -98,8 +98,8 @@ jobs:
       - name: Build summary
         if: always()
         run: |
-          echo "### ${{ matrix.target.name }}" >> $GITHUB_STEP_SUMMARY
-          echo "${{ matrix.target.description }}" >> $GITHUB_STEP_SUMMARY
-          echo "Dockerfile: \`${{ matrix.target.dockerfile }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "### ${{ matrix.name }}" >> $GITHUB_STEP_SUMMARY
+          echo "${{ matrix.description }}" >> $GITHUB_STEP_SUMMARY
+          echo "Dockerfile: \`${{ matrix.dockerfile }}\`" >> $GITHUB_STEP_SUMMARY
           echo "SHA: \`${{ steps.vars.outputs.sha }}\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
