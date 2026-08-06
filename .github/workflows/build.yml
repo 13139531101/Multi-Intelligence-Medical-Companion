@@ -91,7 +91,7 @@ jobs:
             ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-${{ matrix.name }}:${{ steps.vars.outputs.sha }}
             ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-${{ matrix.name }}:latest
           cache-from: type=gha,disabled=true
-          cache-to: type=gha,mode=max
+          cache-to: type=gha,disabled=true
           platforms: linux/amd64
         continue-on-error: true
 
