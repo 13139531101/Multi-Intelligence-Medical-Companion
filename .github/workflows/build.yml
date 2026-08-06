@@ -47,6 +47,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # 完整 clone，防止 shallow 导致文件缺失
 
       - name: Set short SHA
         id: vars
