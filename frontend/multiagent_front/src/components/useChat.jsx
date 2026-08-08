@@ -183,6 +183,14 @@ export function ChatProvider({ children }) {
       switch (eventName) {
         case "RUN_STARTED":
         case "TEXT_MESSAGE_END":
+          // 流结束时一次性渲染完整内容，确保 formatInline 能正确匹配 markdown
+          dispatch({
+            type: "aiPatch",
+            id: aiId,
+            patch: { content: curContent, isStreaming: false },
+          });
+          return;
+
         case "TOOL_CALL_END":
           return; // 标记位, 无 UI 动作
 
@@ -196,6 +204,7 @@ export function ChatProvider({ children }) {
           return;
 
         case "TEXT_MESSAGE_CONTENT":
+          // 流式过程中：累积 content，dispatch 让 Bubble 用 textContent 渲染（无 markdown）
           curContent += payload.delta || "";
           dispatch({
             type: "aiPatch",

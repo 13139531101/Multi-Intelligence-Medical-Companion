@@ -216,7 +216,13 @@ function Bubble({ msg }) {
           }}
         >
           {msg.content && (
-            <span dangerouslySetInnerHTML={{ __html: formatInline(msg.content) }} />
+            <span
+              dangerouslySetInnerHTML={{
+                __html: msg.isStreaming
+                  ? msg.content  // 流式中：纯文本，避免不完整 markdown 匹配失败
+                  : formatInline(msg.content)  // 流结束：渲染 markdown
+              }}
+            />
           )}
         </Box>
         {/* 工具调用展示 */}
