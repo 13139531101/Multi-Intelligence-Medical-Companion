@@ -175,9 +175,9 @@ export default function ChatPanel() {
 const formatInline = (text) => {
   if (!text) return "";
   return text
-    .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+    .replace(/\s*\*\*(.+?)\s*\*\*/g, "<strong>$1</strong>")
     .replace(
-      /`(.+?)`/g,
+      /\s*`(.+?)`\s*/g,
       '<code style="background:rgba(0,0,0,0.06);padding:0 4px;border-radius:3px;font-family:monospace;font-size:0.9em">$1</code>',
     )
     .replace(/\n/g, "<br/>");
