@@ -67,7 +67,7 @@ def delete_record_node(state):
 | 阶段 | 内容 |
 |------|------|
 | **Stage 1** | Self-RAG 风格的"检索评估"，判断检索结果是否有用 | ✅ **已实现** (2026-08-02) |
-| **Stage 2** | 多跳检索：复杂问题跨档案/跨时间推理 | ❌ 未实现 |
+| **Stage 2** | 多跳检索：复杂问题跨档案/跨时间推理 | ✅ **已实现** (2026-08-08) |
 | **Stage 3** | 知识图谱增强：把档案里的实体关系抽出来 | ❌ 未实现 |
 
 ### 2.3 影响分析
@@ -333,6 +333,39 @@ def clarify_node(state):
 - `EMBEDDING_DIM=1024`（百炼要求 64-3072）
 - `EMBEDDING_API_KEY=sk-ws-...`（百炼 ws- 前缀 key）
 
+
+---
+## 十三、2026-08-08 实现记录
+
+### Magentic RAG Stage 2 — 多跳检索 ✅
+
+**多跳流程**：
+```
+detect_record_types()       → LLM 识别 query 涉及哪些档案类型
+        ↓
+Hop1: retrieve_chunks_by_type() 并行检索每种类型
+        ↓
+Hop2: 跨类型增强检索 — 用其他类型结果补充每个子 query 再检索
+        ↓
+merge: 合并所有 chunks，去重，按 score 排序
+        ↓
+evaluate_chunks() — LLM 评估最终结果
+```
+
+**核心文件**：
+- `backend/A2AServer/src/A2AServer/v2/magnetic_rag.py`
+  - `detect_record_types()` — LLM 判断档案类型（blood_pressure / medication / lab_result 等）
+  - `multi_hop_rag_search()` — 多跳主入口
+  - `_chunks_to_text()` — chunks 转摘要文本，拼入下一跳 query
+  - `retrieve_chunks_by_type()` — 按 source_type 过滤检索
+
+**效果**：
+- 优于单跳：跨档案关联分析（如"吃药和血压的关联"需要同时检索 medication + blood_pressure）
+- 默认启用，search() 直接走多跳
+
+**改动**：
+- `magnetic_rag.py` 新增 ~200 行
+- `host_graph.py` rag_retrieve_node import 路径改为 `from .magnetic_rag import search`
 
 ---
 ## 十二、参考资源
