@@ -74,7 +74,6 @@ jobs:
           registry: ${{ env.REGISTRY }}
           username: ${{ secrets.ALIYUN_REGISTRY_USER }}
           password: ${{ secrets.ALIYUN_REGISTRY_PASSWORD }}
-        continue-on-error: true
 
       - name: Set up Docker Buildx
         if: steps.check.outputs.exists == 'true'
