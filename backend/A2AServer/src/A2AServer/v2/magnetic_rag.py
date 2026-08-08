@@ -1,14 +1,13 @@
 """
-PHA v2 Magentic RAG (Self-RAG 风格) — 阶段1
+PHA v2 Magentic RAG (Self-RAG 风格) — Stage 1 + Stage 2
 
-核心思想：让检索"智能化"，不只是匹配关键词，而是：
-1. should_retrieve  — LLM 判断是否需要检索
-2. rewrite_query   — 改写 query 提升检索效果（可选）
-3. retrieve_chunks — 调用 RAGStore.search()
-4. evaluate_chunks — LLM 评估检索结果是否相关
-5. retry / skip    — 根据评估结果决定下一步
+Stage 1 (单轮检索):
+  should_retrieve → retrieve → evaluate → 可选 rewrite 重试
 
-Stage 1: 单轮检索 + 评估，不相关时重写一次 query 再检索
+Stage 2 (多跳检索):
+  detect_record_types → Hop1 并行按类型检索 → Hop2 跨类型增强检索 → merge
+
+默认导出 search() 走 Stage 2 多跳，效果优于单跳。
 """
 from __future__ import annotations
 
@@ -466,22 +465,235 @@ def format_rag_context(chunks: List[Any], max_chars: int = 1500) -> str:
 
 
 # ============================================================
-# 单例快捷调用
+# Stage 2: 多跳检索 — detect → parallel_hop1 → synthesize_hop2 → merge
 # ============================================================
-_async_search = magnetic_rag_search
+
+# PHA 健康档案类型枚举
+RECORD_TYPES = [
+    "blood_pressure",   # 血压记录
+    "blood_sugar",      # 血糖记录
+    "medication",       # 用药记录
+    "lab_result",       # 检验报告
+    "visit_summary",    # 就诊摘要
+    "health_record",    # 健康档案（通用）
+    "symptom",          # 症状记录
+]
 
 
+async def detect_record_types(query: str) -> List[str]:
+    """
+    LLM 判断 query 涉及哪些档案类型。
+
+    Args:
+        query: 用户问题
+
+    Returns:
+        档案类型列表，如 ["blood_pressure", "medication"]
+    """
+    llm = _get_llm()
+    if llm is None:
+        # LLM 不可用时，搜全部类型
+        return list(RECORD_TYPES)
+
+    try:
+        from langchain_core.messages import HumanMessage
+
+        prompt = f"""你是一个健康档案类型分类器。
+
+用户问题：{query}
+
+可用档案类型：
+- blood_pressure: 血压记录
+- blood_sugar: 血糖记录
+- medication: 用药记录、服药历史
+- lab_result: 检验报告（血常规、生化等）
+- visit_summary: 就诊摘要、出院小结
+- health_record: 综合健康档案、体检报告
+- symptom: 症状描述、不适记录
+
+判断这个问题需要查询哪些档案类型来回答。
+只要可能相关的都列出来，但不要列不相关的。
+
+输出 JSON 格式，不要其他内容：
+{{"types": ["type1", "type2"]}}"""
+
+        result = await llm.ainvoke([HumanMessage(content=prompt)])
+        content = (result.content or "").strip()
+
+        if "```json" in content:
+            content = content.split("```json")[1].split("```")[0]
+        elif "```" in content:
+            content = content.split("```")[1].split("```")[0]
+
+        parsed = json.loads(content.strip())
+        types = parsed.get("types", [])
+        # 过滤，只保留已知的类型
+        valid = [t for t in types if t in RECORD_TYPES]
+        logger.info("[multi_hop] detect types: %s query=%s", valid, query[:30])
+        return valid or list(RECORD_TYPES)
+
+    except Exception as e:
+        logger.warning("[multi_hop] detect_record_types 失败: %s", e)
+        return list(RECORD_TYPES)
+
+
+async def retrieve_chunks_by_type(
+    query: str,
+    user_id: str,
+    source_type: str,
+    top_k: int = DEFAULT_TOP_K,
+) -> List[Any]:
+    """按档案类型过滤检索"""
+    try:
+        from .rag import get_rag_store
+        rag_store = get_rag_store()
+        results = await rag_store.search(
+            user_id=user_id,
+            query=query,
+            top_k=top_k,
+            source_type=source_type,
+        )
+        return results
+    except Exception as e:
+        logger.warning("[multi_hop] retrieve by type %s failed: %s", source_type, e)
+        return []
+
+
+def _chunks_to_text(chunks: List[Any], max_per_type: int = 3) -> str:
+    """把 chunks 转成摘要文本，用于拼入下一跳 query"""
+    lines = []
+    for c in chunks[:max_per_type]:
+        text = getattr(c, "chunk_text", str(c))
+        stype = getattr(c, "source_type", "")
+        if len(text) > 200:
+            text = text[:200] + "..."
+        lines.append(f"[{stype}] {text}")
+    return "\n".join(lines) if lines else ""
+
+
+async def multi_hop_rag_search(
+    query: str,
+    user_id: str,
+    target_agent: str = "health_advisor",
+    top_k: int = DEFAULT_TOP_K,
+) -> RetrievalResult:
+    """
+    Stage 2 多跳检索：
+
+    Hop 1 — detect_record_types 识别档案类型 → 并行检索每类
+    Hop 2 — 对每类，用其他类的结果文本补充 query → 再检索
+    Merge  — 合并所有 chunks，按 score 排序
+
+    效果优于单跳的关键：
+    - 避免单一类型检索遗漏相关档案
+    - 跨类型结果相互补充（如"血压高+最近吃了什么药"）
+    """
+    # Step 1: 判断是否需要检索
+    needed = await should_retrieve(query, target_agent)
+    if not needed:
+        return RetrievalResult(
+            chunks=[], score=0.0, is_relevant=False,
+            reason="不需要检索", rewrite_count=0, query=query,
+            retrieval_needed=False,
+        )
+
+    # Step 2: 检测档案类型
+    types = await detect_record_types(query)
+    logger.info("[multi_hop] detected types: %s for query=%s", types, query[:30])
+
+    # Step 3: Hop 1 — 并行检索每个类型
+    all_chunks: Dict[str, List[Any]] = {}
+    hop1_results = {}
+    for rtype in types:
+        chunks = await retrieve_chunks_by_type(query, user_id, rtype, top_k)
+        all_chunks[rtype] = chunks
+        hop1_results[rtype] = chunks
+        logger.info("[multi_hop] hop1 %s: got %d chunks", rtype, len(chunks))
+
+    # Step 4: Hop 2 — 对每个类型，用其他类型结果丰富 query 再检索
+    # 构建跨类型上下文文本
+    cross_context = _chunks_to_text(sum(all_chunks.values(), []), max_per_type=2)
+
+    hop2_chunks_by_type: Dict[str, List[Any]] = {}
+    for rtype in types:
+        # 构造增强 query：原 query + 其他类型上下文
+        other_context = "\n".join(
+            _chunks_to_text(chunks, max_per_type=2)
+            for other_type, chunks in all_chunks.items()
+            if other_type != rtype and chunks
+        )
+        if other_context:
+            enhanced_query = (
+                f"原始问题：{query}\n\n"
+                f"相关档案信息：\n{other_context}\n\n"
+                f"请根据上述信息，进一步查找与【{rtype}】相关的具体内容："
+            )
+        else:
+            enhanced_query = query
+
+        chunks = await retrieve_chunks_by_type(enhanced_query, user_id, rtype, top_k)
+        hop2_chunks_by_type[rtype] = chunks
+        logger.info("[multi_hop] hop2 %s: got %d chunks (enhanced)", rtype, len(chunks))
+
+    # Step 5: 合并所有 chunks，去重（按 chunk_id）
+    seen_ids = set()
+    merged: List[Any] = []
+    for rtype in types:
+        # hop2 优先级更高，先加 hop2
+        for c in hop2_chunks_by_type.get(rtype, []):
+            cid = getattr(c, "chunk_id", id(c))
+            if cid not in seen_ids:
+                seen_ids.add(cid)
+                merged.append(c)
+        # 再加 hop1 里没有的
+        for c in hop1_results.get(rtype, []):
+            cid = getattr(c, "chunk_id", id(c))
+            if cid not in seen_ids:
+                seen_ids.add(cid)
+                merged.append(c)
+
+    # 按 score 降序
+    merged.sort(key=lambda x: getattr(x, "score", 0.0), reverse=True)
+    final_chunks = merged[: top_k * 2]  # 多取一些让 evaluate 充分
+
+    # Step 6: 评估合并结果
+    evaluation = await evaluate_chunks(query, final_chunks)
+
+    logger.info(
+        "[multi_hop] done: types=%s hop1_total=%d hop2_total=%d merged=%d "
+        "is_relevant=%s score=%.2f query=%s",
+        types,
+        sum(len(v) for v in hop1_results.values()),
+        sum(len(v) for v in hop2_chunks_by_type.values()),
+        len(final_chunks),
+        evaluation["is_relevant"], evaluation["score"], query[:30]
+    )
+
+    return RetrievalResult(
+        chunks=final_chunks,
+        score=evaluation["score"],
+        is_relevant=evaluation["is_relevant"],
+        reason=evaluation["reason"],
+        rewrite_count=0,
+        query=query,
+        retrieval_needed=True,
+    )
+
+
+# ============================================================
+# 单例快捷调用（默认走多跳 Stage 2）
+# ============================================================
 async def search(
     query: str,
     user_id: str = "default",
     target_agent: str = "health_advisor",
 ) -> RetrievalResult:
     """
-    快捷调用：magnetic_rag_search(user_id=..., query=..., target_agent=...)
+    快捷调用：默认走 Stage 2 多跳检索
 
     用法示例：
-        result = await magnetic_rag.search("血压偏高吃什么好", user_id="user123")
+        result = await magnetic_rag.search("血压和用药有什么关系", user_id="user123")
         if result.is_relevant:
             context = magnetic_rag.format_rag_context(result.chunks)
     """
-    return await _async_search(query=query, user_id=user_id, target_agent=target_agent)
+    return await multi_hop_rag_search(query=query, user_id=user_id, target_agent=target_agent)

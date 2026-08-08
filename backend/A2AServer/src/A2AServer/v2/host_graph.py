@@ -439,7 +439,7 @@ async def rag_retrieve_node(state: HostState) -> dict:
         }
 
     try:
-        from .magnetic_rag import magnetic_rag_search, format_rag_context
+        from .magnetic_rag import search as magnetic_rag_search, format_rag_context
 
         result = await magnetic_rag_search(
             query=query,
