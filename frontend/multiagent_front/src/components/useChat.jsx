@@ -239,6 +239,8 @@ export function ChatProvider({ children }) {
           return;
 
         case "RUN_FINISHED":
+          // 流结束，触发 markdown 渲染
+          dispatch({ type: "aiPatch", id: aiId, patch: { isStreaming: false } });
           return; // finish() 兜底
 
         case "RUN_ERROR":
