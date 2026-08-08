@@ -265,7 +265,7 @@ export function ChatProvider({ children }) {
           dispatch({
             type: "aiPatch",
             id: aiId,
-            patch: { content: curContent },
+            patch: { content: curContent, isStreaming: false },  // chunk 开始就渲染 markdown
           });
           return;
         case "tool_call":
