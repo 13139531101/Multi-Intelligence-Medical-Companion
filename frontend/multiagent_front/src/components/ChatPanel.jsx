@@ -171,6 +171,18 @@ export default function ChatPanel() {
   );
 }
 
+// formatInline: 行内 markdown 渲染
+const formatInline = (text) => {
+  if (!text) return "";
+  return text
+    .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+    .replace(
+      /`(.+?)`/g,
+      '<code style="background:rgba(0,0,0,0.06);padding:0 4px;border-radius:3px;font-family:monospace;font-size:0.9em">$1</code>',
+    )
+    .replace(/\n/g, "<br/>");
+};
+
 function Bubble({ msg }) {
   const isUser = msg.role === "user";
   return (
@@ -203,7 +215,9 @@ function Bubble({ msg }) {
             lineHeight: 1.5,
           }}
         >
-          {msg.content || (msg.isStreaming ? "..." : "")}
+          {msg.content && (
+            <span dangerouslySetInnerHTML={{ __html: formatInline(msg.content) }} />
+          )}
         </Box>
         {/* 工具调用展示 */}
         {msg.toolCalls && msg.toolCalls.length > 0 && (
