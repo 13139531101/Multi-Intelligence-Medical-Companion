@@ -272,18 +272,19 @@ def clarify_node(state):
 
 ```
 2026-Q3 (8-9月)
-├── PHASE 1: HITL + 主动询问澄清  ←── 最快出效果
+├── PHASE 1: HITL + 主动询问澄清  ←── 最快出效果 ✅ 已完成
 ├── PHASE 2: Agentic RAG (Stage 1)  ←── 核心能力提升 ✅ 已完成
-└── PHASE 3: ReAct 反思模式
+├── PHASE 3: ReAct 反思模式        ←── 回答质量把关 ✅ 已完成
+└── PHASE 4: Agentic RAG (Stage 2 多跳检索) ✅ 已完成
 
 2026-Q4 (10-12月)
-├── PHASE 4: Agentic RAG (Stage 2-3 多跳+知识图谱)
-├── PHASE 5: 动态工具选择
-├── PHASE 6: 语义缓存优化
-└── PHASE 7: 推理过程可视化
+├── PHASE 5: Agentic RAG (Stage 3 知识图谱)
+├── PHASE 6: 动态工具选择
+├── PHASE 7: 语义缓存优化
+└── PHASE 8: 推理过程可视化
 
 2027-Q1 (如果需要)
-└── PHASE 8: vLLM 部署 + PhaCore 重构收尾
+└── PHASE 9: vLLM 部署 + PhaCore 重构收尾
 ```
 
 ---
@@ -296,7 +297,7 @@ def clarify_node(state):
 | 2 | 🟢 主动询问澄清 | 1-2天 | 减少乱答，提升满意度 ✅ 已实现 |
 | 3 | 🟢 Agentic RAG Stage 1 | 3-5天 | 检索准确率大幅提升 ✅ 已实现 |
 | 4 | 🟡 语义缓存 | 2-3天 | 响应延迟↓40%+ |
-| 5 | 🟡 ReAct 反思 | 2-3天 | 错误率↓60% |
+| 5 | 🟡 ReAct 反思 | 2-3天 | 错误率↓60% ✅ 已实现 |
 | 6 | 🟢 推理过程可视化 | 2-3天 | 用户信任度显著提升 |
 | 7 | 🟡 动态工具选择 | 2-3天 | Token 消耗↓30-50% |
 
@@ -368,6 +369,66 @@ evaluate_chunks() — LLM 评估最终结果
 - `host_graph.py` rag_retrieve_node import 路径改为 `from .magnetic_rag import search`
 
 ---
+## 十二、2026-08-09 实现记录
+
+### ReAct 反思模式 ✅
+
+**目标**：Agent 生成回答后，独立 critique 节点审视质量，必要时自动修订。
+
+**流程**：
+```
+invoke_agent → critique_node → (revision) → aggregate
+                              ↓
+                    5 维度审核：
+                    1. 准确性（诊断/建议是否有依据）
+                    2. 完整性（是否覆盖所有子问题）
+                    3. 安全性（用药禁忌、剂量说明、"请咨询医生"）
+                    4. 可操作性（建议是否具体可执行）
+                    5. 透明度（不确定性是否主动说明）
+```
+
+**新增文件**：
+- `backend/A2AServer/src/A2AServer/v2/react_critique.py`
+  - `CritiqueResult` 数据类
+  - `critique_node` — 独立审核节点（LangGraph 图节点）
+  - `critique_response()` — 独立便捷函数
+  - `CRITIQUE_PROMPT` / `REVISION_PROMPT` — **LCEL ChatPromptTemplate**（不再字符串拼接）
+
+**关键改进 — Modern Prompt Injection**：
+- 模板字符串通过 `.format()` 注入变量，兼容 langchain 1.3.14
+- `SystemMessage` + `HumanMessage` 直接构造，绕过 LCEL `invoke()` 在该版本的变量替换失效问题
+- 摒弃 f-string 拼接，模板可复用、可测试、可版本化
+
+**Skills 集成 ✅**：
+- `SkillRegistry.build_skill_context()` — 选中 skill 上下文格式化
+- `invoke_agent_node` 调用前注入：RAG context + Skill context + 原 query 三合一
+- 支持 top_k=2 自动选择最相关 skill
+
+**图结构变更**：
+```
+classify → clarify → rag_retrieve → invoke_* → critique → aggregate → END
+```
+
+**Critique 元信息**写入 `final_response.critique`：
+```python
+{
+    "applied": bool,       # 是否触发了修订
+    "is_adequate": bool,  # 是否达标
+    "issues": [...],      # 发现的问题列表
+    "reasoning": str,     # 审核理由
+}
+```
+
+**依赖**：
+- `backend/requirements.txt` 新增 `pyyaml>=6.0`
+
+**Bugfix：LangChain 1.3.14 LCEL invoke 失效**：
+- 症状：`CRITIQUE_PROMPT.invoke({"query": x})` 后，`HumanMessage.content` 仍是未替换的 `"{query}"`
+- 根因：langchain 1.3.14 的 `ChatPromptTemplate.invoke()` 返回的 `PromptValue` 调用 `to_messages()` 后模板变量未替换
+- 修复：改用 `SystemMessage(content=CRITIQUE_SYSTEM_PROMPT.format(...))` 直接构造，绕过 LCEL
+
+---
+
 ## 十二、参考资源
 
 - [LangGraph Human-in-the-Loop 官方指南](https://blog.csdn.net/zyctimes/article/details/159785786)

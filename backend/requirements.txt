@@ -55,6 +55,9 @@ schedule>=1.2.0  # 任务调度
 # 类型检查
 typing-extensions>=4.8.0
 
+# YAML 配置解析
+pyyaml>=6.0
+
 # 测试框架（开发用）
 pytest>=7.4.0
 pytest-asyncio>=0.21.0

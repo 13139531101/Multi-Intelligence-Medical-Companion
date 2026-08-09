@@ -497,6 +497,36 @@ class SkillRegistry:
         ])
         return f"{base}\n\n# 已加载 Skills（自动选择）\n{addons}"
 
+    def build_skill_context(self, skills: List[Skill]) -> str:
+        """
+        构建 skill context 文本，直接拼入用户 query（用于 injection）。
+
+        格式：
+        ## 激活的 Skills（基于当前问题自动选择）
+
+        ### {display_name}
+        {description}
+        提示：{system_prompt_addon}
+
+        Args:
+            user_query: 原始用户问题
+            skills: SkillRegistry.select_skills() 返回的选中技能
+
+        Returns:
+            格式化的 skill context 字符串，可直接拼入 query
+        """
+        if not skills:
+            return ""
+        header = "## 激活的 Skills（基于当前问题自动选择）\n"
+        parts = [header]
+        for s in skills:
+            parts.append(f"### {s.display_name}")
+            parts.append(f"描述：{s.description}")
+            if s.system_prompt_addon:
+                parts.append(f"提示：{s.system_prompt_addon}")
+            parts.append("")  # 空行分隔
+        return "\n".join(parts).strip()
+
 
 # 占位函数（实际指向 @tool 装饰的）
 def _get_health_records_impl(*args, **kwargs): return get_health_records(*args, **kwargs)

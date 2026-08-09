@@ -40,6 +40,13 @@ try:
 except ImportError as e:
     logger.warning("[host_graph] LangGraph 不可用: %s", e)
 
+# ReAct 反思模式 — 在 build_host_graph 之前就导入（模块级需要）
+try:
+    from .react_critique import critique_node as react_critique_node
+except ImportError:
+    react_critique_node = None
+    logger.warning("[host_graph] react_critique 不可用，ReAct 反思跳过")
+
 
 # ============================================================
 # 状态定义：路由决策 + 子 Agent 输出
@@ -104,6 +111,9 @@ class HostState(TypedDict, total=False):
     # === Magentic RAG (Self-RAG Stage 1) ===
     rag_result: dict          # {"chunks": [...], "score": float, "is_relevant": bool, "reason": str, "query": str}
     rag_retrieve_needed: bool  # should_retrieve 判断结果
+    # === ReAct 反思模式 ===
+    critique_result: dict      # {"is_adequate": bool, "issues": [...], "reasoning": str, "suggested_revision": str}
+    final_response_text: str   # critique 修订后的最终文本（critique_node 写入）
 
 
 def _get_query(state) -> str:
@@ -440,6 +450,7 @@ async def rag_retrieve_node(state: HostState) -> dict:
 
     try:
         from .magnetic_rag import search as magnetic_rag_search, format_rag_context
+        from .react_critique import critique_node as react_critique_node
 
         result = await magnetic_rag_search(
             query=query,
@@ -564,6 +575,21 @@ def invoke_agent_node(agent_name: str):
             else:
                 enriched_query = user_query
 
+            # ReAct + Skills: 动态注入 skill context（LCEL 风格，干净拼接）
+            try:
+                from .skills import SkillRegistry
+                skill_reg = SkillRegistry.get()
+                selected_skills = skill_reg.select_skills(enriched_query, top_k=2)
+                if selected_skills:
+                    skill_context = skill_reg.build_skill_context(selected_skills)
+                    enriched_query = f"{skill_context}\n\n{ enriched_query}"
+                    logger.info(
+                        "[skill_inject] skills=%s query=%s",
+                        [s.name for s in selected_skills], user_query[:30]
+                    )
+            except Exception as e:
+                logger.debug("[skill_inject] failed: %s", e)
+
             async for event in agent.stream(
                 enriched_query,
                 state.get("conversation_id", "default"),
@@ -662,10 +688,14 @@ async def aggregate_node(state: HostState) -> dict:
         }
 
     agent_resp = state.get("agent_response", {})
+    # ReAct 反思：优先用 critique 修订后的文本
+    final_text = state.get("final_response_text") or agent_resp.get("content", "")
+    critique_result = state.get("critique_result") or {}
+
     return {
         "final_response": {
             "role": "agent",
-            "content": agent_resp.get("content", ""),
+            "content": final_text,
             "agent": agent_resp.get("agent"),
             "tool_calls": agent_resp.get("tool_calls", []),
             "routing": {
@@ -679,6 +709,13 @@ async def aggregate_node(state: HostState) -> dict:
                 "score": state.get("rag_result", {}).get("score", 0.0),
                 "reason": state.get("rag_result", {}).get("reason", ""),
                 "chunks_count": len(state.get("rag_result", {}).get("chunks", [])),
+            },
+            # ReAct 反思元信息
+            "critique": {
+                "applied": bool(critique_result.get("suggested_revision")),
+                "is_adequate": critique_result.get("is_adequate", True),
+                "issues": critique_result.get("issues", []),
+                "reasoning": critique_result.get("reasoning", ""),
             },
         }
     }
@@ -801,6 +838,7 @@ def build_host_graph(*, use_checkpointer: bool = True, mode: str = "single"):
     g.add_node("classify", classify_node)
     g.add_node("clarify", clarify_node)  # 阶段48-29: 主动询问澄清
     g.add_node("rag_retrieve", rag_retrieve_node)  # Magentic RAG (Self-RAG Stage 1)
+    g.add_node("critique", react_critique_node)  # ReAct 反思模式
     g.add_node("aggregate", aggregate_node)
     # 阶段30新增
     g.add_node("fanout", fanout_node)
@@ -820,7 +858,7 @@ def build_host_graph(*, use_checkpointer: bool = True, mode: str = "single"):
     logger.info("[build_graph] agents=%s node_by_name=%s default=%s", [s.name for s in agents], node_by_name, default_node)
 
     if mode == "single":
-        # Magentic RAG: clarify → rag_retrieve → invoke/aggregate
+        # Magentic RAG: clarify → rag_retrieve → invoke → critique → aggregate
         g.add_edge("clarify", "rag_retrieve")
 
         def _rag_path(state: HostState) -> str:
@@ -850,7 +888,8 @@ def build_host_graph(*, use_checkpointer: bool = True, mode: str = "single"):
         g.add_conditional_edges("rag_retrieve", _rag_path, rag_path_map)
 
         for spec in agents:
-            g.add_edge(spec.node_name, "aggregate")
+            g.add_edge(spec.node_name, "critique")
+        g.add_edge("critique", "aggregate")
         g.add_edge("aggregate", END)
 
     else:
