@@ -468,7 +468,7 @@ def format_rag_context(chunks: List[Any], max_chars: int = 1500) -> str:
 # Stage 2: 多跳检索 — detect → parallel_hop1 → synthesize_hop2 → merge
 # ============================================================
 
-# PHA 健康档案类型枚举
+# PHA 健康档案类型枚举（LLM 分类时用的逻辑类型）
 RECORD_TYPES = [
     "blood_pressure",   # 血压记录
     "blood_sugar",      # 血糖记录
@@ -478,6 +478,18 @@ RECORD_TYPES = [
     "health_record",    # 健康档案（通用）
     "symptom",          # 症状记录
 ]
+
+# RECORD_TYPES → rag_chunks.record_type 列的真实值映射
+# 解决 Stage 2 多跳检索因类型名不匹配导致返回空的问题
+RECORD_TYPE_TO_DB_TYPE = {
+    "blood_pressure": "vital_signs",   # 血压 → vital_signs
+    "blood_sugar":    "vital_signs",   # 血糖 → vital_signs
+    "medication":     "prescription",  # 用药 → prescription
+    "lab_result":     "lab_result",    # 检验报告（直接映射）
+    "visit_summary":  "other",         # 就诊摘要 → other（无对应枚举，用 other）
+    "health_record":  "medical_report",# 健康档案 → medical_report
+    "symptom":        "symptom",       # 症状（直接映射）
+}
 
 
 async def detect_record_types(query: str) -> List[str]:
@@ -540,10 +552,10 @@ async def detect_record_types(query: str) -> List[str]:
 async def retrieve_chunks_by_type(
     query: str,
     user_id: str,
-    source_type: str,
+    record_type: str,
     top_k: int = DEFAULT_TOP_K,
 ) -> List[Any]:
-    """按档案类型过滤检索"""
+    """按 rag_chunks.record_type 列过滤检索（解决 source_type 值不匹配问题）"""
     try:
         from .rag import get_rag_store
         rag_store = get_rag_store()
@@ -551,11 +563,11 @@ async def retrieve_chunks_by_type(
             user_id=user_id,
             query=query,
             top_k=top_k,
-            source_type=source_type,
+            record_type=record_type,
         )
         return results
     except Exception as e:
-        logger.warning("[multi_hop] retrieve by type %s failed: %s", source_type, e)
+        logger.warning("[multi_hop] retrieve by type %s failed: %s", record_type, e)
         return []
 
 
@@ -601,14 +613,15 @@ async def multi_hop_rag_search(
     types = await detect_record_types(query)
     logger.info("[multi_hop] detected types: %s for query=%s", types, query[:30])
 
-    # Step 3: Hop 1 — 并行检索每个类型
+    # Step 3: Hop 1 — 并行检索每个类型（逻辑类型 → DB类型映射）
     all_chunks: Dict[str, List[Any]] = {}
     hop1_results = {}
     for rtype in types:
-        chunks = await retrieve_chunks_by_type(query, user_id, rtype, top_k)
+        db_type = RECORD_TYPE_TO_DB_TYPE.get(rtype, rtype)  # 映射到真实 DB 值
+        chunks = await retrieve_chunks_by_type(query, user_id, db_type, top_k)
         all_chunks[rtype] = chunks
         hop1_results[rtype] = chunks
-        logger.info("[multi_hop] hop1 %s: got %d chunks", rtype, len(chunks))
+        logger.info("[multi_hop] hop1 %s -> %s: got %d chunks", rtype, db_type, len(chunks))
 
     # Step 4: Hop 2 — 对每个类型，用其他类型结果丰富 query 再检索
     # 构建跨类型上下文文本
@@ -631,9 +644,10 @@ async def multi_hop_rag_search(
         else:
             enhanced_query = query
 
-        chunks = await retrieve_chunks_by_type(enhanced_query, user_id, rtype, top_k)
+        db_type = RECORD_TYPE_TO_DB_TYPE.get(rtype, rtype)
+        chunks = await retrieve_chunks_by_type(enhanced_query, user_id, db_type, top_k)
         hop2_chunks_by_type[rtype] = chunks
-        logger.info("[multi_hop] hop2 %s: got %d chunks (enhanced)", rtype, len(chunks))
+        logger.info("[multi_hop] hop2 %s -> %s: got %d chunks (enhanced)", rtype, db_type, len(chunks))
 
     # Step 5: 合并所有 chunks，去重（按 chunk_id）
     seen_ids = set()
@@ -669,13 +683,68 @@ async def multi_hop_rag_search(
         evaluation["is_relevant"], evaluation["score"], query[:30]
     )
 
+    # Step 7: 若评估不通过，rewrite query 后重试完整多跳（Stage 1 重试逻辑嫁接）
+    current_query = query
+    rewrite_count = 0
+    final_chunks_list = final_chunks
+
+    while not evaluation["is_relevant"] and rewrite_count < MAX_REWRITE_COUNT:
+        rewrite_count += 1
+        current_query = await rewrite_query(query, target_agent)
+        if current_query == query:
+            break
+
+        logger.info("[multi_hop] rewrite #%d: %s -> %s", rewrite_count, query[:30], current_query[:30])
+
+        # 重跑完整多跳流程
+        db_types = [RECORD_TYPE_TO_DB_TYPE.get(t, t) for t in types]
+        hop1_chunks = {}
+        for db_type in db_types:
+            chunks = await retrieve_chunks_by_type(current_query, user_id, db_type, top_k)
+            hop1_chunks[db_type] = chunks
+
+        cross_ctx = _chunks_to_text(sum(hop1_chunks.values(), []), max_per_type=2)
+        hop2_chunks = {}
+        for db_type in db_types:
+            other_ctx = "\n".join(
+                _chunks_to_text(c, max_per_type=2)
+                for other_db, c in hop1_chunks.items()
+                if other_db != db_type and c
+            )
+            eq = (f"原始问题：{current_query}\n\n相关档案信息：\n{other_ctx}\n\n"
+                  f"请根据上述信息，进一步查找与【{db_type}】相关的具体内容：") if other_ctx else current_query
+            hop2_chunks[db_type] = await retrieve_chunks_by_type(eq, user_id, db_type, top_k)
+
+        seen_ids2 = set()
+        merged2 = []
+        for db_type in db_types:
+            for c in hop2_chunks.get(db_type, []):
+                cid = getattr(c, "chunk_id", id(c))
+                if cid not in seen_ids2:
+                    seen_ids2.add(cid)
+                    merged2.append(c)
+            for c in hop1_chunks.get(db_type, []):
+                cid = getattr(c, "chunk_id", id(c))
+                if cid not in seen_ids2:
+                    seen_ids2.add(cid)
+                    merged2.append(c)
+        merged2.sort(key=lambda x: getattr(x, "score", 0.0), reverse=True)
+        final_chunks_list = merged2[: top_k * 2]
+
+        evaluation = await evaluate_chunks(query, final_chunks_list)
+
+    logger.info(
+        "[multi_hop] final: is_relevant=%s score=%.2f rewrite_count=%d query=%s",
+        evaluation["is_relevant"], evaluation["score"], rewrite_count, current_query[:30]
+    )
+
     return RetrievalResult(
-        chunks=final_chunks,
+        chunks=final_chunks_list,
         score=evaluation["score"],
         is_relevant=evaluation["is_relevant"],
         reason=evaluation["reason"],
-        rewrite_count=0,
-        query=query,
+        rewrite_count=rewrite_count,
+        query=current_query,
         retrieval_needed=True,
     )
 

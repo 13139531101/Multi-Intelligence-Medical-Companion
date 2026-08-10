@@ -301,6 +301,7 @@ class RAGStore:
         top_k: int = DEFAULT_TOP_K,
         min_score: float = MIN_SIM_THRESHOLD,
         source_type: str = None,
+        record_type: str = None,
     ) -> List[SearchResult]:
         """
         语义检索：
@@ -326,6 +327,9 @@ class RAGStore:
         if source_type:
             sql += " AND source_type = %s"
             params.append(source_type)
+        if record_type:
+            sql += " AND record_type = %s"
+            params.append(record_type)
         sql += " ORDER BY embedding <=> %s::vector LIMIT %s"
         params.extend([q_vec, top_k * 2])  # 取 2 倍再过滤
 
