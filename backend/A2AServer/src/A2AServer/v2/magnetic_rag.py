@@ -670,6 +670,27 @@ async def multi_hop_rag_search(
     merged.sort(key=lambda x: getattr(x, "score", 0.0), reverse=True)
     final_chunks = merged[: top_k * 2]  # 多取一些让 evaluate 充分
 
+    # Step 5.5: 知识图谱扩展 — 从 query 抽实体 → 图扩展 → 补充相关 chunks
+    try:
+        from .knowledge_graph import graph_expand_entities, get_chunks_for_entities
+        kg_entity_ids = await graph_expand_entities(query, user_id, top_k=top_k, max_hops=2)
+        if kg_entity_ids:
+            kg_chunks = await get_chunks_for_entities(kg_entity_ids, user_id, top_k=top_k)
+            # 合并到 final_chunks（去重）
+            seen_ids = {getattr(c, "chunk_id", id(c)) for c in final_chunks}
+            for c in kg_chunks:
+                cid = getattr(c, "chunk_id", id(c))
+                if cid not in seen_ids:
+                    final_chunks.append(c)
+                    seen_ids.add(cid)
+            final_chunks.sort(key=lambda x: getattr(x, "score", 0.0), reverse=True)
+            final_chunks = final_chunks[: top_k * 2]
+            logger.info("[multi_hop] kg expanded: +%d chunks from %d entities", len(kg_chunks), len(kg_entity_ids))
+        else:
+            logger.info("[multi_hop] kg: no entities found in query, skipping expansion")
+    except Exception as e:
+        logger.debug("[multi_hop] kg expansion skipped: %s", e)
+
     # Step 6: 评估合并结果
     evaluation = await evaluate_chunks(query, final_chunks)
 
