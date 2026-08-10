@@ -67,8 +67,8 @@ def delete_record_node(state):
 | 阶段 | 内容 |
 |------|------|
 | **Stage 1** | Self-RAG 风格的"检索评估"，判断检索结果是否有用 | ✅ **已实现** (2026-08-02) |
-| **Stage 2** | 多跳检索：复杂问题跨档案/跨时间推理 | ✅ **已实现** (2026-08-08) |
-| **Stage 3** | 知识图谱增强：把档案里的实体关系抽出来 | ❌ 未实现 |
+| **Stage 2** | 多跳检索：复杂问题跨档案/跨时间推理 | ✅ **已实现** (2026-08-08) + Bugfix (2026-08-10) |
+| **Stage 3** | 知识图谱增强：实体关系抽取 + 图扩展检索 | ✅ **已实现** (2026-08-10) |
 
 ### 2.3 影响分析
 
@@ -275,10 +275,10 @@ def clarify_node(state):
 ├── PHASE 1: HITL + 主动询问澄清  ←── 最快出效果 ✅ 已完成
 ├── PHASE 2: Agentic RAG (Stage 1)  ←── 核心能力提升 ✅ 已完成
 ├── PHASE 3: ReAct 反思模式        ←── 回答质量把关 ✅ 已完成
-└── PHASE 4: Agentic RAG (Stage 2 多跳检索) ✅ 已完成
+├── PHASE 4: Agentic RAG (Stage 2 多跳检索) ✅ 已完成
+└── PHASE 5: Agentic RAG (Stage 3 知识图谱) ✅ 已完成
 
 2026-Q4 (10-12月)
-├── PHASE 5: Agentic RAG (Stage 3 知识图谱)
 ├── PHASE 6: 动态工具选择
 ├── PHASE 7: 语义缓存优化
 └── PHASE 8: 推理过程可视化
@@ -367,6 +367,37 @@ evaluate_chunks() — LLM 评估最终结果
 **改动**：
 - `magnetic_rag.py` 新增 ~200 行
 - `host_graph.py` rag_retrieve_node import 路径改为 `from .magnetic_rag import search`
+
+**Bugfix 2026-08-10**：Stage 2 多跳检索因 RECORD_TYPES 枚举值（`blood_pressure`/`medication`）与 `rag_chunks.record_type` 真实值（`vital_signs`/`prescription`）不一致，`retrieve_chunks_by_type()` 永远返回空列表。
+- 修复：新增 `RECORD_TYPE_TO_DB_TYPE` 映射表，`retrieve_chunks_by_type()` 改用 `record_type` 列过滤
+- 修复：嫁接 Stage 1 rewrite-retry 逻辑到 Stage 2（之前是死代码）
+
+---
+## 十四、2026-08-10 实现记录
+
+### Agentic RAG Stage 3 — 知识图谱 ✅
+
+**目标**：从档案中抽取实体关系，图扩展弥补向量相似不足。
+
+**新增文件**：`backend/A2AServer/src/A2AServer/v2/knowledge_graph.py`
+
+**3 张 KG 表（幂等 `CREATE TABLE IF NOT EXISTS`）**：
+- `kg_entities` — 实体节点（symptom/medication/disease/allergy/vital_sign）
+- `kg_relations` — 关系边（TREATS/CAUSES/MEASURES/CO_OCCURS/PRECEDES/FOLLOWS）
+- `kg_entity_chunks` — 实体↔chunk 关联表
+
+**核心流程**：
+```
+索引时：chunk 文本 → extract_entities_and_relations() → kg 表
+检索时：query → LLM 抽取实体 → graph_expand_entities(1-2跳) → kg_entity_chunks → 关联 chunks
+```
+
+**magnetic_rag.py 集成**：Step 5.5 在 merge 后追加 KG 图扩展补充的 chunks，解决"向量检索文本相似但非相关"的问题。
+
+**验证结果**（"血压高头晕吃什么药"）：
+- ✅ LLM 正确抽取 4 个实体（氨氯地平/高血压/血压/头晕）
+- ✅ 识别出 CO_OCCURS 共现关系
+- ✅ kg_entities / kg_relations 建表成功
 
 ---
 ## 十二、2026-08-09 实现记录
