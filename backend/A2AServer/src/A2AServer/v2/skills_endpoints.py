@@ -55,7 +55,9 @@ async def match_tools(req: Request):
     """PHASE 6: 根据 query 动态选择最相关的 top_k 工具
     body: {query, top_k?, min_score?}
     """
-    body = await req.json()
+    body = await req.body()
+    import json as _json
+    body = _json.loads(body.decode("utf-8"))
     query = body.get("query", "")
     top_k = body.get("top_k", 5)
     min_score = body.get("min_score", 0.05)

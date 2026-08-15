@@ -348,3 +348,37 @@ export const smartChat = async (message) => {
 
 // 导出智能路由 URL 供其他组件使用
 export { SMART_CHAT_URL };
+
+// ============================================================
+// PHASE 6-8 调试面板 API
+// ============================================================
+
+/** PHASE 6: 动态工具选择 */
+export const matchTools = async (query) => {
+  return request('/v2/tools/match', {
+    method: 'POST',
+    body: { query, top_k: 5, min_score: 0.05 },
+  });
+};
+
+/** PHASE 7: 语义缓存状态（从 smart_chat 响应中推断） */
+export const checkCache = async () => {
+  // 语义缓存不提供独立查询接口，从 stats 中获取缓存统计
+  const stats = await request('/v2/models/stats', { method: 'GET' });
+  return stats;
+};
+
+/** PHASE 8: 推理追踪统计 */
+export const getReasoningStats = async () => {
+  return request('/v2/reasoning/stats', { method: 'GET' });
+};
+
+/** PHASE 8: 列出最近推理链 */
+export const listReasoningTraces = async (limit = 20) => {
+  return request(`/v2/reasoning/traces?limit=${limit}`, { method: 'GET' });
+};
+
+/** PHASE 8: 获取单个推理链详情 */
+export const getReasoningTrace = async (traceId) => {
+  return request(`/v2/reasoning/traces/${traceId}`, { method: 'GET' });
+};

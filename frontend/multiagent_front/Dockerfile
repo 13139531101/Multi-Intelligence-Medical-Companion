@@ -50,7 +50,7 @@ RUN echo 'server { \
         proxy_pass http://hostapi:13002/auth/; \
         proxy_set_header Host $host; \
     } \
-    location ~ ^/(health|copilotkit) { \
+    location ~ ^/(health|copilotkit|smart_chat) { \
         proxy_pass http://hostapi:13002/$1; \
         proxy_set_header Host $host; \
     } \

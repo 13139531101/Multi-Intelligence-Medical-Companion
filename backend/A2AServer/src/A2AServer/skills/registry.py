@@ -96,7 +96,7 @@ class PHAToolRegistry:
         self.register(
             name="get_health_records",
             func=get_health_records,
-            description="获取用户的健康档案（诊断、检查报告、过敏史）",
+            description="获取用户的健康档案 health records（诊断 diagnosis、检查报告 lab results、过敏史 allergy）",
             category="medical",
         )
         self.register(
