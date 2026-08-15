@@ -2,8 +2,8 @@
 import json
 import logging
 from fastapi import APIRouter, Request
-from .skills import get_skill_registry, Skill
-from .mcp_loader import get_mcp_loader, MCPStatus
+from ..skills import get_skill_registry, Skill
+from ..mcp.mcp_loader import get_mcp_loader, MCPStatus
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/v2/registry", tags=["registry"])
@@ -69,8 +69,8 @@ async def create_skill(req: Request):
 @router.delete("/skills/{name}")
 async def delete_skill(name: str):
     """删除 skill（不能删 6 个默认的）"""
-    from .skills import DEFAULT_SKILLS
-    default_names = {s.name for s in DEFAULT_SKILLS}
+    from ..skills import SkillRegistry
+    default_names = {"health_records", "medication", "vital_signs", "visit_booking", "drug_query", "general_chat"}
     if name in default_names:
         return {"error": f"cannot delete default skill: {name}"}
     reg = get_skill_registry()
@@ -102,7 +102,7 @@ async def register_mcp(req: Request):
     mcp_type = body.get("type", "http")
     if not name or not url:
         return {"error": "name and url required"}
-    from .mcp_loader import MCPType
+    from ..mcp.mcp_loader import MCPType
     server = get_mcp_loader().register_remote(
         name=name, url=url, mcp_type=MCPType(mcp_type),
         display_name=body.get("display_name"),

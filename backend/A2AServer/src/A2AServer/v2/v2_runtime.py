@@ -304,7 +304,7 @@ class V2AgentRuntime:
                 # 阶段48-21: 拿 agent 的 tool 名字 list 让 manifest 自动匹配危险 tool
                 tool_names: list[str] = []
                 try:
-                    from .mcp_discover import discover_mcp_tools_static, discover_phacore_tools
+                    from ..mcp.mcp_discover import discover_mcp_tools_static, discover_phacore_tools
                     tool_names += [t["name"] for t in discover_mcp_tools_static(agent_name)]
                     tool_names += [t["name"] for t in discover_phacore_tools()]
                     tool_names = list(set(tool_names))   # dedup

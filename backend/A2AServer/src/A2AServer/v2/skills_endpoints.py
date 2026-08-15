@@ -1,7 +1,7 @@
 """阶段41-1: Skill + Tool HTTP 端点"""
 import logging
 from fastapi import APIRouter, Request
-from .skills import get_skill_registry, get_tool_registry
+from ..skills import get_skill_registry, get_tool_registry
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/v2", tags=["skills-tools"])

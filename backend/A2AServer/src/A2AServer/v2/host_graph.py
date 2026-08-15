@@ -577,7 +577,7 @@ def invoke_agent_node(agent_name: str):
 
             # ReAct + Skills: 动态注入 skill context（LCEL 风格，干净拼接）
             try:
-                from .skills import SkillRegistry
+                from ..skills import SkillRegistry
                 skill_reg = SkillRegistry.get()
                 selected_skills = skill_reg.select_skills(enriched_query, top_k=2)
                 if selected_skills:

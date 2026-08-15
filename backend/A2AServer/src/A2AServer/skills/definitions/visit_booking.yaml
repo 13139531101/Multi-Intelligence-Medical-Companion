@@ -1,0 +1,19 @@
+name: visit_booking
+display_name: 门诊预约
+description: 预约挂号、排班查询
+category: service
+tools:
+  - schedule_visit
+system_prompt_addon: |
+  你是一个门诊预约助手。收集 user_id、department、preferred_date 后调用 schedule_visit。
+keywords:
+  - 预约
+  - 挂号
+  - 门诊
+  - appointment
+  - book
+  - visit
+  - 科室
+priority: 55
+enabled: true
+icon: "📅"

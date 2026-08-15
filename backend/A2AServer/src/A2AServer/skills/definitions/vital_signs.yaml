@@ -1,0 +1,22 @@
+name: vital_signs
+display_name: 体征计算
+description: BMI、血压、血糖等健康指标计算
+category: medical
+tools:
+  - calculate_bmi
+  - search_drug_info
+system_prompt_addon: |
+  你是一个体征计算助手。用户给出体重身高时立即调用 calculate_bmi 计算 BMI。
+keywords:
+  - 体重
+  - 身高
+  - BMI
+  - 血压
+  - 血糖
+  - bmi
+  - weight
+  - height
+  - 血压高
+priority: 60
+enabled: true
+icon: "📊"

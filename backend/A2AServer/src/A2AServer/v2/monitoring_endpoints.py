@@ -197,7 +197,7 @@ async def v2_agents_status():
             # 如果 _tools 还是空，从 mcp_discover 查
             if tmp_tools_count == 0:
                 try:
-                    from .mcp_discover import discover_mcp_tools_static
+                    from ..mcp.mcp_discover import discover_mcp_tools_static
                     discovered = discover_mcp_tools_static(agent_name)
                     tmp_tools_count = len(discovered)
                 except Exception:
@@ -302,7 +302,7 @@ async def v2_agent_status(agent_name: str):
         # 如果 _tools 仍空，从 mcp_discover 查
         if tools_count == 0:
             try:
-                from .mcp_discover import discover_mcp_tools_static
+                from ..mcp.mcp_discover import discover_mcp_tools_static
                 discovered = discover_mcp_tools_static(agent_name)
                 tools_count = len(discovered)
                 tool_names = [t.get("name", str(t)) for t in discovered]

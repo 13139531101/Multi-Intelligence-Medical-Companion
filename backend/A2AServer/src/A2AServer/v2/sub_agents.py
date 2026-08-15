@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import List
 
 from .v2_agent import V2Agent
-from .mcp_tool_adapter import load_mcp_tools, load_phacore_tools   # 阶段48-19
+from ..mcp.mcp_tool_adapter import load_mcp_tools, load_phacore_tools   # 阶段48-19
 
 # 阶段48-15: 读 PHA_MCP_TRANSPORT env var 决定 transport 类型
 #   - "streamable_http" (默认, 推荐) → HTTP MCP server (1 process / agent)

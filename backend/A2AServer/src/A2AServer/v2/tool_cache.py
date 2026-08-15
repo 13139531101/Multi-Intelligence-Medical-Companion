@@ -190,7 +190,7 @@ def wrap_tool_with_cache(tool, use_cache: bool = True):
     # 阶段48-13: 检查工具 signature 含 user_id
     try:
         import inspect
-        from .mcp_tool_adapter import _TOOL_SIG_CACHE
+        from ..mcp.mcp_tool_adapter import _TOOL_SIG_CACHE
         sig = _TOOL_SIG_CACHE.get(tool.name)
         if sig and "user_id" in sig.parameters:
             # 这种工具的 user_id 是注入的, 不参与 cache key

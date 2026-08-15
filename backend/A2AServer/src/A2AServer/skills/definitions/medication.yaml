@@ -1,0 +1,22 @@
+name: medication
+display_name: 用药提醒
+description: 管理用户的用药计划，提醒按时服药
+category: medical
+tools:
+  - get_medication_reminders
+  - search_drug_info
+system_prompt_addon: |
+  你是一个用药管理助手。当用户问"今天吃什么药"、"忘了吃药"时，
+  调用 get_medication_reminders 工具获取提醒列表。
+keywords:
+  - 药
+  - 吃
+  - 忘记
+  - 提醒
+  - medication
+  - remind
+  - 吃药
+  - 忘记吃药
+priority: 75
+enabled: true
+icon: "💊"

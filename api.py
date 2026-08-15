@@ -1,4 +1,5 @@
 import logging
+import traceback
 import uuid
 import asyncio
 import anyio
@@ -144,7 +145,7 @@ except Exception as _e:
 
 # 阶段41-2: MCP loader + 可视化
 try:
-    from A2AServer.v2.mcp_endpoints import router as mcp_router
+    from A2AServer.mcp.mcp_endpoints import router as mcp_router
     app.include_router(mcp_router)
     print("[hostapi] v2 mcp mounted: /v2/mcp/* (含 SSE 可视化)")
 except Exception as _e:

@@ -1,0 +1,18 @@
+name: drug_query
+display_name: 药品查询
+description: 查询药品说明书、副作用、禁忌
+category: medical
+tools:
+  - search_drug_info
+system_prompt_addon: |
+  你是一个药品知识助手。调用 search_drug_info 提供药品用法、副作用、禁忌等信息。
+keywords:
+  - 说明书
+  - 副作用
+  - 禁忌
+  - drug
+  - medicine
+  - 什么药
+priority: 50
+enabled: true
+icon: "💉"

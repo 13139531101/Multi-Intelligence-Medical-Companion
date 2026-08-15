@@ -1,0 +1,23 @@
+name: health_records
+display_name: 健康档案
+description: 查询、管理用户的健康档案（诊断、过敏、检查报告）
+category: medical
+tools:
+  - get_health_records
+  - search_drug_info
+system_prompt_addon: |
+  你是一个健康档案管理助手。当用户询问过往疾病、过敏、用药历史时，
+  调用 get_health_records 工具获取详细档案。
+keywords:
+  - 病历
+  - 档案
+  - 过敏
+  - 诊断
+  - 检查
+  - 报告
+  - history
+  - record
+  - allergy
+priority: 80
+enabled: true
+icon: "📋"

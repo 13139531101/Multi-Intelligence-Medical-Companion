@@ -234,7 +234,7 @@ class V2Agent:
 
         try:
             from langchain_core.messages import HumanMessage
-            from .mcp_tool_adapter import set_user_context
+            from ..mcp.mcp_tool_adapter import set_user_context
             if user_id:
                 set_user_context(user_id=user_id, conversation_id=session_id or "")
                 import os as _os
@@ -354,7 +354,7 @@ class V2Agent:
         try:
             # 阶段48-13: set user_id context so MCP tools 自动注入
             try:
-                from .mcp_tool_adapter import set_user_context
+                from ..mcp.mcp_tool_adapter import set_user_context
                 set_user_context(user_id=user_id or "", conversation_id=session_id or "")
                 # 阶段48-13: 同时存到 os.environ (process-level, 跨 asyncio task)
                 if user_id:
