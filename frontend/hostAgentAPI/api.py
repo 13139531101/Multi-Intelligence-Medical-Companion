@@ -147,6 +147,14 @@ try:
 except Exception as _e:
     print(f"[hostapi] skills mount failed: {_e}")
 
+# PHASE 8: 推理过程可视化
+try:
+    from A2AServer.v2.reasoning_endpoints import router as reasoning_router
+    app.include_router(reasoning_router)
+    print("[hostapi] reasoning tracer mounted: /v2/reasoning/*")
+except Exception as _e:
+    print(f"[hostapi] reasoning mount failed: {_e}")
+
 # 阶段41-2: MCP loader + 可视化
 try:
     from A2AServer.v2.mcp_endpoints import router as mcp_router
