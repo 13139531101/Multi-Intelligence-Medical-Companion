@@ -175,8 +175,8 @@ v2.0-stage24
 | PHASE 4 | Agentic RAG Stage 2 多跳检索 | ✅ 已完成 |
 | PHASE 5 | Agentic RAG Stage 3 知识图谱 | ✅ 已完成 |
 | **PHASE 6** | **动态工具选择** | ✅ 已完成 |
-| **PHASE 7** | **语义缓存优化** | **🔜 下一步** |
-| PHASE 8 | 推理过程可视化 | ⏳ |
+| **PHASE 7** | **语义缓存优化** | ✅ 已完成 |
+| **PHASE 8** | **推理过程可视化** | **🔜 下一步** |
 | PHASE 9 | vLLM 部署 + PhaCore 重构收尾 | ⏳ |
 
 ---
