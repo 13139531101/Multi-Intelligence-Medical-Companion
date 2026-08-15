@@ -375,10 +375,39 @@ class ModelRouter:
         max_tokens: int = 2048,
         temperature: float = 0.7,
         prefer_provider: str = None,
+        use_cache: bool = True,
     ) -> ChatResult:
         """
-        智能路由 + fallback
+        智能路由 + fallback + 语义缓存（PHASE 7）
         """
+        # 0. PHASE 7 语义缓存：先查缓存
+        if use_cache:
+            from .semantic_cache import get_cache
+            cache = get_cache()
+            # 转换为 dict 列表供缓存使用
+            msgs_dict = [{"role": m.role, "content": m.content} for m in messages]
+            cached = cache.get(msgs_dict, task_type, max_tokens, temperature)
+            if cached:
+                from dataclasses import dataclass
+                @dataclass
+                class CachedResult:
+                    text: str
+                    provider: str
+                    model: str
+                    prompt_tokens: int = 0
+                    completion_tokens: int = 0
+                    total_tokens: int = 0
+                    latency_ms: float = 0.0
+                    fallback_used: bool = False
+                    error: Optional[str] = None
+                return CachedResult(
+                    text=cached.text,
+                    provider=cached.provider + " (cached)",
+                    model=cached.model,
+                    prompt_tokens=cached.prompt_tokens,
+                    completion_tokens=cached.completion_tokens,
+                )
+
         # 1. 选主 provider
         primary = prefer_provider or TASK_ROUTING.get(task_type, "deepseek")
         chain = [primary] + [p for p in FALLBACK_CHAIN if p != primary]
@@ -386,6 +415,7 @@ class ModelRouter:
         # 2. 尝试每个 provider 直到成功
         last_error = None
         used_fallback = False
+        result = None
         for idx, name in enumerate(chain):
             provider = self._providers.get(name)
             if not provider:
@@ -402,21 +432,39 @@ class ModelRouter:
                 self._record_success(name, result.latency_ms, result.total_tokens)
                 if idx > 0:
                     result.fallback_used = True
-                return result
+                break  # 成功，跳出循环
             except Exception as e:
                 self._record_error(name, str(e))
                 last_error = f"{name}: {e}"
                 logger.warning(f"[router] {name} failed: {e}, trying fallback")
                 continue
 
-        # 3. 全失败
-        return ChatResult(
-            text="",
-            provider="none",
-            model="",
-            latency_ms=0.0,
-            error=last_error or "no provider available",
-        )
+        # 3. PHASE 7 语义缓存：存结果
+        if use_cache and result and result.text:
+            from .semantic_cache import get_cache
+            msgs_dict = [{"role": m.role, "content": m.content} for m in messages]
+            get_cache().set(
+                msgs_dict,
+                result.text,
+                provider=result.provider,
+                model=result.model,
+                task_type=task_type,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                prompt_tokens=result.prompt_tokens,
+                completion_tokens=result.completion_tokens,
+            )
+
+        # 4. 全失败
+        if result is None:
+            return ChatResult(
+                text="",
+                provider="none",
+                model="",
+                latency_ms=0.0,
+                error=last_error or "no provider available",
+            )
+        return result
 
     def stats(self) -> dict:
         return {
