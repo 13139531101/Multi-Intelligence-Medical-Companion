@@ -4,9 +4,9 @@
 > 📊 4 个 sub-agent + 36 工具 + PostgresSaver + AgentRegistry 装饰器
 > 🌐 支持 A2A (企业内) + MCP (工具) + ANP (跨组织 agent 互联网)
 
-## 🚀 v2.0 当前状态 (2026-07-15)
+## 🚀 v2.0 当前状态 (2026-08-15)
 
-**最新**：v2.0-stage33（**33 个 tag 全部完成 + 已推送**）
+**最新**：v2.0-stage37（**Stage 3 知识图谱 + 动态 Skills/MCP 重构完成**）
 
 ### ✅ 核心能力
 
@@ -17,8 +17,10 @@
 | **AgentRegistry 装饰器** | 31 | 加 agent = 1 个 class，其他全自动 |
 | **PostgresSaver 持久化** | 30 | state 写入 PostgreSQL，崩溃恢复 |
 | **LangGraph StateGraph** | 28-29 | LangChain 1.x + LangGraph 1.x |
+| **RAG Stage 1-3** | 34-37 | 多跳检索 + 知识图谱 + 实体关系 |
+| **ReAct + Critique 反思** | 36 | 反思模式 + Skills 动态注入 |
+| **动态 Skills/MCP** | 37 | `skills/` + `mcp/` 目录 YAML 动态加载 |
 | **OAuth2 + JWT** | 24 | GitHub OAuth + JWT 双 token + 轮转 + 限流 |
-| **RAG** | 24 | PGVector + DashScope embedding-v3 + 1024 维 |
 | **多模型协同** | 24 | DeepSeek + Qwen + Claude + Local（路由 + fallback） |
 | **CI/CD** | 24 | GitHub Actions：test + lint + build + release |
 | **写操作审计** | 24 | 5 端点 |
@@ -40,13 +42,17 @@
 ### 🏷️ Tag 历史
 
 ```
-v2.0-stage33-anp                ← 最新 ANP 协议集成
+v2.0-stage37-refactor           ← 最新 动态 Skills/MCP 目录重构
+v2.0-stage36-react              ← ReAct + Critique 反思模式
+v2.0-stage35kg                  ← 知识图谱 + 实体关系抽取
+v2.0-stage34                    ← 多跳 RAG Hop1/Hop2 合并
+v2.0-stage33-anp                ← ANP 协议集成
 v2.0-stage30-orchestration      ← 多 agent 并行 + PostgresSaver
 v2.0-stage29-flow
 v2.0-stage28-e2e
 v2.0-stage28-langgraph
 v2.0-stage24
-... 共 33 个 v2.0 tag 全部推送
+... 共 37 个 v2.0 tag 全部推送
 ```
 
 ### 📈 距完整产品差距
@@ -159,11 +165,19 @@ v2.0-stage24
 - **`SearchTool`:** 深度搜索医疗资讯和研究报告。
 - **`RAGTool`:** 智能检索和资料查找。
 
-## 🚀 下一步开发计划
+## 🚀 下一步开发计划 (2026-Q4)
 
-1.  **环境搭建:** 配置云存储（用于存放上传的图片/文件）和 OCR 服务的 API 密钥。
-2.  **原型开发:** 从“健康档案管理员”和 `DocumentOCRTool` 开始，实现最核心的病历上传和识别功能。
-3.  **功能迭代:** 逐步开发其他智能体和 MCP 工具，并进行集成测试。
+| Phase | 内容 | 状态 |
+|-------|------|------|
+| PHASE 1 | HITL + 主动询问澄清 | ✅ 已完成 |
+| PHASE 2 | Agentic RAG Stage 1 | ✅ 已完成 |
+| PHASE 3 | ReAct 反思模式 | ✅ 已完成 |
+| PHASE 4 | Agentic RAG Stage 2 多跳检索 | ✅ 已完成 |
+| PHASE 5 | Agentic RAG Stage 3 知识图谱 | ✅ 已完成 |
+| **PHASE 6** | **动态工具选择** | **🔜 下一步** |
+| PHASE 7 | 语义缓存优化 | ⏳ |
+| PHASE 8 | 推理过程可视化 | ⏳ |
+| PHASE 9 | vLLM 部署 + PhaCore 重构收尾 | ⏳ |
 
 ---
 
