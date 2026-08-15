@@ -48,3 +48,20 @@ async def call_tool(req: Request):
         name=body.get("name", ""),
         **body.get("args", {}),
     )
+
+
+@router.post("/tools/match")
+async def match_tools(req: Request):
+    """PHASE 6: 根据 query 动态选择最相关的 top_k 工具
+    body: {query, top_k?, min_score?}
+    """
+    body = await req.json()
+    query = body.get("query", "")
+    top_k = body.get("top_k", 5)
+    min_score = body.get("min_score", 0.05)
+    matched = get_tool_registry().select_tools(query, top_k=top_k, min_score=min_score)
+    return {
+        "query": query,
+        "matched": matched,
+        "count": len(matched),
+    }

@@ -88,7 +88,41 @@ class PHAToolRegistry:
     def get(cls) -> "PHAToolRegistry":
         if cls._instance is None:
             cls._instance = PHAToolRegistry()
+            cls._instance._register_default_tools()
         return cls._instance
+
+    def _register_default_tools(self) -> None:
+        """注册 5 个内置工具（阶段41-1 → PHASE 6 动态选择）"""
+        self.register(
+            name="get_health_records",
+            func=get_health_records,
+            description="获取用户的健康档案（诊断、检查报告、过敏史）",
+            category="medical",
+        )
+        self.register(
+            name="get_medication_reminders",
+            func=get_medication_reminders,
+            description="获取用户的用药提醒",
+            category="medical",
+        )
+        self.register(
+            name="calculate_bmi",
+            func=calculate_bmi,
+            description="计算 BMI 体质指数",
+            category="medical",
+        )
+        self.register(
+            name="search_drug_info",
+            func=search_drug_info,
+            description="查询药品信息（用法、副作用、禁忌）",
+            category="medical",
+        )
+        self.register(
+            name="schedule_visit",
+            func=schedule_visit,
+            description="预约门诊",
+            category="service",
+        )
 
     def register(
         self,
@@ -160,6 +194,63 @@ class PHAToolRegistry:
             "by_tool": self._stats,
             "recent_log": self._call_log[-20:],
         }
+
+    def select_tools(self, query: str, top_k: int = 5, min_score: float = 0.05) -> List[Dict[str, Any]]:
+        """根据 query 文本动态选择最相关的 top_k 工具（PHASE 6 动态工具选择）
+
+        评分策略：
+        1. 工具名称精确匹配 → 1.0
+        2. 工具 description 子串匹配 → +0.4（中文友好）
+        3. 工具 description 关键词匹配 → 累计加分
+        4. 类别匹配 → +0.1
+        低于 min_score 的工具不返回
+        """
+        query_lower = query.lower()
+        # 中文字符串没有空格分隔，用 set(query_lower) 按字符匹配
+        # 英文用 split() 按空格/下划线分隔
+        query_words = set(query_lower.split()) if ' ' in query_lower or '_' in query_lower else set(query_lower)
+
+        scored = []
+        for tool in self._tools.values():
+            score = 0.0
+            name = tool["name"].lower()
+            desc = tool.get("description", "").lower()
+            category = tool.get("category", "").lower()
+
+            # 1. 名称精确匹配
+            if query_lower in name or name in query_lower:
+                score = 1.0
+            else:
+                # 2. 中文友好：子串匹配（任意 query word 在 desc 中）
+                has_substring = any(qw in desc for qw in query_words)
+                if has_substring:
+                    score += 0.4
+                # 2b. 大小写不敏感子串（英文词如 BMI）
+                if query_lower in desc:
+                    score += 0.5
+                # 3. 描述关键词匹配（英文/空格分隔语言）
+                desc_words = set(desc.split())
+                overlap = query_words & desc_words
+                if overlap:
+                    score += min(len(overlap) * 0.15, 0.6)
+                # 名称分词匹配
+                name_words = set(name.replace("_", " ").split())
+                name_overlap = query_words & name_words
+                if name_overlap:
+                    score += min(len(name_overlap) * 0.2, 0.4)
+                # 4. 类别匹配
+                if query_words & {category}:
+                    score += 0.1
+
+            if score >= min_score:
+                scored.append((score, tool))
+
+        scored.sort(key=lambda x: -x[0])
+        # 返回时排除 func（不可序列化），只保留可序列化字段
+        return [
+            {k: v for k, v in t.items() if k != "func"}
+            for _, t in scored[:top_k]
+        ]
 
 
 # ============================================================
