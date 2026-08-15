@@ -276,7 +276,8 @@ def clarify_node(state):
 ├── PHASE 2: Agentic RAG (Stage 1)  ←── 核心能力提升 ✅ 已完成
 ├── PHASE 3: ReAct 反思模式        ←── 回答质量把关 ✅ 已完成
 ├── PHASE 4: Agentic RAG (Stage 2 多跳检索) ✅ 已完成
-└── PHASE 5: Agentic RAG (Stage 3 知识图谱) ✅ 已完成
+├── PHASE 5: Agentic RAG (Stage 3 知识图谱) ✅ 已完成（2026-08）
+└── PHASE 5b: 动态 Skills/MCP 重构 ✅ 已完成（2026-08）
 
 2026-Q4 (10-12月)
 ├── PHASE 6: 动态工具选择
@@ -299,7 +300,7 @@ def clarify_node(state):
 | 4 | 🟡 语义缓存 | 2-3天 | 响应延迟↓40%+ |
 | 5 | 🟡 ReAct 反思 | 2-3天 | 错误率↓60% ✅ 已实现 |
 | 6 | 🟢 推理过程可视化 | 2-3天 | 用户信任度显著提升 |
-| 7 | 🟡 动态工具选择 | 2-3天 | Token 消耗↓30-50% |
+| 7 | 🟡 动态工具选择 | 2-3天 | Token 消耗↓30-50% 🔜 下一步 |
 
 ---
 
