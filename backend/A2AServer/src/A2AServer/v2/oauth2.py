@@ -114,12 +114,13 @@ _issue_limiter = _IssueRateLimiter()
 # ============================================================
 # JWT 颁发/校验
 # ============================================================
-def create_access_token(user_id: str, scope: str = "user") -> dict:
-    """颁发 access token"""
+def create_access_token(user_id: str, role: str = "user", scope: str = "user") -> dict:
+    """颁发 access token（PHASE RBAC: 增加 role claim）"""
     now = int(time.time())
     jti = secrets.token_urlsafe(16)
     payload = {
         "sub": user_id,
+        "role": role,
         "scope": scope,
         "type": "access",
         "iat": now,
@@ -133,6 +134,7 @@ def create_access_token(user_id: str, scope: str = "user") -> dict:
         "token_type": "Bearer",
         "expires_in": ACCESS_TOKEN_TTL,
         "scope": scope,
+        "role": role,
         "jti": jti,
     }
 
@@ -196,8 +198,18 @@ async def refresh_tokens(refresh_token: str) -> dict:
     # 撤销旧 refresh
     await revoke_token(old_jti, old_exp)
 
+    # 查用户角色
+    role = "user"
+    try:
+        from .user_store import get_user
+        user = get_user(user_id)
+        if user:
+            role = user.role
+    except Exception:
+        pass
+
     # 颁发新 access + refresh
-    access = create_access_token(user_id)
+    access = create_access_token(user_id, role=role)
     refresh = create_refresh_token(user_id)
     return {
         "access_token": access["access_token"],

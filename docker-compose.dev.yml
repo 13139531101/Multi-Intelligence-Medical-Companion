@@ -5,6 +5,10 @@ services:
       - ./backend/A2AServer/src/A2AServer:/app/A2AServer
       - ./backend:/app/backend
 
+  admin_frontend:
+    volumes:
+      - ./frontend/admin-dashboard/src:/app/src
+
   health_records:
     volumes:
       - ./backend/HealthRecordsManager:/app/HealthRecordsManager

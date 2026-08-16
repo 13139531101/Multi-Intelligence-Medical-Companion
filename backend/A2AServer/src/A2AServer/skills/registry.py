@@ -98,30 +98,35 @@ class PHAToolRegistry:
             func=get_health_records,
             description="获取用户的健康档案 health records（诊断 diagnosis、检查报告 lab results、过敏史 allergy）",
             category="medical",
+            required_role="guest",
         )
         self.register(
             name="get_medication_reminders",
             func=get_medication_reminders,
             description="获取用户的用药提醒",
             category="medical",
+            required_role="guest",
         )
         self.register(
             name="calculate_bmi",
             func=calculate_bmi,
             description="计算 BMI 体质指数",
             category="medical",
+            required_role="guest",
         )
         self.register(
             name="search_drug_info",
             func=search_drug_info,
             description="查询药品信息（用法、副作用、禁忌）",
             category="medical",
+            required_role="guest",
         )
         self.register(
             name="schedule_visit",
             func=schedule_visit,
             description="预约门诊",
             category="service",
+            required_role="user",
         )
 
     def register(
@@ -132,6 +137,7 @@ class PHAToolRegistry:
         category: str = "general",
         version: str = "1.0",
         auth_required: bool = False,
+        required_role: str = "guest",
         **metadata: Any,
     ) -> None:
         tool_name = getattr(func, "tool_name", name) or name
@@ -146,13 +152,14 @@ class PHAToolRegistry:
             "category": category,
             "version": version,
             "auth_required": auth_required,
+            "required_role": required_role,
             "metadata": metadata,
         }
         self._stats.setdefault(tool_name, {
             "call_count": 0, "error_count": 0,
             "total_latency_ms": 0, "last_called_at": 0,
         })
-        logger.info("[tool_registry] registered: %s (%s)", tool_name, category)
+        logger.info("[tool_registry] registered: %s (role=%s, auth=%s)", tool_name, required_role, auth_required)
 
     def call(self, name: str, **kwargs: Any) -> Dict[str, Any]:
         if name not in self._tools:
@@ -165,23 +172,122 @@ class PHAToolRegistry:
             self._stats[name]["call_count"] += 1
             self._stats[name]["total_latency_ms"] += latency
             self._stats[name]["last_called_at"] = time.time()
-            self._call_log.append({"tool": name, "args": kwargs, "success": True, "latency_ms": latency, "ts": time.time()})
+            self._call_log.append({"tool": name, "args": kwargs, "success": True, "latency_ms": latency, "ts": time.time(), "user_id": kwargs.get("user_id", "")})
             if len(self._call_log) > 1000:
                 self._call_log = self._call_log[-500:]
             return {"success": True, "result": result, "latency_ms": latency}
         except Exception as e:
             self._stats[name]["error_count"] += 1
-            self._call_log.append({"tool": name, "args": kwargs, "success": False, "error": str(e), "ts": time.time()})
+            self._call_log.append({"tool": name, "args": kwargs, "success": False, "error": str(e), "ts": time.time(), "user_id": kwargs.get("user_id", "")})
+            return {"success": False, "error": str(e)}
+
+    def call_with_auth(self, name: str, user_id: str, user_role: str, **kwargs: Any) -> Dict[str, Any]:
+        """带 RBAC 权限检查的工具调用"""
+        if name not in self._tools:
+            return {"success": False, "error": f"unknown tool: {name}", "code": "TOOL_NOT_FOUND"}
+
+        tool = self._tools[name]
+        default_role = tool.get("required_role", "guest")
+        # 优先用 admin_api 中的 override，其次用注册时的默认值
+        try:
+            from ..v2.user_store import get_tool_role_override
+            required_role = get_tool_role_override(name) or default_role
+        except Exception:
+            required_role = default_role
+        # 将 user_id 注入 kwargs 供工具使用
+        kwargs = {**kwargs, "user_id": user_id}
+
+        # 权限检查
+        from ..v2.tool_permissions import check_permission, check_admin_only
+        if not check_permission(name, user_role):
+            return {
+                "success": False,
+                "error": f"权限不足: 需要 {required_role} 角色，你当前是 {user_role}",
+                "code": "INSUFFICIENT_PERMISSION",
+            }
+
+        # admin-only 危险工具二次检查
+        if check_admin_only(name) and user_role != "admin":
+            return {
+                "success": False,
+                "error": "危险操作仅管理员可用",
+                "code": "ADMIN_ONLY",
+            }
+
+        # 写操作过审计层
+        from ..v2.tool_permissions import check_write_operation
+        if tool.get("auth_required") or check_write_operation(name):
+            try:
+                from ..v2.write_audit import get_write_guard
+                guard = get_write_guard()
+                decision = guard.check(user_id, "tool_registry", name, kwargs)
+                if not decision.allowed:
+                    return {"success": False, "error": decision.reason or "写操作被拒绝", "code": "WRITE_DENIED"}
+                # 执行工具
+                start = time.time()
+                result = tool["func"].invoke(kwargs) if tool.get("is_structured") else tool["func"](**kwargs)
+                latency = (time.time() - start) * 1000
+                self._stats[name]["call_count"] += 1
+                self._stats[name]["total_latency_ms"] += latency
+                self._stats[name]["last_called_at"] = time.time()
+                guard.record_success(user_id, "tool_registry", name, kwargs)
+                self._call_log.append({"tool": name, "args": kwargs, "success": True, "latency_ms": latency, "ts": time.time(), "user_id": user_id, "user_role": user_role})
+                if len(self._call_log) > 1000:
+                    self._call_log = self._call_log[-500:]
+                return {"success": True, "result": result, "latency_ms": latency}
+            except Exception as e:
+                self._stats[name]["error_count"] += 1
+                try:
+                    from ..v2.write_audit import get_write_guard
+                    get_write_guard().record_error(user_id, "tool_registry", name, kwargs, str(e))
+                except Exception:
+                    pass
+                self._call_log.append({"tool": name, "args": kwargs, "success": False, "error": str(e), "ts": time.time(), "user_id": user_id, "user_role": user_role})
+                return {"success": False, "error": str(e), "code": "ERROR"}
+
+        # 普通工具直接执行
+        start = time.time()
+        try:
+            result = tool["func"].invoke(kwargs) if tool.get("is_structured") else tool["func"](**kwargs)
+            latency = (time.time() - start) * 1000
+            self._stats[name]["call_count"] += 1
+            self._stats[name]["total_latency_ms"] += latency
+            self._stats[name]["last_called_at"] = time.time()
+            self._call_log.append({"tool": name, "args": kwargs, "success": True, "latency_ms": latency, "ts": time.time(), "user_id": user_id, "user_role": user_role})
+            if len(self._call_log) > 1000:
+                self._call_log = self._call_log[-500:]
+            return {"success": True, "result": result, "latency_ms": latency}
+        except Exception as e:
+            self._stats[name]["error_count"] += 1
+            self._call_log.append({"tool": name, "args": kwargs, "success": False, "error": str(e), "ts": time.time(), "user_id": user_id, "user_role": user_role})
             return {"success": False, "error": str(e)}
 
     def list_tools(self, category: Optional[str] = None) -> List[Dict[str, Any]]:
-        return [
-            {"name": t["name"], "description": t["description"],
-             "category": t["category"], "version": t["version"],
-             "auth_required": t["auth_required"], "stats": self._stats.get(t["name"], {})}
-            for t in self._tools.values()
-            if not category or t["category"] == category
-        ]
+        try:
+            from ..v2.user_store import get_tool_role_override
+        except Exception:
+            get_tool_role_override = None
+
+        result = []
+        for t in self._tools.values():
+            if category and t["category"] != category:
+                continue
+            default_role = t.get("required_role", "guest")
+            effective_role = default_role
+            if get_tool_role_override:
+                effective_role = get_tool_role_override(t["name"]) or default_role
+            result.append({
+                "name": t["name"],
+                "description": t["description"],
+                "category": t["category"],
+                "version": t["version"],
+                "auth_required": t["auth_required"],
+                "default_role": default_role,
+                "required_role": effective_role,
+                "is_overridden": get_tool_role_override(t["name"]) is not None if get_tool_role_override else False,
+                "stats": self._stats.get(t["name"], {}),
+            })
+        return result
 
     def get_stats(self) -> Dict[str, Any]:
         total_calls = sum(s["call_count"] for s in self._stats.values())
@@ -417,14 +523,14 @@ class SkillRegistry:
 
     def _register_default_tools(self) -> None:
         registry = PHAToolRegistry.get()
-        for name, func, desc, cat in [
-            ("get_health_records", get_health_records, "获取用户健康档案", "medical"),
-            ("get_medication_reminders", get_medication_reminders, "获取用药提醒", "medical"),
-            ("calculate_bmi", calculate_bmi, "计算 BMI", "medical"),
-            ("search_drug_info", search_drug_info, "查询药品信息", "medical"),
-            ("schedule_visit", schedule_visit, "预约门诊", "service"),
+        for name, func, desc, cat, role in [
+            ("get_health_records", get_health_records, "获取用户健康档案", "medical", "guest"),
+            ("get_medication_reminders", get_medication_reminders, "获取用药提醒", "medical", "guest"),
+            ("calculate_bmi", calculate_bmi, "计算 BMI", "medical", "guest"),
+            ("search_drug_info", search_drug_info, "查询药品信息", "medical", "guest"),
+            ("schedule_visit", schedule_visit, "预约门诊", "service", "user"),
         ]:
-            registry.register(name=name, func=func, description=desc, category=cat)
+            registry.register(name=name, func=func, description=desc, category=cat, required_role=role)
 
     def register_skill(self, skill: Skill) -> None:
         self._skills[skill.name] = skill

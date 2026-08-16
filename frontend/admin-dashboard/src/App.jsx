@@ -36,6 +36,8 @@ import {
   Type,
   Key,
   Box,
+  Users,
+  Shield,
 } from "lucide-react";
 import {
   LineChart,
@@ -53,6 +55,7 @@ import {
 import ToolsPanel from "./components/ToolsPanel";
 import SkillsPanel from "./components/SkillsPanel";
 import MCPPanel from "./components/MCPPanel";
+import UsersPanel from "./components/UsersPanel";
 
 const API_BASE = "/api";
 const API_DIRECT = "http://localhost:13002";
@@ -1431,8 +1434,9 @@ function App() {
     { key: "agents", label: "智能体", icon: Cpu },
     { key: "multi_model", label: "多LLM", icon: Layers },
     { key: "cache", label: "LLM缓存", icon: BarChart3 },
-    { key: "tools", label: "工具", icon: Wrench },
+    { key: "tools", label: "工具权限", icon: Wrench },
     { key: "skills", label: "Skills", icon: Brain },
+    { key: "users", label: "用户管理", icon: Users },
     { key: "mcp", label: "MCP", icon: Plug },
     { key: "memory", label: "记忆", icon: Database },
     { key: "chat_test", label: "聊天测试", icon: MessageSquare },
@@ -1526,6 +1530,7 @@ function App() {
         {activeTab === "cache" && <CacheTab />}
         {activeTab === "tools" && <ToolsPanel />}
         {activeTab === "skills" && <SkillsPanel />}
+        {activeTab === "users" && <UsersPanel />}
         {activeTab === "mcp" && <MCPPanel />}
         {activeTab === "memory" && <MemoryTab />}
         {activeTab === "chat_test" && <ChatTestTab />}

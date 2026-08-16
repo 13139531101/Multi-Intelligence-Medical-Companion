@@ -187,6 +187,14 @@ try:
 except Exception as _e:
     print(f"[hostapi] v2 upload mount failed: {_e}")
 
+# RBAC Admin API: User management + tool permission config
+try:
+    from A2AServer.v2.admin_api import router as admin_router
+    app.include_router(admin_router)
+    print("[hostapi] admin API mounted: /v2/admin/users*, /v2/admin/tools/permissions*")
+except Exception as _e:
+    print(f"[hostapi] admin API mount failed: {_e}")
+
 # 阶段48-22 v2: 业务 record 显式 attach uploaded_files (A+B 架构的 B)
 try:
     from A2AServer.v2.record_attach_api import router as record_attach_router
