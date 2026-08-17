@@ -139,17 +139,50 @@ def main(host, port, agent_prompt_file, model_name, provider, mcp_config_path, a
             port=port,
         )
 
-        # 阶段48-A2A: 挂载 ANP 端点到 /anp
+        # 阶段48-A2A: 挂载纯 Starlette ANP 端点到 /anp
         try:
-            sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
-            from anp_bridge import create_anp_app
-            anp_app = create_anp_app(
-                agent_name="HealthRecordsManager",
-                description="健康档案管理员 - 负责处理健康数据的录入、解析和存储，支持OCR识别",
-                forward_to_a2a=lambda **kw: {"status": "ok"},
-                did_domain="pha.local",
-                prefix="/agent",
-            )
+            from starlette.applications import Starlette
+            from starlette.requests import Request
+            from starlette.responses import JSONResponse
+            import uuid
+
+            _task_mgr = server.task_manager
+
+            anp_app = Starlette()
+
+            async def agent_card(request: Request):
+                return JSONResponse({
+                    "name": "HealthRecordsManager",
+                    "description": "健康档案管理员",
+                    "version": "2.0-stage48-A2A",
+                    "did": "did:wba:pha.local:health_records",
+                    "endpoints": [{"url": "http://health_records:10010/anp", "type": "ANP"}],
+                    "capabilities": {"streaming": True},
+                })
+
+            async def anp_rpc(request: Request):
+                try:
+                    body = await request.json()
+                    method = body.get("method", "")
+                    params = body.get("params", {})
+                    task = params.get("task", {})
+                    user_id = params.get("user_id", "anonymous")
+                    if method == "task/send" and _task_mgr:
+                        from A2AServer.common.A2Atypes import SendTaskRequest
+                        req = SendTaskRequest(params={
+                            "id": task.get("id", str(uuid.uuid4())),
+                            "sessionId": params.get("session_id", str(uuid.uuid4())),
+                            "message": task.get("message", {}),
+                            "metadata": {"user_id": user_id},
+                        })
+                        result = await _task_mgr.on_send_task(req)
+                        return JSONResponse({"jsonrpc": "2.0", "id": body.get("id"), "result": result.model_dump(exclude_none=True) if hasattr(result, 'model_dump') else str(result)})
+                    return JSONResponse({"jsonrpc": "2.0", "id": body.get("id"), "result": {"status": "ok"}})
+                except Exception as e:
+                    return JSONResponse({"jsonrpc": "2.0", "error": {"code": -32603, "message": str(e)}})
+
+            anp_app.add_route("/agent/ad.json", agent_card, methods=["GET"])
+            anp_app.add_route("/agent/rpc", anp_rpc, methods=["POST"])
             server.app.mount("/anp", anp_app)
             logger.info("[ANP] health_records /anp mounted on port %s", port)
         except Exception as anp_e:

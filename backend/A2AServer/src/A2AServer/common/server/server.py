@@ -61,9 +61,15 @@ class A2AServer:
             "/.well-known/agent.json", self._get_agent_card, methods=["GET"]
         )
 
-        # 在应用生命周期内统一调度 Agent 的异步初始化与清理，避免多次创建事件循环
-        self.app.add_event_handler("startup", self._on_startup)
-        self.app.add_event_handler("shutdown", self._on_shutdown)
+        # 在应用生命周期内统一调度 Agent 的异步初始化与清理
+        # 阶段48-A2A: Starlette 0.40+ 移除了 add_event_handler，使用 lifespan 事件
+        from contextlib import asynccontextmanager
+        @asynccontextmanager
+        async def lifespan_wrapper(_app):
+            await self._on_startup()
+            yield
+            await self._on_shutdown()
+        self.app.router.lifespan_context = lifespan_wrapper
 
     def start(self):
         if self.agent_card is None:
@@ -74,7 +80,7 @@ class A2AServer:
 
         import uvicorn
 
-        uvicorn.run(self.app, host=self.host, port=self.port, lifespan="on", log_config=None)
+        uvicorn.run(self.app, host=self.host, port=self.port, log_config=None)
 
     def _get_agent_card(self, request: Request) -> JSONResponse:
         return JSONResponse(self.agent_card.model_dump(exclude_none=True))
