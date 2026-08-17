@@ -193,7 +193,14 @@ try:
     app.include_router(admin_router)
     print("[hostapi] admin API mounted: /v2/admin/users*, /v2/admin/tools/permissions*")
 except Exception as _e:
+    import traceback
+    traceback.print_exc()
     print(f"[hostapi] admin API mount failed: {_e}")
+
+# Direct test endpoint to verify admin routes work
+@app.get("/v2/admin/ping")
+async def admin_ping():
+    return {"status": "pong", "admin": True}
 
 # 阶段48-22 v2: 业务 record 显式 attach uploaded_files (A+B 架构的 B)
 try:

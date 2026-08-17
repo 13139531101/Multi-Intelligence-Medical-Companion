@@ -348,6 +348,67 @@ async def v2_summary():
     return {"summary": f.getvalue()}
 
 
+@router.get("/overview")
+async def v2_overview():
+    """概览端点 — 返回前端期望的结构化数据"""
+    import os
+
+    m = get_metrics()
+    db_ok = False
+    try:
+        import psycopg
+        host = os.getenv("DB_HOST", "postgres")
+        user = os.getenv("DB_USER", "pha")
+        password = os.getenv("DB_PASSWORD", "")
+        dbname = os.getenv("MEMORY_DB_NAME", "personal_health_assistant")
+        conn = psycopg.connect(f"host={host} user={user} password={password} dbname={dbname}", connect_timeout=2)
+        conn.close()
+        db_ok = True
+    except Exception:
+        db_ok = False
+
+    try:
+        with open("/proc/loadavg", "r") as f:
+            load = f.read().split()
+            cpu_percent = min(float(load[0]) * 33, 100)
+    except Exception:
+        cpu_percent = 0
+
+    try:
+        with open("/proc/self/status", "r") as f:
+            status = f.read()
+        vmrss = 0
+        for line in status.split("\n"):
+            if line.startswith("VmRSS:"):
+                vmrss = int(line.split()[1])
+                break
+        mem_percent = round(vmrss / 26214400 * 100, 1) if vmrss else 0
+    except Exception:
+        mem_percent = 0
+
+    return {
+        "system": {
+            "cpu_percent": cpu_percent,
+            "mem_percent": mem_percent,
+            "disk_percent": 0,
+        },
+        "db": {"ok": db_ok},
+        "embedding": {
+            "model": os.getenv("PHA_EMBEDDING_MODEL", "text-embedding-3-small"),
+            "dimension": os.getenv("PHA_EMBEDDING_DIMENSION", "1536"),
+        },
+        "rag": {
+            "chunk_size": os.getenv("PHA_RAG_CHUNK_SIZE", "512"),
+            "chunk_overlap": os.getenv("PHA_RAG_CHUNK_OVERLAP", "50"),
+            "max_chunks": int(os.getenv("PHA_RAG_MAX_CHUNKS", "1000")),
+        },
+        "uptime_sec": m.get("uptime_sec", 0),
+        "tool_cache": m.get("tool_cache", {}),
+        "requests": m.get("requests", {}),
+        "llm_api": m.get("llm_api", {}),
+    }
+
+
 # ============================================================
 # 阶段19：写操作审计端点
 # ============================================================

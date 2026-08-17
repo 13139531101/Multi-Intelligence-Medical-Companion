@@ -306,26 +306,42 @@ def get_cached_crawl(cache_key: str = "default") -> Optional[ANPCrawlResult]:
 # 4. DID Resolution (简版)
 # ============================================================
 
-def resolve_did_to_url(did: str) -> Optional[str]:
+def resolve_did_to_url(did: str, include_anp_path: bool = True) -> Optional[str]:
     """
-    DID:WBA → URL 解析
+    阶段48-A2A: DID:WBA → URL 解析
 
-    实际生产应查 DID 文档（类似 DNS）
-    这里用约定：did:wba:pha.local:<name> → http://<name>:port
+    - 优先从 DomainManifest.service_discovery 读取端口（动态，非硬编码）
+    - fallback 到 legacy 硬编码映射（兼容未配置 DomainManifest 的旧环境）
+    - include_anp_path=True 时返回 /anp 前缀（sub-agent 的 ANP 端点路径）
     """
     if not did.startswith("did:wba:pha.local:"):
         return None
     name = did.split(":")[-1]
-    # 端口约定
+
+    # 1. 从 DomainManifest 读取（阶段48-A2A）
+    try:
+        from .domain_manifest import load_default
+        manifest = load_default()
+        if name in [a.name for a in manifest.agents]:
+            port = manifest.service_discovery.get_port(name)
+            path = "/anp" if include_anp_path else ""
+            return f"http://{name}:{port}{path}"
+    except Exception:
+        pass
+
+    # 2. Legacy fallback（硬编码映射）
     port_map = {
-        "hostapi": 13002,
-        "health_advisor": 10011,
-        "health_records": 10010,
-        "medication_reminder": 10012,
-        "visit_summary": 10013,
+        "hostapi": (13002, False),       # hostapi 的 ANP 在 /anp（hostapi 本身 mount 了 create_hostapi_anp_app）
+        "health_advisor": (10011, True),
+        "health_records": (10010, True),
+        "medication_reminder": (10012, True),
+        "visit_summary": (10013, True),
     }
-    port = port_map.get(name, 10000)
-    return f"http://{name}:{port}"
+    if name in port_map:
+        port, has_anp = port_map[name]
+        path = "/anp" if (include_anp_path and has_anp) else ""
+        return f"http://{name}:{port}{path}"
+    return None
 
 
 __all__ = [

@@ -105,6 +105,22 @@ def main(host, port, agent_prompt_file, model_name, provider, mcp_config_path, a
             port=port,
         )
 
+        # 阶段48-A2A: 挂载 ANP 端点到 /anp
+        try:
+            sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
+            from anp_bridge import create_anp_app
+            anp_app = create_anp_app(
+                agent_name="MedicationReminder",
+                description="用药提醒助手 - 提供智能的用药提醒、复诊预约管理和服药依从性监控服务",
+                forward_to_a2a=lambda **kw: {"status": "ok"},
+                did_domain="pha.local",
+                prefix="/agent",
+            )
+            server.app.mount("/anp", anp_app)
+            logger.info("[ANP] medication_reminder /anp mounted on port %s", port)
+        except Exception as anp_e:
+            logger.warning("[ANP] medication_reminder ANP mount failed: %s", anp_e)
+
         logger.info(f"Starting agent on {host}:{port}")
         server.start()
     except MissingAPIKeyError as e:

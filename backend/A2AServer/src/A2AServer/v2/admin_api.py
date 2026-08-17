@@ -27,6 +27,40 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/v2/admin", tags=["admin"])
 
 
+@router.post("/dev-token")
+async def dev_login(req: Request):
+    """
+    开发环境获取 admin token（无需 GitHub OAuth）。
+    生产环境应删除此端点。
+    """
+    import os
+    if os.getenv("PHA_ENV", "dev") == "production":
+        raise HTTPException(status_code=403, detail="dev endpoint disabled in production")
+    from .oauth2 import create_access_token, create_refresh_token
+    admin_user = get_user("admin")
+    if not admin_user:
+        raise HTTPException(status_code=404, detail="admin user not found")
+    access = create_access_token("admin", role="admin")
+    refresh = create_refresh_token("admin")
+    return {
+        "access_token": access["access_token"],
+        "token_type": "Bearer",
+        "expires_in": access["expires_in"],
+        "refresh_token": refresh["refresh_token"],
+        "refresh_expires_in": refresh["expires_in"],
+        "scope": "admin",
+        "role": "admin",
+        "user_id": "admin",
+    }
+
+
+@router.get("/me")
+async def admin_me(req: Request):
+    """返回当前 admin 用户信息"""
+    user = _get_admin_user(req)
+    return user
+
+
 def _get_admin_user(req: Request) -> dict:
     """验证 admin 角色"""
     auth = req.headers.get("authorization", "")

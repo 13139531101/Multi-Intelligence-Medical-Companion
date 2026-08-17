@@ -1,89 +1,98 @@
 from mcp.server.fastmcp import FastMCP
 import json
-from typing import Dict, Any, List, Optional
 import uuid
 import os
-import requests
 import concurrent.futures
 from datetime import datetime, timedelta
+from typing import Dict, Any, List, Optional
 
 mcp = FastMCP("HealthAdvisorA2AIntegrationTool")
 
-def _normalize_address(addr: str) -> str:
-    try:
-        if addr.startswith("http://") or addr.startswith("https://"):
-            return addr.rstrip("/")
-        host = addr.split("/")[0]
-        svc_map = {
-            "health_records": "10010",
-            "health_advisor": "10011",
-            "medication_reminder": "10012",
-            "visit_summary": "10013",
-        }
-        # Prefer service DNS in container/k8s environments
-        if host in svc_map:
-            return f"http://{host}:{svc_map[host]}"
-        # Accept patterns like service:port
-        if ":" in host:
-            parts = host.split(":", 1)
-            return f"http://{parts[0]}:{parts[1]}"
-        return f"http://{host}"
-    except Exception:
-        return addr
+# 阶段48-A2A: DID → URL 解析（先用硬编码映射，Phase 4 替换为真实 DID Document 查找）
+_DID_PORT_MAP = {
+    "did:wba:pha.local:health_records": "http://health_records:10010",
+    "did:wba:pha.local:health_advisor": "http://health_advisor:10011",
+    "did:wba:pha.local:medication_reminder": "http://medication_reminder:10012",
+    "did:wba:pha.local:visit_summary": "http://visit_summary:10013",
+}
+_NAME_TO_DID = {
+    "health_records": "did:wba:pha.local:health_records",
+    "health_advisor": "did:wba:pha.local:health_advisor",
+    "medication_reminder": "did:wba:pha.local:medication_reminder",
+    "visit_summary": "did:wba:pha.local:visit_summary",
+}
 
-def _fetch_agent_card(base: str) -> Dict[str, Any]:
-    url = f"{_normalize_address(base)}/.well-known/agent.json"
+
+def _resolve_endpoint(agent_address: str) -> str:
+    """阶段48-A2A: 将 agent address 转为 base URL（Phase 4 改为 DID 解析）"""
+    host = agent_address.split("/")[0]
+    svc_map = {
+        "health_records": "http://health_records:10010",
+        "health_advisor": "http://health_advisor:10011",
+        "medication_reminder": "http://medication_reminder:10012",
+        "visit_summary": "http://visit_summary:10013",
+    }
+    if host in svc_map:
+        return svc_map[host]
+    if ":" in host:
+        parts = host.split(":", 1)
+        return f"http://{parts[0]}:{parts[1]}"
+    return f"http://{host}"
+
+
+def _resolve_did(agent_address: str) -> str:
+    """从 agent address 解析出 DID"""
+    host = agent_address.split("/")[0]
+    return _NAME_TO_DID.get(host, f"did:wba:pha.local:{host}")
+
+
+def _fetch_agent_card(agent_address: str) -> Dict[str, Any]:
+    """轻量版 agent card 获取（仅用于从 card 中取 name）"""
+    import requests
+    url = f"{_resolve_endpoint(agent_address)}/.well-known/agent.json"
     try:
         r = requests.get(url, timeout=5)
         r.raise_for_status()
         return r.json()
-    except Exception as e:
-        return {"url": url, "error": "fetch_agent_card_failed", "message": str(e)}
-
-def _resolve_endpoint(agent_address: str) -> str:
-    base = _normalize_address(agent_address)
-    try:
-        card = _fetch_agent_card(agent_address)
-        url = str(card.get("url", base)).rstrip("/")
-        if any(h in url for h in ("127.0.0.1", "localhost")):
-            return base
-        return url
     except Exception:
-        return base
+        return {"name": agent_address.split(":")[0]}
+
 
 def _send_task(agent_endpoint_url: str, tool_instruction_text: str, session_id: Optional[str] = None, user_id: Optional[str] = None) -> Dict[str, Any]:
-    env_uid = None
-    try:
-        env_uid = os.environ.get("A2A_CURRENT_USER_ID") or os.environ.get("USER_ID")
-    except Exception:
-        env_uid = None
-    body = {
-        "jsonrpc": "2.0",
-        "method": "tasks/send",
-        "params": {
+    """
+    阶段48-A2A: 用 ANP RPC 调用其他 Agent（替换 legacy requests.post A2A v1）
+    目标端点: POST /anp/agent/rpc
+    """
+    import asyncio
+    from A2AServer.v2.anp_bridge import call_anp_rpc
+
+    env_uid = os.environ.get("A2A_CURRENT_USER_ID") or os.environ.get("USER_ID")
+    effective_uid = user_id or env_uid or "anonymous"
+    effective_session = session_id or str(uuid.uuid4())
+    did = _resolve_did(agent_endpoint_url)
+
+    params = {
+        "task": {
             "id": str(uuid.uuid4()),
-            "sessionId": session_id or str(uuid.uuid4()),
-            "acceptedOutputModes": ["text", "data"],
             "message": {
                 "role": "user",
                 "parts": [{"type": "text", "text": tool_instruction_text}],
             },
-            "metadata": ({"user_id": (user_id or env_uid)} if (user_id or env_uid) else None),
         },
-        "id": str(uuid.uuid4()),
+        "user_id": effective_uid,
+        "session_id": effective_session,
     }
-    headers = {}
+
+    base_url = _resolve_endpoint(agent_endpoint_url)
     try:
-        token = os.environ.get('HOSTAPI_AUTH_TOKEN') or os.environ.get('A2A_AUTH_TOKEN')
-        if isinstance(token, str) and token.strip():
-            # Ensure Bearer prefix for JWT parsing on server side
-            headers['Authorization'] = f"Bearer {token.strip()}"
-    except Exception:
-        pass
-    try:
-        r = requests.post(_resolve_endpoint(agent_endpoint_url), json=body, headers=headers or None, timeout=45)
-        r.raise_for_status()
-        return r.json()
+        result = asyncio.run(call_anp_rpc(
+            base_url=f"{base_url}/anp",
+            method="task/send",
+            params=params,
+            did=did,
+            timeout=45.0,
+        ))
+        return result
     except Exception as e:
         return {"error": "send_task_failed", "message": str(e)}
 

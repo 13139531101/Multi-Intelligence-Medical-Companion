@@ -26,11 +26,38 @@ function UsersPanel() {
   const [saving, setSaving] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
   const [newUser, setNewUser] = useState({ user_id: "", username: "", role: "user" });
+  const [token, setToken] = useState(null);
+
+  // Get dev admin token on mount
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await fetch(`${API_BASE}/v2/admin/dev-token`, { method: "POST" });
+        if (r.ok) {
+          const data = await r.json();
+          setToken(data.access_token);
+        }
+      } catch (_) {}
+    })();
+  }, []);
+
+  const adminFetch = useCallback(async (url, opts = {}) => {
+    if (!token) throw new Error("not authenticated");
+    return fetch(url, {
+      ...opts,
+      headers: {
+        ...(opts.headers || {}),
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+    });
+  }, [token]);
 
   const load = useCallback(async () => {
+    if (!token) return;
     setLoading(true);
     try {
-      const r = await fetch(`${API_BASE}/v2/admin/users`);
+      const r = await adminFetch(`${API_BASE}/v2/admin/users`);
       if (!r.ok) throw new Error("unauthorized");
       const data = await r.json();
       setUsers(data.users || []);
@@ -39,7 +66,7 @@ function UsersPanel() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [token, adminFetch]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -57,9 +84,8 @@ function UsersPanel() {
   const saveEdit = async (userId) => {
     setSaving(true);
     try {
-      const r = await fetch(`${API_BASE}/v2/admin/users/${userId}/role`, {
+      const r = await adminFetch(`${API_BASE}/v2/admin/users/${userId}/role`, {
         method: "PUT",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ role: editRole }),
       });
       if (!r.ok) {
@@ -80,7 +106,7 @@ function UsersPanel() {
     if (userId === "admin") { showMsg("❌ 不能删除 admin 用户", "error"); return; }
     if (!confirm(`确认删除用户 ${userId}？`)) return;
     try {
-      const r = await fetch(`${API_BASE}/v2/admin/users/${userId}`, { method: "DELETE" });
+      const r = await adminFetch(`${API_BASE}/v2/admin/users/${userId}`, { method: "DELETE" });
       if (!r.ok) {
         const e = await r.json().catch(() => ({}));
         throw new Error(e.detail || "delete failed");
@@ -98,9 +124,8 @@ function UsersPanel() {
       return;
     }
     try {
-      const r = await fetch(`${API_BASE}/v2/admin/users/upsert`, {
+      const r = await adminFetch(`${API_BASE}/v2/admin/users/upsert`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(newUser),
       });
       if (!r.ok) {

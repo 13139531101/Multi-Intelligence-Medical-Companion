@@ -27,10 +27,37 @@ function ToolsPanel() {
   const [editRole, setEditRole] = useState("guest");
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState(null);
+  const [token, setToken] = useState(null);
+
+  // Get dev admin token on mount
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await fetch(`${API_BASE}/v2/admin/dev-token`, { method: "POST" });
+        if (r.ok) {
+          const data = await r.json();
+          setToken(data.access_token);
+        }
+      } catch (_) {}
+    })();
+  }, []);
+
+  const adminFetch = useCallback(async (url, opts = {}) => {
+    if (!token) throw new Error("not authenticated");
+    return fetch(url, {
+      ...opts,
+      headers: {
+        ...(opts.headers || {}),
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+    });
+  }, [token]);
 
   const load = useCallback(async () => {
     try {
-      const r = await fetch(`${API_BASE}/v2/admin/tools/permissions`);
+      if (!token) return;
+      const r = await adminFetch(`${API_BASE}/v2/admin/tools/permissions`);
       if (!r.ok) throw new Error("unauthorized or error");
       const data = await r.json();
       setTools(data.tools || []);
@@ -41,7 +68,7 @@ function ToolsPanel() {
         setTools(r2.ok ? (await r2.json()).tools || [] : []);
       } catch {}
     }
-  }, []);
+  }, [token, adminFetch]);
 
   useEffect(() => {
     load();
@@ -64,9 +91,8 @@ function ToolsPanel() {
     if (!editing) return;
     setSaving(true);
     try {
-      const r = await fetch(`${API_BASE}/v2/admin/tools/${editing.tool_name}/permission`, {
+      const r = await adminFetch(`${API_BASE}/v2/admin/tools/${editing.tool_name}/permission`, {
         method: "PUT",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ role: editRole }),
       });
       if (!r.ok) {
@@ -85,7 +111,7 @@ function ToolsPanel() {
 
   const resetRole = async (toolName) => {
     try {
-      await fetch(`${API_BASE}/v2/admin/tools/${toolName}/permission`, { method: "DELETE" });
+      await adminFetch(`${API_BASE}/v2/admin/tools/${toolName}/permission`, { method: "DELETE" });
       showMsg(`♻ ${toolName} 已恢复默认`, "success");
       load();
     } catch (e) {

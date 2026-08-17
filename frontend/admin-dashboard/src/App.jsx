@@ -38,6 +38,7 @@ import {
   Box,
   Users,
   Shield,
+  Upload,
 } from "lucide-react";
 import {
   LineChart,
@@ -1260,7 +1261,10 @@ function RagTab() {
   const [stats, setStats] = useState(null);
   const [query, setQuery] = useState("高血压");
   const [results, setResults] = useState([]);
-  const [feedback, setFeedback] = useState("");
+  const [uploading, setUploading] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
+  const [uploadMsg, setUploadMsg] = useState("");
+  const fileInputRef = useRef(null);
   const load = useCallback(async () => {
     try {
       setStats(await fetchApi("/v2/rag/stats"));
@@ -1279,6 +1283,33 @@ function RagTab() {
     );
     const data = await r.json();
     setResults(data.results || data || []);
+  };
+  const uploadFile = async (file) => {
+    setUploading(true);
+    setUploadMsg("");
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("user_id", "admin");
+      formData.append("domain", "pha");
+      formData.append("purpose", "health_record");
+      formData.append("metadata", JSON.stringify({ source: "admin_upload" }));
+      const r = await fetch(`${API_BASE}/v2/upload/file`, { method: "POST", body: formData });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.detail || "upload failed");
+      setUploadMsg(`✅ 上传成功: ${file.name} → ${data.file_id || data.id}`);
+      load();
+    } catch (e) {
+      setUploadMsg(`❌ 上传失败: ${e.message}`);
+    } finally {
+      setUploading(false);
+    }
+  };
+  const onDrop = (e) => {
+    e.preventDefault();
+    setDragOver(false);
+    const files = Array.from(e.dataTransfer.files);
+    files.forEach(uploadFile);
   };
   return (
     <div className="space-y-4">
@@ -1299,6 +1330,23 @@ function RagTab() {
               ))}
           </div>
         )}
+      </Card>
+      <Card title="上传文档到RAG" icon={Upload}>
+        <div
+          className={`border-2 border-dashed rounded p-6 text-center cursor-pointer transition-colors mb-3 ${dragOver ? "border-cyan-400 bg-cyan-900/20" : "border-cyan-800 hover:border-cyan-600"}`}
+          onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+          onDragLeave={() => setDragOver(false)}
+          onDrop={onDrop}
+          onClick={() => fileInputRef.current?.click()}
+        >
+          <input ref={fileInputRef} type="file" multiple className="hidden" accept=".txt,.pdf,.doc,.docx,.csv,.md" onChange={(e) => { Array.from(e.target.files).forEach(uploadFile); e.target.value = ""; }} />
+          {uploading ? (
+            <div className="text-cyan-400 text-sm">上传中...</div>
+          ) : (
+            <div className="text-cyan-400 text-sm">拖拽文件到这里，或点击选择<br/><span className="text-cyan-700 text-xs">支持: txt, pdf, doc, docx, csv, md</span></div>
+          )}
+        </div>
+        {uploadMsg && <div className="text-xs text-cyan-300 mb-2">{uploadMsg}</div>}
       </Card>
       <Card title="RAG Search" icon={Search}>
         <div className="flex gap-2 mb-2">
@@ -1451,7 +1499,7 @@ function App() {
 
   const fetchSummary = useCallback(async () => {
     try {
-      setSummary(await fetchApi("/v2/summary"));
+      setSummary(await fetchApi("/v2/overview"));
     } catch (e) {
       console.error(e);
     }

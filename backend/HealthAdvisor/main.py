@@ -163,6 +163,29 @@ def main(
             port=port,
         )
 
+        # 阶段48-A2A: 挂载 ANP 端点到 /anp
+        try:
+            from anp_bridge import create_anp_app
+            import uuid
+
+            _task_mgr = server.task_manager
+
+            def _forward_to_a2a(**kwargs):
+                """临时: 真实调用走 task_send"""
+                return {"status": "ok"}
+
+            anp_app = create_anp_app(
+                agent_name="HealthAdvisor",
+                description="健康顾问 AI - 提供专业的健康咨询与医疗知识库查询服务",
+                forward_to_a2a=_forward_to_a2a,
+                did_domain="pha.local",
+                prefix="/agent",
+            )
+            server.app.mount("/anp", anp_app)
+            logger.info("[ANP] health_advisor /anp mounted on port %s", port)
+        except Exception as anp_e:
+            logger.warning("[ANP] health_advisor ANP mount failed: %s", anp_e)
+
         logger.info(f"Starting agent on {host}:{port}")
         server.start()
     except Exception as e:

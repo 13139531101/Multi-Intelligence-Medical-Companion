@@ -59,6 +59,7 @@ class AgentSpec:
     aliases: List[str] = field(default_factory=list)
     dangerously: bool = False                              # HITL required
     port: Optional[int] = None
+    peers: List[str] = field(default_factory=list)       # 阶段48-A2A: 允许调用的其他 agent 列表
 
     def to_registry_kwargs(self) -> dict:
         """转成 @register_agent 等价的 kwargs."""
@@ -135,6 +136,22 @@ class DomainManifest:
     def dangerous_agents(self) -> List[str]:
         return [a.name for a in self.agents if a.dangerously]
 
+    def can_call(self, caller: str, callee: str) -> bool:
+        """
+        阶段48-A2A: 检查 caller 是否被允许调用 callee（信任边界）。
+        - caller 在 peers 列表中声明了 callee → 允许
+        - callee 未定义 peers（空列表）→ 允许（向后兼容）
+        - caller 未在 manifest 中注册 → 允许（向后兼容）
+        """
+        for a in self.agents:
+            if a.name == caller:
+                peers = a.peers
+                if not peers:  # 空列表表示允许所有
+                    return True
+                return callee in peers
+        # caller 不在 manifest 中，保守允许
+        return True
+
     # -----------------------------------------------------------
     # 加载
     # -----------------------------------------------------------
@@ -183,6 +200,7 @@ class DomainManifest:
                 aliases=ad.get("aliases", []),
                 dangerously=ad.get("dangerously", False),
                 port=ad.get("port"),
+                peers=ad.get("peers", []),   # 阶段48-A2A
             ))
 
         # service_discovery
@@ -241,22 +259,27 @@ def _hardcoded_pha_manifest() -> DomainManifest:
     m.source_path = "<hardcoded>"
     m.domain = DomainConfig(name="pha_legacy", display_name="PHA 默认 (legacy)")
     m.agents = [
+        # 阶段48-A2A: health_advisor 可以调用所有 peer
         AgentSpec(name="health_advisor", display_name="健康顾问",
                   keywords=["头疼", "发烧", "症状", "blood 血压 血糖"],
                   tools_module="health_advisor", phacore_modules=["ocr"],
-                  aliases=["健康顾问"], port=9101),
+                  aliases=["健康顾问"], port=9101,
+                  peers=["health_records", "medication_reminder", "visit_summary"]),
         AgentSpec(name="health_records", display_name="健康档案管理员",
                   keywords=["档案", "体检", "报告"],
                   tools_module="health_records", phacore_modules=["ocr"],
-                  aliases=["健康档案管理员"], port=9102),
+                  aliases=["健康档案管理员"], port=9102,
+                  peers=["health_advisor", "medication_reminder"]),
         AgentSpec(name="medication_reminder", display_name="用药提醒助手",
                   keywords=["药", "提醒", "medication"],
                   tools_module="medication_reminder", phacore_modules=["ocr"],
-                  aliases=["用药提醒助手"], dangerously=True, port=9103),
+                  aliases=["用药提醒助手"], dangerously=True, port=9103,
+                  peers=["health_advisor", "health_records"]),
         AgentSpec(name="visit_summary", display_name="就诊摘要生成器",
                   keywords=["摘要", "总结", "就诊"],
                   tools_module="visit_summary", phacore_modules=[],
-                  aliases=["就诊摘要"], port=9104),
+                  aliases=["就诊摘要"], port=9104,
+                  peers=["health_advisor", "health_records"]),
     ]
     m.host = HostConfig(name="health_advisor", fallback_keywords=["怎么办"])
     return m

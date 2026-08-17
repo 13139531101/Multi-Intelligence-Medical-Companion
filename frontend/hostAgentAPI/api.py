@@ -214,6 +214,21 @@ except Exception as _e:
     print(f"[hostapi] v2 multi-model endpoints mount failed: {_e}")
     traceback.print_exc()
 
+# RBAC Admin API: User management + tool permission config
+try:
+    from A2AServer.v2.admin_api import router as admin_router
+    app.include_router(admin_router)
+    print("[hostapi] admin API mounted: /v2/admin/users*, /v2/admin/tools/permissions*")
+except Exception as _e:
+    import traceback
+    print(f"[hostapi] admin API mount failed: {_e}")
+    traceback.print_exc()
+
+# Direct test endpoint
+@app.get("/v2/admin/ping")
+async def admin_ping():
+    return {"status": "pong", "admin": True}
+
 @app.on_event("startup")
 async def startup_event():
     """应用启动时尝试初始化记忆系统"""
