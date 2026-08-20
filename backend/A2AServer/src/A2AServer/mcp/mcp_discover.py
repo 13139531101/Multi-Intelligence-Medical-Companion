@@ -29,19 +29,29 @@ logger = logging.getLogger(__name__)
 
 # 仓库根目录（兼容不同 cwd）— 阶段28 修复：不用 parents[5]，遍历找到含 backend 的父目录
 _REPO_ROOT = None
-for parent in Path(__file__).resolve().parents:
-    if (parent / "backend").exists():
-        _REPO_ROOT = parent
-        break
-if _REPO_ROOT is None:
-    # fallback 1：env var
-    env_root = os.getenv("PHA_PROJECT_ROOT")
-    if env_root and (Path(env_root) / "backend").exists():
+# fallback 0：env var（最优先，Docker 环境直接设 PHA_PROJECT_ROOT=/app）
+env_root = os.getenv("PHA_PROJECT_ROOT")
+if env_root:
+    if (Path(env_root) / "backend").exists():
         _REPO_ROOT = Path(env_root)
+    elif Path(env_root).exists():
+        _REPO_ROOT = Path(env_root)  # /app 这种直接路径
+if _REPO_ROOT is None:
+    # fallback 1：遍历 __file__ 的 parent，找含 backend 的目录
+    for parent in Path(__file__).resolve().parents:
+        if (parent / "backend").exists():
+            _REPO_ROOT = parent
+            break
 if _REPO_ROOT is None:
     # fallback 2：cwd
     if (Path(os.getcwd()) / "backend").exists():
         _REPO_ROOT = Path(os.getcwd())
+if _REPO_ROOT is None:
+    # fallback 3：Docker 环境（代码在 /app/A2AServer/src/ 下）
+    _file_path = Path(__file__).resolve()
+    if str(_file_path).startswith("/app/"):
+        _REPO_ROOT = _file_path.parents[len(_file_path.parts) - 3]  # /app/
+        logger.info(f"[mcp_discover] Docker fallback REPO_ROOT = {_REPO_ROOT}")
 if _REPO_ROOT is None:
     raise RuntimeError(f"[mcp_discover] 无法定位仓库根目录（找不到 backend 目录）")
 logger.info(f"[mcp_discover] REPO_ROOT = {_REPO_ROOT}")

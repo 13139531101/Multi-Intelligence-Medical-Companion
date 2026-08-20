@@ -2,11 +2,13 @@ from mcp.server.fastmcp import FastMCP
 import json
 import uuid
 import os
+import logging
 import concurrent.futures
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
 
 mcp = FastMCP("HealthAdvisorA2AIntegrationTool")
+logger = logging.getLogger(__name__)
 
 # 阶段48-A2A: DID → URL 解析（先用硬编码映射，Phase 4 替换为真实 DID Document 查找）
 _DID_PORT_MAP = {
@@ -24,16 +26,24 @@ _NAME_TO_DID = {
 
 
 def _resolve_endpoint(agent_address: str) -> str:
-    """阶段48-A2A: 将 agent address 转为 base URL（Phase 4 改为 DID 解析）"""
+    """
+    阶段48-A2A Phase 4: 将 agent address 转为 base URL
+    - 优先用 resolve_did_to_url(DID) 从 DomainManifest 动态查找
+    - fallback 到 host:port 直接拼接
+    """
     host = agent_address.split("/")[0]
-    svc_map = {
-        "health_records": "http://health_records:10010",
-        "health_advisor": "http://health_advisor:10011",
-        "medication_reminder": "http://medication_reminder:10012",
-        "visit_summary": "http://visit_summary:10013",
-    }
-    if host in svc_map:
-        return svc_map[host]
+
+    # 尝试从 DID 解析（DomainManifest 动态发现）
+    try:
+        from A2AServer.v2.anp_crawler import resolve_did_to_url
+        did = _resolve_did(agent_address)
+        url = resolve_did_to_url(did, include_anp_path=False)
+        if url:
+            return url
+    except Exception:
+        pass
+
+    # Fallback：host:port 直接拼接
     if ":" in host:
         parts = host.split(":", 1)
         return f"http://{parts[0]}:{parts[1]}"
@@ -70,6 +80,17 @@ def _send_task(agent_endpoint_url: str, tool_instruction_text: str, session_id: 
     effective_uid = user_id or env_uid or "anonymous"
     effective_session = session_id or str(uuid.uuid4())
     did = _resolve_did(agent_endpoint_url)
+
+    # 阶段48-A2A Phase 5: Peer 信任边界检查
+    try:
+        from A2AServer.v2.domain_manifest import load_default
+        manifest = load_default()
+        callee_name = agent_endpoint_url.split("/")[0].split(":")[0]
+        caller_name = "health_advisor"
+        if not manifest.can_call(caller_name, callee_name):
+            return {"error": "call_not_allowed", "message": f"{caller_name} is not allowed to call {callee_name}"}
+    except Exception as e:
+        logger.warning("[A2A] can_call check failed: %s", e)
 
     params = {
         "task": {

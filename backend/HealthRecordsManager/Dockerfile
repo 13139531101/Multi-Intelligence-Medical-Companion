@@ -6,9 +6,13 @@ WORKDIR /app
 # Install uv CLI via PyPI (avoids GitHub download in build)
 RUN --mount=type=cache,target=/root/.cache/pip pip install uv
 
-# Install service-specific dependencies
-COPY HealthRecordsManager/requirements.txt /tmp/requirements.txt
-RUN --mount=type=cache,target=/root/.cache/pip pip install -r /tmp/requirements.txt
+# Service-specific deps
+COPY HealthRecordsManager/requirements.txt /tmp/service-requirements.txt
+RUN --mount=type=cache,target=/root/.cache/pip pip install -r /tmp/service-requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple || true
+
+# LangChain + 全局依赖（使用 backend 层的 pip cache）
+COPY requirements.txt /tmp/backend-requirements.txt
+RUN --mount=type=cache,target=/root/.cache/pip pip install -r /tmp/backend-requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple || true
 
 COPY . ./
 

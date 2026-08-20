@@ -28,6 +28,15 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def _safe_text(text: str) -> str:
+    """Strip surrogate characters that orjson can't serialize, then truncate."""
+    if not isinstance(text, str):
+        text = str(text)
+    # Remove surrogates that would cause orjson serialization errors
+    text = text.encode("utf-8", "surrogatepass").decode("utf-8", "ignore")
+    return text[:8000]  # safety truncation
+
+
 @click.command(help="启动健康顾问 A2A Server")
 @click.option(
     "--host",
@@ -164,18 +173,26 @@ def main(
         )
 
         # 阶段48-A2A: 挂载纯 Starlette ANP 端点到 /anp
+        # 阶段48-v2-改造: ANP handler → V2Agent.stream()（真正打通 LangGraph）
         try:
             from starlette.applications import Starlette
             from starlette.requests import Request
             from starlette.responses import JSONResponse
+            from starlette.types import ASGIApp
             import uuid
+
+            # ORjsonResponse: handles surrogate characters without errors
+            class ORjsonResponse(JSONResponse):
+                def render(self, content) -> bytes:
+                    import orjson
+                    return orjson.dumps(content)
 
             _task_mgr = server.task_manager
 
             anp_app = Starlette()
 
             async def agent_card(request: Request):
-                return JSONResponse({
+                return ORjsonResponse({
                     "name": "HealthAdvisor",
                     "description": "健康顾问 AI",
                     "version": "2.0-stage48-A2A",
@@ -185,30 +202,148 @@ def main(
                 })
 
             async def anp_rpc(request: Request):
+                """
+                ANP JSON-RPC 2.0 handler → V2Agent.stream()
+
+                改造点：不再走 _task_mgr.on_send_task()（BasicAgent），
+                改为直接调 HealthAdvisorV2().stream()，真正使用 LangGraph。
+                """
                 try:
-                    body = await request.json()
+                    import orjson
+                    raw_body = await request.body()
+                    body_str = raw_body.decode("utf-8", "replace")
+                    body = orjson.loads(body_str)
                     method = body.get("method", "")
                     params = body.get("params", {})
                     task = params.get("task", {})
                     user_id = params.get("user_id", "anonymous")
-                    if method == "task/send" and _task_mgr:
-                        from A2AServer.common.A2Atypes import SendTaskRequest
-                        req = SendTaskRequest(params={
-                            "id": task.get("id", str(uuid.uuid4())),
-                            "sessionId": params.get("session_id", str(uuid.uuid4())),
-                            "message": task.get("message", {}),
-                            "metadata": {"user_id": user_id},
+                    session_id = params.get("session_id", str(uuid.uuid4()))
+
+                    # 阶段48-A2A Phase 1: Ed25519 签名验证
+                    caller_did = request.headers.get("X-ANP-DID")
+                    sig_b64 = request.headers.get("X-ANP-Signature")
+                    ts_str = request.headers.get("X-ANP-Timestamp")
+                    if caller_did and sig_b64 and ts_str:
+                        try:
+                            from A2AServer.v2.did_wba import get_keystore, verify_request
+                            import base64
+                            ks = get_keystore()
+                            doc = ks.get_document(caller_did)
+                            if doc and doc.public_key:
+                                pub_bytes = base64.b64decode(doc.public_key)
+                                ts = float(ts_str)
+                                valid, err = verify_request(pub_bytes, sig_b64, "POST", "/agent/rpc", body_str, timestamp=ts)
+                                if not valid:
+                                    logger.warning("[ANP] signature verify failed for %s: %s", caller_did, err)
+                                    return ORjsonResponse({
+                                        "jsonrpc": "2.0",
+                                        "id": body.get("id"),
+                                        "error": {"code": -32603, "message": f"invalid signature: {err}"},
+                                    })
+                            else:
+                                logger.warning("[ANP] unknown caller DID %s, skipping verify", caller_did)
+                        except Exception as verify_err:
+                            logger.warning("[ANP] verify error %s: %s", caller_did, verify_err)
+
+                    if method == "task/send":
+                        # 提取用户 query（兼容 A2A 和 ANP 两种 message 格式）
+                        message = task.get("message", {})
+                        parts = message.get("parts", [])
+                        if isinstance(parts, list) and parts:
+                            query = parts[0].get("text", "") if isinstance(parts[0], dict) else str(parts[0])
+                        else:
+                            # 兼容纯文本格式
+                            query = message.get("text", "") or message.get("content", "") or str(message)
+
+                        if not query:
+                            return JSONResponse({
+                                "jsonrpc": "2.0",
+                                "id": body.get("id"),
+                                "result": {"status": "ok", "parts": [], "is_task_complete": True},
+                            })
+
+                        logger.info("[ANP:health_advisor] query=%s session=%s user=%s", query[:50], session_id, user_id)
+
+                        # 真正调用 V2Agent.stream() — LangGraph 推理
+                        from A2AServer.v2.sub_agents import HealthAdvisorV2
+                        _model = os.getenv("LLM_MODEL", "deepseek-chat")
+                        agent_instance = HealthAdvisorV2(model=_model)
+                        result_parts = []
+                        is_task_complete = False
+
+                        async for chunk in agent_instance.stream(query, session_id, user_id):
+                            chunk_type = chunk.get("type", "normal")
+                            content = chunk.get("content", "")
+                            if chunk_type == "complete":
+                                is_task_complete = True
+                                break
+                            if chunk_type == "error":
+                                # Return error to client instead of dropping
+                                logger.error("[ANP:health_advisor] stream error: %s", content)
+                                return ORjsonResponse({
+                                    "jsonrpc": "2.0",
+                                    "id": body.get("id"),
+                                    "error": {"code": -32603, "message": str(content)[:500]},
+                                })
+                            if chunk_type in ("normal", "status", "reasoning") and content:
+                                result_parts.append({"type": "text", "text": _safe_text(content)})
+                            elif chunk_type == "tool_result":
+                                raw_output = chunk.get("output", "")
+                                try:
+                                    if isinstance(raw_output, bytes):
+                                        output_text = raw_output.decode("utf-8", errors="replace")
+                                    else:
+                                        output_text = str(raw_output)
+                                except Exception:
+                                    output_text = repr(raw_output)
+                                result_parts.append({"type": "text", "text": f"[{chunk.get('name', 'tool')}: {_safe_text(output_text)}]"})
+
+                        return ORjsonResponse({
+                            "jsonrpc": "2.0",
+                            "id": body.get("id"),
+                            "result": {
+                                "status": "ok",
+                                "parts": result_parts,
+                                "is_task_complete": is_task_complete,
+                            },
                         })
-                        result = await _task_mgr.on_send_task(req)
-                        return JSONResponse({"jsonrpc": "2.0", "id": body.get("id"), "result": result.model_dump(exclude_none=True) if hasattr(result, 'model_dump') else str(result)})
-                    return JSONResponse({"jsonrpc": "2.0", "id": body.get("id"), "result": {"status": "ok"}})
+
+                    return ORjsonResponse({"jsonrpc": "2.0", "id": body.get("id"), "result": {"status": "ok"}})
                 except Exception as e:
-                    return JSONResponse({"jsonrpc": "2.0", "error": {"code": -32603, "message": str(e)}})
+                    import traceback
+                    logger.exception("[ANP:health_advisor] error")
+                    return ORjsonResponse({"jsonrpc": "2.0", "error": {"code": -32603, "message": str(e)[:200]}})
 
             anp_app.add_route("/agent/ad.json", agent_card, methods=["GET"])
             anp_app.add_route("/agent/rpc", anp_rpc, methods=["POST"])
 
+            # 阶段48-A2A: DID Document 端点（供其他 agent bootstrap 时拉取公钥）
+            async def did_document(request: Request):
+                did = request.path_params.get("did", "")
+                try:
+                    from A2AServer.v2.did_wba import get_keystore
+                    ks = get_keystore()
+                    doc = ks.get_document(did) if did else None
+                    if doc:
+                        return ORjsonResponse(doc.to_dict())
+                except Exception:
+                    pass
+                return ORjsonResponse({"error": "DID not found"}, status_code=404)
+
+            anp_app.add_route("/did/document/{did}", did_document, methods=["GET"])
+
             server.app.mount("/anp", anp_app)
+            # 阶段48-A2A: 初始化 DID keystore（生成/加载 Ed25519 密钥）
+            _SELF_DID = "did:wba:pha.local:health_advisor"
+            try:
+                from A2AServer.v2.did_wba import get_keystore, bootstrap_remote_dids
+                ks = get_keystore(self_did=_SELF_DID)
+                logger.info("[ANP] DID keystore initialized, known DIDs: %s", ks.list_dids())
+                # Bootstrap: 从其他 agent 拉取公钥
+                results = asyncio.run(bootstrap_remote_dids(_SELF_DID))
+                logger.info("[ANP] DID bootstrap results: %s", results)
+            except Exception as ks_err:
+                logger.warning("[ANP] DID keystore init failed: %s", ks_err)
             logger.info("[ANP] health_advisor /anp mounted on port %s", port)
         except Exception as anp_e:
             logger.warning("[ANP] health_advisor ANP mount failed: %s", anp_e)

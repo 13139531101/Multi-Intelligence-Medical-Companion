@@ -84,6 +84,18 @@ try:
     from A2AServer.v2.anp_bridge import create_hostapi_anp_app
     anp_app = create_hostapi_anp_app()
     app.mount("/anp", anp_app)
+    # 阶段48-A2A: 初始化 DID keystore（自己的密钥 + bootstrap 远程公钥）
+    _HOSTAPI_DID = "did:wba:pha.local:hostapi"
+    try:
+        from A2AServer.v2.did_wba import get_keystore, bootstrap_remote_dids
+        ks = get_keystore(self_did=_HOSTAPI_DID)
+        print(f"[hostapi] DID keystore initialized, known DIDs: {ks.list_dids()}")
+        # Bootstrap: 从 sub-agent 拉取公钥
+        import asyncio
+        results = asyncio.run(bootstrap_remote_dids(_HOSTAPI_DID))
+        print(f"[hostapi] DID bootstrap results: {results}")
+    except Exception as ks_err:
+        print(f"[hostapi] DID keystore init failed: {ks_err}")
     print("[hostapi] ANP bridge mounted: /anp/agent/{ad.json,interface.json,rpc}, /anp/agents/*")
 except Exception as _e:
     import traceback

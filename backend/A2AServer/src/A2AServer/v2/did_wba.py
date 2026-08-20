@@ -105,22 +105,40 @@ class DIDKeyStore:
         pub_bytes = public_key.public_bytes(Encoding.Raw, PublicFormat.Raw)
         return priv_bytes, pub_bytes
 
-    def register(self, did: str, public_key: Optional[bytes] = None) -> DIDDocument:
-        """注册一个 DID（自动生成 Ed25519 密钥对如果没传）"""
-        if public_key is None:
+    def register(self, did: str, public_key: Optional[bytes] = None, is_self: bool = False) -> DIDDocument:
+        """注册一个 DID。
+
+        - is_self=True: 本 agent 的 DID，生成 Ed25519 密钥对并存私钥
+        - public_key 有值: 远程 agent 的公钥，只存文档
+        - public_key 无值且 is_self=False: 只建空文档（等 bootstrap 填充）
+        """
+        if is_self:
             private, public = self.generate_keypair(did)
             self._private_keys[did] = private
             public_key = public
 
-        pub_b64 = base64.b64encode(public_key).decode()
+        pub_b64 = base64.b64encode(public_key).decode() if public_key else ""
         doc = DIDDocument(
             id=did,
             public_key=pub_b64,
             authentication=[f"{did}#key-1"],
         )
         self._documents[did] = doc
-        logger.info("[did_wba] registered %s", did)
+        logger.info("[did_wba] registered %s (is_self=%s, has_priv=%s)", did, is_self, is_self)
         return doc
+
+    def update_public_key(self, did: str, public_key: bytes) -> None:
+        """Bootstrap 时从远程 DID Document 填入对方公钥"""
+        pub_b64 = base64.b64encode(public_key).decode()
+        if did in self._documents:
+            self._documents[did].public_key = pub_b64
+        else:
+            self._documents[did] = DIDDocument(
+                id=did,
+                public_key=pub_b64,
+                authentication=[f"{did}#key-1"],
+            )
+        logger.info("[did_wba] updated public_key for %s", did)
 
     def get_document(self, did: str) -> Optional[DIDDocument]:
         return self._documents.get(did)
@@ -222,10 +240,21 @@ def verify_request(
 # ============================================================
 
 _keystore: Optional[DIDKeyStore] = None
+_SELF_DID: Optional[str] = None
 
 
-def get_keystore() -> DIDKeyStore:
-    global _keystore
+def get_keystore(self_did: Optional[str] = None) -> DIDKeyStore:
+    """
+    获取 DID keystore 单例。
+
+    Args:
+        self_did: 本 agent 的 DID（如 "did:wba:pha.local:health_advisor"）。
+                  只有传入 self_did 时才为本 agent 生成密钥对；
+                  其他 agent 的 DID 只建空文档，等 bootstrap 填入公钥。
+    """
+    global _keystore, _SELF_DID
+    if self_did:
+        _SELF_DID = self_did
     if _keystore is None:
         _keystore = DIDKeyStore()
         # 阶段48-20: 从 DomainManifest 读 DID 列表 (不再硬编码 PHA 默认)
@@ -249,8 +278,57 @@ def get_keystore() -> DIDKeyStore:
             ]
         for name in did_names:
             did = f"{did_prefix}:{did_domain}:{name}"
-            _keystore.register(did)
+            is_self = (did == _SELF_DID)
+            _keystore.register(did, is_self=is_self)
     return _keystore
+
+
+async def bootstrap_remote_dids(self_did: str) -> Dict[str, bool]:
+    """
+    阶段48-A2A: 启动时从其他 agent 的 /anp/did/document/{did} 拉取公钥，
+    填入本地 keystore，让双向 Ed25519 验签成为可能。
+
+    Returns:
+        {did: True/False} — 每个远程 DID 是否成功拉取
+    """
+    import httpx
+    import base64
+
+    results: Dict[str, bool] = {}
+    if not _keystore:
+        logger.warning("[did_wba] bootstrap skipped: keystore not initialized")
+        return results
+
+    all_dids = _keystore.list_dids()
+    remote_dids = [d for d in all_dids if d != self_did and d != _SELF_DID]
+
+    async def fetch_one(remote_did: str) -> tuple:
+        name = remote_did.split(":")[-1]
+        port = get_default_port(name)
+        url = f"http://{name}:{port}/anp/did/document/{remote_did}"
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                r = await client.get(url)
+                r.raise_for_status()
+                data = r.json()
+                pub_b64 = data.get("publicKey") or data.get("public_key", "")
+                if pub_b64:
+                    pub_bytes = base64.b64decode(pub_b64)
+                    _keystore.update_public_key(remote_did, pub_bytes)
+                    logger.info("[did_wba] bootstrapped pubkey for %s", remote_did)
+                    return remote_did, True
+        except Exception as e:
+            logger.warning("[did_wba] failed to fetch pubkey for %s: %s", remote_did, e)
+        return remote_did, False
+
+    import asyncio
+    tasks = [fetch_one(d) for d in remote_dids]
+    outcomes = await asyncio.gather(*tasks, return_exceptions=True)
+    for outcome in outcomes:
+        if isinstance(outcome, tuple):
+            did_res, ok = outcome
+            results[did_res] = ok
+    return results
 
 
 def get_default_port(name: str) -> int:
@@ -284,4 +362,5 @@ __all__ = [
     "sign_request",
     "verify_request",
     "get_default_port",
+    "bootstrap_remote_dids",
 ]

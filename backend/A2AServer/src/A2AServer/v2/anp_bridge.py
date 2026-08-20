@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import logging
 import os
 import time
@@ -109,6 +110,20 @@ async def call_anp_rpc(
     headers = {"Content-Type": "application/json"}
     if did:
         headers["X-ANP-DID"] = did
+        # 阶段48-A2A Phase 1: Ed25519 真实签名
+        try:
+            from .did_wba import sign_request, get_keystore
+            import time
+            ks = get_keystore()
+            priv_bytes = ks.get_private_key(did)
+            if priv_bytes:
+                body_str = json.dumps(body, separators=(",", ":"))
+                ts = time.time()
+                sig = sign_request(priv_bytes, "POST", "/agent/rpc", body_str, timestamp=ts)
+                headers["X-ANP-Timestamp"] = str(int(ts))
+                headers["X-ANP-Signature"] = sig
+        except Exception as sig_err:
+            logger.warning("[ANP] Ed25519 signing failed for %s: %s", did, sig_err)
 
     async with httpx.AsyncClient(timeout=timeout) as client:
         r = await client.post(
@@ -156,6 +171,14 @@ def create_hostapi_anp_app():
         raise ImportError(
             f"需要安装 anp + fastapi: pip install 'anp[api]' fastapi"
         ) from e
+
+    # 阶段48-A2A: 确保 hostapi 自己的密钥对已生成（bootstrap_remote_dids 之后会填入远程公钥）
+    _HOSTAPI_DID = "did:wba:pha.local:hostapi"
+    try:
+        from .did_wba import get_keystore
+        get_keystore(self_did=_HOSTAPI_DID)
+    except Exception:
+        pass
 
     @anp_agent(AgentConfig(
         name="HostAPI",

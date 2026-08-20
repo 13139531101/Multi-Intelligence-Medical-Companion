@@ -8,6 +8,16 @@ uvicorn>=0.24.0
 openai>=1.0.0
 python-multipart>=0.0.6
 
+# LangChain (阶段48-v2: V2Agent/LangGraph 推理引擎)
+langchain>=1.2.10
+langchain-core>=0.3.0
+langchain-openai>=0.2.0
+langgraph>=0.2.0
+langgraph-checkpoint>=2.0.0
+
+# LangChain MCP 适配器（阶段48-15: streamable_http MCP transport）
+langchain-mcp-adapters>=0.1.0
+
 # 环境变量管理
 python-dotenv>=1.0.0
 

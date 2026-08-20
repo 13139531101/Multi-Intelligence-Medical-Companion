@@ -12,12 +12,15 @@ PHA v2 子智能体（阶段2 占位实现）
 """
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 from typing import List
 
 from .v2_agent import V2Agent
 from ..mcp.mcp_tool_adapter import load_mcp_tools, load_phacore_tools   # 阶段48-19
+
+logger = logging.getLogger(__name__)
 
 # 阶段48-15: 读 PHA_MCP_TRANSPORT env var 决定 transport 类型
 #   - "streamable_http" (默认, 推荐) → HTTP MCP server (1 process / agent)
@@ -78,6 +81,11 @@ class HealthAdvisorV2(V2Agent):
                 load_mcp_tools("health_advisor", transport=_MCP_TRANSPORT)
                 + load_phacore_tools(("ocr",))  # health_advisor 也需要 OCR (顾问阅报告)
             )
+        except RuntimeError as e:
+            if "无法定位仓库根目录" in str(e):
+                logger.warning("[HealthAdvisorV2] MCP tools unavailable (no repo root): %s", e)
+                return []
+            raise
         except Exception:
             return []
 
@@ -108,6 +116,11 @@ class HealthRecordsV2(V2Agent):
                 load_mcp_tools("health_records", transport=_MCP_TRANSPORT)
                 + load_phacore_tools(("ocr",))   # OCR 是 PhaCore owner
             )
+        except RuntimeError as e:
+            if "无法定位仓库根目录" in str(e):
+                logger.warning("[HealthRecordsV2] MCP tools unavailable: %s", e)
+                return []
+            raise
         except Exception:
             return []
 
@@ -138,6 +151,11 @@ class MedicationReminderV2(V2Agent):
                 load_mcp_tools("medication_reminder", transport=_MCP_TRANSPORT)
                 + load_phacore_tools(("ocr",))   # re-export OCR (用于扫描药盒/处方)
             )
+        except RuntimeError as e:
+            if "无法定位仓库根目录" in str(e):
+                logger.warning("[MedicationReminderV2] MCP tools unavailable: %s", e)
+                return []
+            raise
         except Exception:
             return []
 
@@ -165,6 +183,11 @@ class VisitSummaryV2(V2Agent):
         """阶段48-19: 不需要 OCR (visit_summary 处理的是已抽取的 text, 不是 image)"""
         try:
             return load_mcp_tools("visit_summary", transport=_MCP_TRANSPORT)
+        except RuntimeError as e:
+            if "无法定位仓库根目录" in str(e):
+                logger.warning("[VisitSummaryV2] MCP tools unavailable: %s", e)
+                return []
+            raise
         except Exception:
             return []
 

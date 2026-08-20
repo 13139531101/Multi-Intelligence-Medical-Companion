@@ -205,7 +205,8 @@ def register_agent(
             aliases=aliases or [],
             enabled=enabled,
         )
-        return AgentRegistry.register(spec, cls)
+        AgentRegistry.register(spec, cls)
+        return cls  # 装饰器必须返回原 class，否则 import 时得到 AgentSpec 而非 class
     return decorator
 
 

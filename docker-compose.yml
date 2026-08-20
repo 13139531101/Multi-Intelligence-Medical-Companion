@@ -45,6 +45,7 @@ services:
       - PORT=10011
       - HOST=0.0.0.0
       - PYTHONPATH=/app
+      - PHA_PROJECT_ROOT=/app
       - DEEPSEEK_MODEL=${DEEPSEEK_MODEL:-deepseek-v4-flash}
       - LLM_MODEL=${LLM_MODEL:-deepseek-v4-flash}
       - DB_NAME=${POSTGRES_DB:-personal_health_assistant}
@@ -88,6 +89,7 @@ services:
       - PORT=10012
       - HOST=0.0.0.0
       - PYTHONPATH=/app
+      - PHA_PROJECT_ROOT=/app
       - DEEPSEEK_MODEL=${DEEPSEEK_MODEL:-deepseek-v4-flash}
       - LLM_MODEL=${LLM_MODEL:-deepseek-v4-flash}
       - DATABASE_URL=${DATABASE_URL:-postgresql://pha:pha_pass@postgres:5432/personal_health_assistant}
@@ -120,6 +122,7 @@ services:
       - PORT=10013
       - HOST=0.0.0.0
       - PYTHONPATH=/app
+      - PHA_PROJECT_ROOT=/app
       - DEEPSEEK_MODEL=${DEEPSEEK_MODEL:-deepseek-v4-flash}
       - LLM_MODEL=${LLM_MODEL:-deepseek-v4-flash}
       - DATABASE_URL=${DATABASE_URL:-postgresql://pha:pha_pass@postgres:5432/personal_health_assistant}
@@ -154,6 +157,7 @@ services:
       - PORT=10010
       - HOST=0.0.0.0
       - PYTHONPATH=/app
+      - PHA_PROJECT_ROOT=/app
       - DEEPSEEK_MODEL=${DEEPSEEK_MODEL:-deepseek-v4-flash}
       - LLM_MODEL=${LLM_MODEL:-deepseek-v4-flash}
       - DB_NAME=${POSTGRES_DB:-personal_health_assistant}
@@ -175,7 +179,7 @@ services:
       - ALIYUN_OCR_TYPE=${ALIYUN_OCR_TYPE}
       - USE_LLM_SUMMARY=${USE_LLM_SUMMARY:-false}
       - LLM_BASE_URL=${LLM_BASE_URL:-}
-      - LLM_MODEL=${LLM_MODEL:-}
+      - LLM_MODEL=${LLM_MODEL:-deepseek-v4-flash}
       - HEALTH_RECORDS_LLM_PROVIDER=${HEALTH_RECORDS_LLM_PROVIDER:-}
       - HEALTH_RECORDS_LLM_MODEL=${HEALTH_RECORDS_LLM_MODEL:-}
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
@@ -226,7 +230,7 @@ services:
       - ALIYUN_OCR_TYPE=${ALIYUN_OCR_TYPE}
       - USE_LLM_SUMMARY=${USE_LLM_SUMMARY:-false}
       - LLM_BASE_URL=${LLM_BASE_URL:-}
-      - LLM_MODEL=${LLM_MODEL:-}
+      - LLM_MODEL=${LLM_MODEL:-deepseek-v4-flash}
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - EMBEDDING_TIMEOUT_SECONDS=${EMBEDDING_TIMEOUT_SECONDS:-60}
@@ -268,7 +272,7 @@ services:
       - USE_LLM_SUMMARY=${USE_LLM_SUMMARY:-false}
       - USE_LLM_INDICATOR_AUDIT=${USE_LLM_INDICATOR_AUDIT:-true}
       - LLM_BASE_URL=${LLM_BASE_URL:-}
-      - LLM_MODEL=${LLM_MODEL:-}
+      - LLM_MODEL=${LLM_MODEL:-deepseek-v4-flash}
       - EMBEDDING_PROVIDER=${EMBEDDING_PROVIDER:-}
       - EMBEDDING_MODEL=${EMBEDDING_MODEL:-}
       - EMBEDDING_DIM=${EMBEDDING_DIM:-}

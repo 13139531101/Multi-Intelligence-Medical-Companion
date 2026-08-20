@@ -16,3 +16,10 @@ numpy>=1.26.0
 alibabacloud_ocr20191230
 alibabacloud_tea_openapi
 alibabacloud_tea_util
+# LangChain (阶段48-v2: V2Agent/LangGraph 推理引擎)
+langchain>=1.2.10
+langchain-core>=0.3.0
+langchain-openai>=0.2.0
+langgraph>=0.2.0
+langgraph-checkpoint>=2.0.0
+langchain-mcp-adapters>=0.1.0

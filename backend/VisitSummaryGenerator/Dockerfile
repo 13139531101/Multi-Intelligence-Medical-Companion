@@ -7,7 +7,7 @@ WORKDIR /app
 RUN --mount=type=cache,target=/root/.cache/pip pip install uv
 
 COPY requirements.txt /tmp/backend-requirements.txt
-RUN --mount=type=cache,target=/root/.cache/pip pip install -r /tmp/backend-requirements.txt
+RUN --mount=type=cache,target=/root/.cache/pip pip install -r /tmp/backend-requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple || true
 
 COPY . ./
 

@@ -30,6 +30,10 @@ agents:
     aliases: ["健康顾问"]
     dangerously: false
     port: 9101
+    peers:
+      - "health_records"
+      - "medication_reminder"
+      - "visit_summary"
 
   - name: "health_records"
     display_name: "健康档案管理员"
@@ -40,6 +44,9 @@ agents:
     aliases: ["健康档案管理员", "健康档案"]
     dangerously: false
     port: 9102
+    peers:
+      - "health_advisor"
+      - "medication_reminder"
 
   - name: "medication_reminder"
     display_name: "用药提醒助手"
@@ -50,6 +57,9 @@ agents:
     aliases: ["用药提醒助手"]
     dangerously: true                  # ⚠️ 高危 - 加提醒等需 HITL
     port: 9103
+    peers:
+      - "health_advisor"
+      - "health_records"
 
   - name: "visit_summary"
     display_name: "就诊摘要生成器"
@@ -60,6 +70,9 @@ agents:
     aliases: ["就诊摘要"]
     dangerously: false
     port: 9104
+    peers:
+      - "health_advisor"
+      - "health_records"
 
 # 跨 agent 服务发现: K8s svc / docker-compose port
 service_discovery:
