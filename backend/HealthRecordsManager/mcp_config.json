@@ -1,18 +1,5 @@
 {
   "mcpServers": {
-    "OCRTool": {
-      "command": "python",
-      "args": [
-        "mcpserver/ocr_tool.py"
-      ],
-      "cwd": "/app/HealthRecordsManager",
-      "env": {
-        "OCR_PROVIDER": "local",
-        "OCR_LANG": "chi_sim+eng",
-        "TESSERACT_PATH": "C\\\\Program Files\\\\Tesseract-OCR\\\\tesseract.exe",
-        "TESSDATA_PREFIX": "C\\\\Program Files\\\\Tesseract-OCR\\\\tessdata"
-      }
-    },
     "DataExtractionTool": {
       "command": "python",
       "args": [

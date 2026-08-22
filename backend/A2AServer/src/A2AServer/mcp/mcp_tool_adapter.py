@@ -286,10 +286,10 @@ def _load_stdio_mcp_tools(agent_name: str) -> list:
     """
     try:
         import os
-        from .mcp_discover import AGENT_DIR_MAP
+        from .mcp_discover import AGENT_DIR_MAP, _REPO_ROOT
         dir_name = AGENT_DIR_MAP.get(agent_name, agent_name)
-        # 容器内固定路径; host 上用 repo_root + backend
-        backend_dir = "/app/backend"
+        # 复用 mcp_discover 的 REPO_ROOT 检测（支持 PHA_PROJECT_ROOT env var）
+        backend_dir = str(_REPO_ROOT)
 
         mcpserver_dir = os.path.join(backend_dir, dir_name, "mcpserver")
         if not os.path.isdir(mcpserver_dir):
@@ -388,9 +388,9 @@ def _load_http_mcp_tools(agent_name: str) -> list:
         return []
 
     import os
-    from .mcp_discover import AGENT_DIR_MAP
+    from .mcp_discover import AGENT_DIR_MAP, _REPO_ROOT
     dir_name = AGENT_DIR_MAP.get(agent_name, agent_name)
-    backend_dir = "/app/backend"
+    backend_dir = str(_REPO_ROOT / "backend")
     mcpserver_dir = os.path.join(backend_dir, dir_name, "mcpserver")
     if not os.path.isdir(mcpserver_dir):
         return []
