@@ -304,7 +304,7 @@ def _load_stdio_mcp_tools(agent_name: str) -> list:
             return []
 
         # spawn 1 个整合 stdio server, 该 server 接受 agent_name 然后动态导入
-        # 用一个统一的入口: backend.<Agent>.mcpserver._stdio_starter
+        # 用一个统一的入口: <Agent>.mcpserver._stdio_starter
         starter_pkg = f"{dir_name}.mcpserver._stdio_starter"
         starter_path = os.path.join(mcpserver_dir, "_stdio_starter.py")
         _ensure_stdio_starter(starter_path, dir_name, tool_files, mcpserver_dir)
@@ -390,7 +390,7 @@ def _load_http_mcp_tools(agent_name: str) -> list:
     import os
     from .mcp_discover import AGENT_DIR_MAP, _REPO_ROOT
     dir_name = AGENT_DIR_MAP.get(agent_name, agent_name)
-    backend_dir = str(_REPO_ROOT / "backend")
+    backend_dir = str(_REPO_ROOT)
     mcpserver_dir = os.path.join(backend_dir, dir_name, "mcpserver")
     if not os.path.isdir(mcpserver_dir):
         return []
@@ -602,7 +602,7 @@ def _ensure_http_starter(starter_path: str, dir_name: str, tool_files: list, mcp
         'import sys',
         'import os',
         'import importlib',
-        'sys.path.insert(0, "/app/backend")  # noqa: E402',
+        'sys.path.insert(0, "/app")  # noqa: E402',
         'from mcp.server.fastmcp import FastMCP',
         '',
         '_mcp = FastMCP("PHA-Agent-HTTP")',
@@ -639,6 +639,7 @@ def _spawn_http_server(agent_name: str, starter_pkg: str, port: int, backend_dir
     for key in (
         "MEMORY_DB_HOST", "MEMORY_DB_PORT", "MEMORY_DB_USER",
         "MEMORY_DB_PASSWORD", "MEMORY_DB_NAME", "MEMORY_DB_SSLMODE",
+        "DB_HOST", "DB_PORT", "DB_USER", "DB_PASSWORD", "DB_NAME",
         "DEEPSEEK_API_KEY", "OPENAI_API_KEY", "DEEPSEEK_BASE_URL",
         "OPENAI_API_BASE", "OPENAI_BASE_URL",
     ):
@@ -736,7 +737,7 @@ def _ensure_stdio_starter(starter_path: str, dir_name: str, tool_files: list, mc
         '"""',
         'import sys',
         'import importlib',
-        'sys.path.insert(0, "/app/backend")  # noqa: E402',
+        'sys.path.insert(0, "/app")  # noqa: E402',
         'from mcp.server.fastmcp import FastMCP',
         '',
         '_mcp = FastMCP("PHA-Agent-Stdio")',
