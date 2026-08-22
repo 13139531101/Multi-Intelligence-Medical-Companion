@@ -1,3 +1,11 @@
+# 确保 A2AServer 模块可用（MCP stdio subprocess 独立运行时需要）
+import sys as _sys
+import os as _os
+_repo_root = _os.environ.get("PHA_PROJECT_ROOT", "/app")
+_a2aserver_path = f"{_repo_root}/A2AServer/src"
+if _a2aserver_path not in _sys.path:
+    _sys.path.insert(0, _a2aserver_path)
+
 from mcp.server.fastmcp import FastMCP
 import json
 import uuid
@@ -51,8 +59,14 @@ def _resolve_endpoint(agent_address: str) -> str:
 
 
 def _resolve_did(agent_address: str) -> str:
-    """从 agent address 解析出 DID"""
-    host = agent_address.split("/")[0]
+    """从 agent address 解析出 DID（支持 host:port 和 http://host:port 两种格式）"""
+    # 去掉协议前缀
+    if "://" in agent_address:
+        host = agent_address.split("/")[2]  # "http://health_records:10010" → "health_records:10010"
+    else:
+        host = agent_address.split("/")[0]
+    # 去掉端口
+    host = host.split(":")[0]
     return _NAME_TO_DID.get(host, f"did:wba:pha.local:{host}")
 
 
@@ -70,11 +84,19 @@ def _fetch_agent_card(agent_address: str) -> Dict[str, Any]:
 
 def _send_task(agent_endpoint_url: str, tool_instruction_text: str, session_id: Optional[str] = None, user_id: Optional[str] = None) -> Dict[str, Any]:
     """
-    阶段48-A2A: 用 ANP RPC 调用其他 Agent（替换 legacy requests.post A2A v1）
+    阶段48-A2A: 用同步 ANP RPC 调用其他 Agent（替换 legacy requests.post A2A v1）
     目标端点: POST /anp/agent/rpc
+    使用同步 httpx.Client（避免 asyncio.run 嵌套导致 MCP subprocess 崩溃）
     """
-    import asyncio
-    from A2AServer.v2.anp_bridge import call_anp_rpc
+    import sys as _sys
+    import os as _os
+    _repo_root = _os.environ.get("PHA_PROJECT_ROOT", "/app")
+    _a2aserver_path = f"{_repo_root}/A2AServer/src"
+    if _a2aserver_path not in _sys.path:
+        _sys.path.insert(0, _a2aserver_path)
+        logger.info("[A2A] _send_task injected sys.path: %s", _a2aserver_path)
+
+    from A2AServer.v2.anp_bridge import call_anp_rpc_sync
 
     env_uid = os.environ.get("A2A_CURRENT_USER_ID") or os.environ.get("USER_ID")
     effective_uid = user_id or env_uid or "anonymous"
@@ -85,7 +107,9 @@ def _send_task(agent_endpoint_url: str, tool_instruction_text: str, session_id: 
     try:
         from A2AServer.v2.domain_manifest import load_default
         manifest = load_default()
-        callee_name = agent_endpoint_url.split("/")[0].split(":")[0]
+        # 从 DID 映射获取正确的 agent name（处理完整 URL 如 http://health_records:10010）
+        callee_did = _resolve_did(agent_endpoint_url)
+        callee_name = callee_did.replace("did:wba:pha.local:", "")
         caller_name = "health_advisor"
         if not manifest.can_call(caller_name, callee_name):
             return {"error": "call_not_allowed", "message": f"{caller_name} is not allowed to call {callee_name}"}
@@ -105,14 +129,15 @@ def _send_task(agent_endpoint_url: str, tool_instruction_text: str, session_id: 
     }
 
     base_url = _resolve_endpoint(agent_endpoint_url)
+    logger.info("[A2A] _send_task connecting to: %s/anp agent=%s", base_url, callee_name)
     try:
-        result = asyncio.run(call_anp_rpc(
+        result = call_anp_rpc_sync(
             base_url=f"{base_url}/anp",
             method="task/send",
             params=params,
             did=did,
             timeout=45.0,
-        ))
+        )
         return result
     except Exception as e:
         return {"error": "send_task_failed", "message": str(e)}

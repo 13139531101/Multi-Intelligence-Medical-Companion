@@ -77,7 +77,7 @@ async def discover_all_anp_agents(base_urls: list[str]) -> list[Dict[str, Any]]:
     return [r for r in results if isinstance(r, dict)]
 
 
-async def call_anp_rpc(
+def call_anp_rpc_sync(
     base_url: str,
     method: str,
     params: Dict[str, Any],
@@ -86,7 +86,7 @@ async def call_anp_rpc(
     did: str | None = None,
 ) -> Dict[str, Any]:
     """
-    ANP 远程调用：POST /agent/rpc
+    同步版 ANP 远程调用（用于 MCP stdio subprocess，避免 asyncio.run 嵌套）
 
     Args:
         base_url: agent 基础 URL
@@ -98,39 +98,78 @@ async def call_anp_rpc(
     Returns:
         JSON-RPC 2.0 响应
     """
-    import uuid
+    import uuid as _uuid
 
     body = {
         "jsonrpc": "2.0",
         "method": method,
         "params": params,
-        "id": str(uuid.uuid4()),
+        "id": str(_uuid.uuid4()),
     }
 
     headers = {"Content-Type": "application/json"}
     if did:
         headers["X-ANP-DID"] = did
-        # 阶段48-A2A Phase 1: Ed25519 真实签名
         try:
             from .did_wba import sign_request, get_keystore
-            import time
+            import time as _time
             ks = get_keystore()
             priv_bytes = ks.get_private_key(did)
             if priv_bytes:
                 body_str = json.dumps(body, separators=(",", ":"))
-                ts = time.time()
+                ts = _time.time()
                 sig = sign_request(priv_bytes, "POST", "/agent/rpc", body_str, timestamp=ts)
                 headers["X-ANP-Timestamp"] = str(int(ts))
                 headers["X-ANP-Signature"] = sig
         except Exception as sig_err:
             logger.warning("[ANP] Ed25519 signing failed for %s: %s", did, sig_err)
 
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        r = await client.post(
-            f"{base_url}/agent/rpc",
-            json=body,
-            headers=headers,
-        )
+    limits = httpx.Limits(max_connections=1, max_keepalive_connections=1)
+    with httpx.Client(timeout=timeout, limits=limits, http2=False, verify=False) as client:
+        r = client.post(f"{base_url}/agent/rpc", json=body, headers=headers)
+        return r.json()
+
+
+async def call_anp_rpc(
+    base_url: str,
+    method: str,
+    params: Dict[str, Any],
+    *,
+    timeout: float = 60.0,
+    did: str | None = None,
+) -> Dict[str, Any]:
+    """
+    异步版 ANP 远程调用（用于 async 上下文）
+    """
+    import uuid as _uuid
+
+    body = {
+        "jsonrpc": "2.0",
+        "method": method,
+        "params": params,
+        "id": str(_uuid.uuid4()),
+    }
+
+    headers = {"Content-Type": "application/json"}
+    if did:
+        headers["X-ANP-DID"] = did
+        try:
+            from .did_wba import sign_request, get_keystore
+            import time as _time
+            ks = get_keystore()
+            priv_bytes = ks.get_private_key(did)
+            if priv_bytes:
+                body_str = json.dumps(body, separators=(",", ":"))
+                ts = _time.time()
+                sig = sign_request(priv_bytes, "POST", "/agent/rpc", body_str, timestamp=ts)
+                headers["X-ANP-Timestamp"] = str(int(ts))
+                headers["X-ANP-Signature"] = sig
+        except Exception as sig_err:
+            logger.warning("[ANP] Ed25519 signing failed for %s: %s", did, sig_err)
+
+    limits = httpx.Limits(max_connections=1, max_keepalive_connections=1)
+    async with httpx.AsyncClient(timeout=timeout, limits=limits, http2=False) as client:
+        r = await client.post(f"{base_url}/agent/rpc", json=body, headers=headers)
         return r.json()
 
 
@@ -447,6 +486,7 @@ __all__ = [
     "discover_anp_agent",
     "discover_all_anp_agents",
     "call_anp_rpc",
+    "call_anp_rpc_sync",
     "create_hostapi_anp_app",
     "get_default_agent_urls",
 ]

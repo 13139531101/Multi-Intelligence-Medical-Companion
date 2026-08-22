@@ -322,10 +322,11 @@ def resolve_did_to_url(did: str, include_anp_path: bool = True) -> Optional[str]
     try:
         from .domain_manifest import load_default
         manifest = load_default()
-        if name in [a.name for a in manifest.agents]:
-            port = manifest.service_discovery.get_port(name)
-            path = "/anp" if include_anp_path else ""
-            return f"http://{name}:{port}{path}"
+        for a in manifest.agents:
+            if a.name == name:
+                port = manifest.service_discovery.get_port(name, agent_spec_port=a.port)
+                path = "/anp" if include_anp_path else ""
+                return f"http://{name}:{port}{path}"
     except Exception:
         pass
 

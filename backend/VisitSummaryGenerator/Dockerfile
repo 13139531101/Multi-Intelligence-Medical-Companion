@@ -4,10 +4,10 @@ ENV DEBIAN_FRONTEND=noninteractive
 WORKDIR /app
 
 # Install uv CLI via PyPI (avoids GitHub download in build)
-RUN --mount=type=cache,target=/root/.cache/pip pip install uv
+RUN --mount=type=cache,target=/root/.cache/pip pip install uv -i https://pypi.tuna.tsinghua.edu.cn/simple
 
 COPY requirements.txt /tmp/backend-requirements.txt
-RUN --mount=type=cache,target=/root/.cache/pip pip install -r /tmp/backend-requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple || true
+RUN --mount=type=cache,target=/root/.cache/pip pip install -r /tmp/backend-requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 
 COPY . ./
 

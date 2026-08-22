@@ -260,25 +260,27 @@ def _hardcoded_pha_manifest() -> DomainManifest:
     m.domain = DomainConfig(name="pha_legacy", display_name="PHA 默认 (legacy)")
     m.agents = [
         # 阶段48-A2A: health_advisor 可以调用所有 peer
+        # 端口对应 docker-compose:
+        #   health_advisor=10011, health_records=10010, medication_reminder=10012, visit_summary=10013
         AgentSpec(name="health_advisor", display_name="健康顾问",
                   keywords=["头疼", "发烧", "症状", "blood 血压 血糖"],
                   tools_module="health_advisor", phacore_modules=["ocr"],
-                  aliases=["健康顾问"], port=9101,
+                  aliases=["健康顾问"], port=10011,
                   peers=["health_records", "medication_reminder", "visit_summary"]),
         AgentSpec(name="health_records", display_name="健康档案管理员",
                   keywords=["档案", "体检", "报告"],
                   tools_module="health_records", phacore_modules=["ocr"],
-                  aliases=["健康档案管理员"], port=9102,
+                  aliases=["健康档案管理员"], port=10010,
                   peers=["health_advisor", "medication_reminder"]),
         AgentSpec(name="medication_reminder", display_name="用药提醒助手",
                   keywords=["药", "提醒", "medication"],
                   tools_module="medication_reminder", phacore_modules=["ocr"],
-                  aliases=["用药提醒助手"], dangerously=True, port=9103,
+                  aliases=["用药提醒助手"], dangerously=True, port=10012,
                   peers=["health_advisor", "health_records"]),
         AgentSpec(name="visit_summary", display_name="就诊摘要生成器",
                   keywords=["摘要", "总结", "就诊"],
                   tools_module="visit_summary", phacore_modules=[],
-                  aliases=["就诊摘要"], port=9104,
+                  aliases=["就诊摘要"], port=10013,
                   peers=["health_advisor", "health_records"]),
     ]
     m.host = HostConfig(name="health_advisor", fallback_keywords=["怎么办"])
