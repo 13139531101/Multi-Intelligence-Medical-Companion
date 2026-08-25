@@ -110,43 +110,71 @@ def _send_task(
     session_id: str | None = None,
     user_id: str | None = None,
 ):
+    """
+    阶段48-A2A Phase 3: 用 call_anp_rpc_sync 替换 requests.post A2A v1 调用。
+    目标端点: POST /anp/agent/rpc
+    """
+    import sys as _sys
+    import os as _os
+    _repo_root = _os.environ.get("PHA_PROJECT_ROOT", "/app")
+    _a2aserver_path = f"{_repo_root}/A2AServer/src"
+    if _a2aserver_path not in _sys.path:
+        _sys.path.insert(0, _a2aserver_path)
+
+    from A2AServer.v2.anp_bridge import call_anp_rpc_sync
+
     env_uid = None
     try:
         env_uid = os.environ.get("A2A_CURRENT_USER_ID") or os.environ.get("USER_ID")
     except Exception:
         env_uid = None
-    body = {
-        "jsonrpc": "2.0",
-        "method": "tasks/send",
-        "params": {
+
+    effective_uid = user_id or env_uid or "anonymous"
+    effective_session = session_id or str(uuid.uuid4())
+
+    # 从 agent 地址解析 DID
+    def _resolve_did(addr: str) -> str:
+        normalized = _normalize_address(addr)
+        host = normalized.split("://")[1].split(":")[0] if "://" in normalized else normalized.split(":")[0]
+        return f"did:wba:pha.local:{host}"
+
+    callee_did = _resolve_did(agent_endpoint_url)
+    caller_name = "medication_reminder"
+
+    # Phase 5: Peer 信任边界检查
+    try:
+        from A2AServer.v2.domain_manifest import load_default
+        manifest = load_default()
+        callee_name = callee_did.replace("did:wba:pha.local:", "")
+        if not manifest.can_call(caller_name, callee_name):
+            return {"error": "call_not_allowed", "message": f"{caller_name} is not allowed to call {callee_name}"}
+    except Exception as e:
+        pass  # 保守允许
+
+    params = {
+        "task": {
             "id": str(uuid.uuid4()),
-            "sessionId": session_id or str(uuid.uuid4()),
-            "acceptedOutputModes": ["text", "data"],
             "message": {
                 "role": "user",
                 "parts": [{"type": "text", "text": tool_instruction_text}],
             },
-            "metadata": (
-                {"user_id": (user_id or env_uid)} if (user_id or env_uid) else None
-            ),
         },
-        "id": str(uuid.uuid4()),
+        "user_id": effective_uid,
+        "session_id": effective_session,
     }
-    headers = {}
+
+    base_url = _resolve_endpoint(agent_endpoint_url)
     try:
-        token = os.environ.get("HOSTAPI_AUTH_TOKEN") or os.environ.get("A2A_AUTH_TOKEN")
-        if isinstance(token, str) and token.strip():
-            headers["Authorization"] = f"Bearer {token.strip()}"
-    except Exception:
-        pass
-    r = requests.post(
-        _resolve_endpoint(agent_endpoint_url),
-        json=body,
-        headers=headers or None,
-        timeout=45,
-    )
-    r.raise_for_status()
-    return r.json()
+        result = call_anp_rpc_sync(
+            base_url=f"{base_url}/anp",
+            method="task/send",
+            params=params,
+            did=f"did:wba:pha.local:{caller_name}",
+            timeout=45.0,
+        )
+        return result
+    except Exception as e:
+        return {"error": "send_task_failed", "message": str(e)}
 
 
 def _get_active_medication_names(user_id: str) -> list[str]:
