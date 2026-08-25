@@ -48,6 +48,9 @@ cryptography>=41.0.0
 # 日志
 loguru>=0.7.0
 
+# 阶段48-ops: 可观测性
+prometheus-client>=0.19.0
+
 # 进程监控和健康检查
 psutil>=5.9.0  # 系统和进程监控
 schedule>=1.2.0  # 任务调度

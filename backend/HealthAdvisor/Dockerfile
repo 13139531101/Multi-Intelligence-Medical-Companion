@@ -21,4 +21,5 @@ EXPOSE 10011
 
 # Set working directory to service subfolder and run
 WORKDIR /app/HealthAdvisor
-CMD ["python", "main.py", "--host", "0.0.0.0", "--port", "10011", "--agent_url", "http://health_advisor:10011/"]
+# 阶段48-ops: 多 worker 并发（workers=CPU核数，最多4个）
+CMD ["sh", "-c", "uvicorn app:app --host 0.0.0.0 --port 10011 --workers 4"]

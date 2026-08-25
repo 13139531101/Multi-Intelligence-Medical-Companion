@@ -16,7 +16,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Python deps
 COPY frontend/hostAgentAPI/requirements.txt ./requirements.txt
 # 使用国内 PyPI 镜像以加速依赖安装，并允许 pip 缓存以提升重复构建速度
-ARG PIP_INDEX_URL=https://pypi.org/simple
+ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
 ENV PIP_INDEX_URL=${PIP_INDEX_URL}
 RUN --mount=type=cache,target=/root/.cache/pip pip install -i ${PIP_INDEX_URL} -r requirements.txt || pip install -i https://pypi.org/simple -r requirements.txt
 
@@ -61,9 +61,13 @@ ENV BACKEND_DIR=/app/backend
 # Runtime env with sensible defaults
 ENV HOST_API_PORT=13002
 ENV HOST_API_BIND=0.0.0.0
+# 阶段48-perf: HOST_API_WORKERS 控制 uvicorn --workers 数量（默认 4）
+# 每个 worker 都会执行 lifespan()，独立初始化 ConversationServer / ADKHostManager / metrics registry。
+# 设为 1 可回退到单进程模式（便于本地调试）。
+ENV HOST_API_WORKERS=4
 
 # Expose service port
 EXPOSE 13002
 
-# Start FastAPI via uvicorn
-CMD ["python", "-m", "uvicorn", "api:app", "--host", "0.0.0.0", "--port", "13002"]
+# Start FastAPI via uvicorn (multi-worker, lifespan per-worker)
+CMD ["sh", "-c", "python -m uvicorn app:app --host ${HOST_API_BIND} --port ${HOST_API_PORT} --workers ${HOST_API_WORKERS}"]

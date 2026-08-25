@@ -1,0 +1,16 @@
+{
+  "name": "pha-e2e",
+  "version": "2.0-stage48",
+  "description": "PHA v2 E2E smoke tests (Playwright)",
+  "scripts": {
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "test:ui": "playwright test --ui",
+    "test:smoke": "playwright test tests/smoke.spec.ts",
+    "test:api": "node tests/api-smoke.js",
+    "report": "playwright show-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.48.0"
+  }
+}

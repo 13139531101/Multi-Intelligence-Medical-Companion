@@ -22,4 +22,5 @@ ENV HOST=0.0.0.0
 EXPOSE 10012
 
 WORKDIR /app/MedicationReminder
-CMD ["python", "main.py", "--host", "0.0.0.0", "--port", "10012", "--agent_url", "http://medication_reminder:10012/"]
+# 阶段48-ops: 多 worker 并发（workers=CPU核数，最多4个）
+CMD ["sh", "-c", "uvicorn app:app --host 0.0.0.0 --port 10012 --workers 4"]

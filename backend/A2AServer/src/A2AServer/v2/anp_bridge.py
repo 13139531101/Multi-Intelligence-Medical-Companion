@@ -124,7 +124,7 @@ def call_anp_rpc_sync(
         except Exception as sig_err:
             logger.warning("[ANP] Ed25519 signing failed for %s: %s", did, sig_err)
 
-    limits = httpx.Limits(max_connections=1, max_keepalive_connections=1)
+    limits = httpx.Limits(max_connections=10, max_keepalive_connections=5)
     with httpx.Client(timeout=timeout, limits=limits, http2=False, verify=False) as client:
         r = client.post(f"{base_url}/agent/rpc", json=body, headers=headers)
         return r.json()
@@ -167,7 +167,7 @@ async def call_anp_rpc(
         except Exception as sig_err:
             logger.warning("[ANP] Ed25519 signing failed for %s: %s", did, sig_err)
 
-    limits = httpx.Limits(max_connections=1, max_keepalive_connections=1)
+    limits = httpx.Limits(max_connections=10, max_keepalive_connections=5)
     async with httpx.AsyncClient(timeout=timeout, limits=limits, http2=False) as client:
         r = await client.post(f"{base_url}/agent/rpc", json=body, headers=headers)
         return r.json()

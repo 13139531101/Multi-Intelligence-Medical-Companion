@@ -6,7 +6,17 @@ import os
 import sys
 import psycopg
 from psycopg.rows import dict_row
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, APIRouter, Response, Request, UploadFile, File, Form, Depends, HTTPException
+
+# 阶段48-ops: Prometheus metrics (per-worker init happens in lifespan)
+sys.path.insert(0, "/app/backend/A2AServer/src")
+try:
+    from A2AServer.observability.metrics import setup_metrics, get_metrics_bytes, get_metrics_content_type
+    # setup_metrics moved to lifespan — each uvicorn worker gets its own metrics registry
+except Exception:
+    setup_metrics = None  # type: ignore[assignment]
+    get_metrics_bytes = get_metrics_content_type = None
 from fastapi.responses import StreamingResponse
 from typing import List, Optional, Dict, Any
 from fastapi.middleware.cors import CORSMiddleware
@@ -21,6 +31,15 @@ import re
 from datetime import date, datetime, timedelta, timezone
 from urllib.parse import unquote, urlparse
 import httpx
+
+# 会话路由：所有 @router.X 装饰器先注册到此处，然后在 lifespan 里
+# ConversationServer(router) 进一步注入其内置端点，app.include_router(router) 在 lifespan 完成。
+# 这样每个 uvicorn --workers 子进程都会拥有独立的 router/agent_server 状态。
+router = APIRouter()
+
+# agent_server 在 lifespan 内被赋值；route handler 通过模块全局读取以兼容现有调用约定。
+agent_server: Optional["ConversationServer"] = None  # type: ignore[name-defined]
+conversation_server: Optional["ConversationServer"] = None  # type: ignore[name-defined]
 
 load_dotenv(override=False)
 
@@ -62,7 +81,249 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
-app = FastAPI()
+
+
+# ============================================================
+# 阶段48-perf: per-worker lifespan
+# ============================================================
+# 关键点：uvicorn --workers 会 fork 出多个子进程，每个子进程都需要：
+#   1) 独立的 ADKHostManager (LLM client)
+#   2) 独立的 ConversationServer (agent registry)
+#   3) 独立的 prometheus metrics 寄存器
+#   4) 独立的 httpx proxy client/semaphore
+# 因此以下初始化全部放进 lifespan startup，shutdown 做清理。
+# 这样无论 uvicorn 用 1 个 worker 还是 N 个 worker，每个 worker 都会得到自己的一份状态。
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """每个 uvicorn worker 启动时跑一次；shutdown 时清理。"""
+    global agent_server, conversation_server
+
+    # --- 阶段48-ops: per-worker Prometheus registry ---
+    if setup_metrics is not None:
+        try:
+            setup_metrics("hostapi")
+        except Exception as _m_err:
+            logging.warning(f"[HostAPI] setup_metrics failed (worker {os.getpid()}): {_m_err}")
+
+    # --- ConversationServer(router) 必须放在 lifespan 里，不能放模块顶层 ---
+    #   - 之前放顶层会让所有 forked worker 共享同一个 ADKHostManager 实例，导致 LLM client 串扰
+    #   - ConversationServer(router) 会通过 router.add_api_route 注入多个内置端点，
+    #     所以 app.include_router(router) 必须在它之后调用
+    _cs = None
+    try:
+        _cs = ConversationServer(router)
+        conversation_server = _cs
+        agent_server = _cs
+        _app.state.conversation_server = _cs
+        _app.state.agent_server = _cs
+        logging.info(f"[HostAPI] worker {os.getpid()} ConversationServer ready")
+    except Exception as _cs_err:
+        logging.error(f"[HostAPI] ConversationServer init failed (worker {os.getpid()}): {_cs_err}")
+
+    # 把动态注册的 router 接入 app —— 必须在 ConversationServer(router) 之后
+    try:
+        _app.include_router(router)
+    except Exception as _inc_err:
+        logging.error(f"[HostAPI] include_router(router) failed (worker {os.getpid()}): {_inc_err}")
+
+    # --- 原本散落在 @app.on_event("startup") 里的初始化逻辑，全部搬到 lifespan ---
+    try:
+        if _cs is not None and hasattr(_cs, "_warmup_optional_tools"):
+            logger.info("Triggering backend warmup/memory initialization...")
+            await _cs._warmup_optional_tools()
+    except Exception as e:
+        logger.warning(f"Startup warmup failed: {e}")
+
+    try:
+        if os.getenv("DISABLE_MEMORY_WARMUP", "1") != "1":
+            try:
+                sys.path.insert(0, os.environ.get("BACKEND_DIR") or os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "backend")))
+            except Exception:
+                pass
+            try:
+                import importlib
+                try:
+                    _warmup_api = importlib.import_module("health_records_api")
+                except Exception:
+                    import importlib.util
+                    _module_path = os.path.join(
+                        os.environ.get("BACKEND_DIR") or os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "backend")),
+                        "health_records_api.py",
+                    )
+                    _spec = importlib.util.spec_from_file_location("health_records_api", _module_path)
+                    if _spec and _spec.loader:
+                        _mod = importlib.util.module_from_spec(_spec)
+                        _spec.loader.exec_module(_mod)
+                        _warmup_api = _mod
+                _service = getattr(_warmup_api, "health_records_memory_service", None)
+                if _service:
+                    async def _do_warmup():
+                        try:
+                            await _service.initialize()
+                            _ms = getattr(_service, "memory_system", None)
+                            if _ms and getattr(_ms, "embedding_service", None):
+                                try:
+                                    _ms.embedding_service.generate_embedding("host_api_warmup_embeddings")
+                                    logging.info("[HostAPI] 记忆嵌入模型预热完成")
+                                except Exception as e:
+                                    logging.warning(f"[HostAPI] 嵌入模型预热异常: {e}")
+                        except Exception as e:
+                            logging.warning(f"[HostAPI] 记忆系统初始化失败: {e}")
+                    try:
+                        asyncio.create_task(_do_warmup())
+                    except Exception as e:
+                        logging.warning(f"[HostAPI] 启动后台预热任务失败: {e}")
+            except Exception as e:
+                logging.warning(f"导入后端健康档案模块失败，跳过预热: {e}")
+    except Exception:
+        pass
+
+    try:
+        _tiny_png_b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII="
+        _ocr_api = globals().get("health_api")
+        if _ocr_api is None:
+            try:
+                import importlib
+                try:
+                    _ocr_api = importlib.import_module("health_records_api")
+                except Exception:
+                    import importlib.util
+                    _module_path = os.path.join(
+                        os.environ.get("BACKEND_DIR") or os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "backend")),
+                        "health_records_api.py",
+                    )
+                    _spec = importlib.util.spec_from_file_location("health_records_api", _module_path)
+                    if _spec and _spec.loader:
+                        _mod = importlib.util.module_from_spec(_spec)
+                        _spec.loader.exec_module(_mod)
+                        _ocr_api = _mod
+            except Exception:
+                _ocr_api = None
+        if _ocr_api is not None:
+            _extract = getattr(_ocr_api, "extract_text_from_image", None)
+            _validate = getattr(_ocr_api, "validate_medical_document", None)
+            if _extract:
+                try:
+                    _ = _extract.fn(_tiny_png_b64) if hasattr(_extract, "fn") else _extract(_tiny_png_b64)
+                    logging.info("[HostAPI] OCR工具预热完成")
+                except Exception as e:
+                    logging.warning(f"[HostAPI] OCR工具预热异常: {e}")
+            if _validate:
+                try:
+                    _ = _validate.fn("host_api warmup text") if hasattr(_validate, "fn") else _validate("host_api warmup text")
+                    logging.info("[HostAPI] 医疗文档验证器预热完成")
+                except Exception as e:
+                    logging.warning(f"[HostAPI] 医疗文档验证器预热异常: {e}")
+    except Exception as e:
+        logging.warning(f"[HostAPI] 预热OCR时出现异常: {e}")
+
+    # httpx proxy client + semaphore
+    try:
+        _get_a2a_proxy_client()
+        _get_a2a_proxy_semaphore()
+    except Exception as e:
+        logging.warning(f"[HostAPI] httpx proxy client init failed: {e}")
+
+    # DB connectivity self-check
+    try:
+        _timeout_raw = os.getenv("HOSTAPI_DB_SELF_CHECK_TIMEOUT") or os.getenv("DB_CONNECT_TIMEOUT") or "3"
+        try:
+            _timeout_sec = max(int(str(_timeout_raw).strip()), 1)
+        except Exception:
+            _timeout_sec = 3
+        _checks: list = []
+        try:
+            _auth_dsn = auth_service._build_dsn()
+            if _auth_dsn:
+                _checks.append(("auth_db", _auth_dsn))
+        except Exception as e:
+            logging.warning(f"[HostAPI] auth_db 自检准备失败: {e}")
+        try:
+            if health_api and hasattr(health_api, "_build_db_dsn"):
+                _h_dsn = health_api._build_db_dsn()
+                if _h_dsn:
+                    _checks.append(("health_records_db", _h_dsn))
+        except Exception as e:
+            logging.warning(f"[HostAPI] health_records_db 自检准备失败: {e}")
+        for _label, _dsn in _checks:
+            _begin = time.perf_counter()
+            _masked = _mask_db_dsn(_dsn)
+            try:
+                with psycopg.connect(_dsn, connect_timeout=_timeout_sec) as _conn:
+                    with _conn.cursor() as _cur:
+                        _cur.execute("SELECT 1")
+                        _ = _cur.fetchone()
+                _elapsed_ms = int((time.perf_counter() - _begin) * 1000)
+                logging.info(f"[HostAPI] DB自检通过 label={_label} elapsed_ms={_elapsed_ms} dsn={_masked}")
+            except Exception as e:
+                _elapsed_ms = int((time.perf_counter() - _begin) * 1000)
+                logging.error(f"[HostAPI] DB自检失败 label={_label} elapsed_ms={_elapsed_ms} err={e}")
+    except Exception as e:
+        logging.warning(f"[HostAPI] DB self-check skipped: {e}")
+
+    # WeChat background loops
+    try:
+        if os.getenv("ENABLE_WECHAT_MEDICATION_REMINDER", "1") == "1":
+            try:
+                asyncio.create_task(_wechat_medication_reminder_loop())
+            except Exception as e:
+                logging.warning(f"启动微信用药提醒扫描失败: {e}")
+    except Exception:
+        pass
+    try:
+        if os.getenv("ENABLE_WECHAT_SUBSCRIBE_WORKER", "1") == "1":
+            try:
+                asyncio.create_task(_wechat_subscribe_worker_loop())
+            except Exception as e:
+                logging.warning(f"启动微信订阅消息队列worker失败: {e}")
+    except Exception:
+        pass
+
+    # 阶段48-ops: DID bootstrap + ANP mount（必须在 yield 之前完成）
+    try:
+        _HOSTAPI_DID = "did:wba:pha.local:hostapi"
+        from A2AServer.v2.did_wba import get_keystore, bootstrap_remote_dids
+        ks = get_keystore(self_did=_HOSTAPI_DID)
+        logging.info(f"[HostAPI] DID keystore ready, known DIDs: {ks.list_dids()}")
+        _bootstrap_results = await bootstrap_remote_dids(_HOSTAPI_DID)
+        logging.info(f"[HostAPI] DID bootstrap results: {_bootstrap_results}")
+    except Exception as _ks_err:
+        logging.warning(f"[HostAPI] DID bootstrap failed: {_ks_err}")
+
+    # 阶段33/48-A2A: 挂载 ANP sub-app 到 /anp
+    try:
+        from A2AServer.v2.anp_bridge import create_hostapi_anp_app
+        _anp_app = create_hostapi_anp_app()
+        _app.mount("/anp", _anp_app)
+        logging.info("[HostAPI] ANP sub-app mounted at /anp")
+    except Exception as _anp_err:
+        logging.warning(f"[HostAPI] ANP mount failed: {_anp_err}")
+
+    logging.info(f"[HostAPI] worker {os.getpid()} lifespan startup complete")
+
+    try:
+        yield
+    finally:
+        # --- shutdown cleanup ---
+        try:
+            await _close_a2a_proxy_http_client()
+        except Exception:
+            pass
+        logging.info(f"[HostAPI] worker {os.getpid()} lifespan shutdown complete")
+
+
+app = FastAPI(lifespan=lifespan)
+
+
+# 阶段48-ops: Prometheus /metrics 端点
+@router.get("/metrics", include_in_schema=False)
+async def metrics_endpoint():
+    if get_metrics_bytes is None:
+        return Response(content="Metrics not available", status_code=503)
+    return Response(
+        content=get_metrics_bytes(),
+        media_type=get_metrics_content_type(),
+    )
 
 # 阶段48-25: CopilotKit runtime — 适配 AG-UI ↔ /v2/chat/stream
 try:
@@ -82,28 +343,6 @@ try:
 except Exception as _e:
     import traceback
     print(f"[hostapi] v2 monitoring endpoints mount failed: {_e}")
-
-# 阶段33：集成 ANP 协议（Agent Network Protocol）
-try:
-    from A2AServer.v2.anp_bridge import create_hostapi_anp_app
-    anp_app = create_hostapi_anp_app()
-    app.mount("/anp", anp_app)
-    # 阶段48-A2A: 初始化 DID keystore（自己的密钥 + bootstrap 远程公钥）
-    _HOSTAPI_DID = "did:wba:pha.local:hostapi"
-    try:
-        from A2AServer.v2.did_wba import get_keystore, bootstrap_remote_dids
-        ks = get_keystore(self_did=_HOSTAPI_DID)
-        print(f"[hostapi] DID keystore initialized, known DIDs: {ks.list_dids()}")
-        import asyncio
-        results = asyncio.run(bootstrap_remote_dids(_HOSTAPI_DID))
-        print(f"[hostapi] DID bootstrap results: {results}")
-    except Exception as ks_err:
-        print(f"[hostapi] DID keystore init failed: {ks_err}")
-    print("[hostapi] ANP bridge mounted: /anp/agent/{ad.json,interface.json,rpc}, /anp/agents/*")
-except Exception as _e:
-    import traceback
-    print(f"[hostapi] ANP bridge mount failed: {_e}")
-    traceback.print_exc()
 
 # 阶段20：集成 OAuth2 端点
 try:
@@ -236,13 +475,16 @@ except Exception as _e:
     traceback.print_exc()
 
 # Direct test endpoint
-@app.get("/v2/admin/ping")
+@router.get("/v2/admin/ping")
 async def admin_ping():
     return {"status": "pong", "admin": True}
 
-@app.on_event("startup")
-async def startup_event():
-    """应用启动时尝试初始化记忆系统"""
+# 阶段48-perf: 旧的 @app.on_event("startup") / ("shutdown") 装饰器已移除——
+# 它们的逻辑全部移到了上面的 lifespan() async context manager 里，
+# 保证每个 uvicorn worker 都能拿到独立的 init 状态。
+# 原函数体保留为孤儿定义以兼容可能存在的反射调用。
+async def startup_event():  # pragma: no cover
+    """应用启动时尝试初始化记忆系统（已迁移至 lifespan；保留以兼容旧 import）"""
     try:
         # 尝试调用后端模块的预热逻辑（如果已导入）
         if health_api and hasattr(health_api, "_warmup_optional_tools"):
@@ -331,7 +573,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-@app.on_event("startup")
 async def _host_api_startup_warmup():
     logger = logging.getLogger(__name__)
     try:
@@ -412,13 +653,11 @@ async def _host_api_startup_warmup():
     except Exception as e:
         logging.warning(f"[HostAPI] 启动预热过程出现异常（忽略继续启动）: {e}")
 
-@app.on_event("startup")
 async def _init_a2a_proxy_http_client():
     _get_a2a_proxy_client()
     _get_a2a_proxy_semaphore()
 
 
-@app.on_event("startup")
 async def _startup_db_connectivity_self_check():
     timeout_raw = (
         os.getenv("HOSTAPI_DB_SELF_CHECK_TIMEOUT")
@@ -467,7 +706,6 @@ async def _startup_db_connectivity_self_check():
                 f"[HostAPI] DB自检失败 label={label} elapsed_ms={elapsed_ms} timeout={timeout_sec}s dsn={masked} err={e}"
             )
 
-@app.on_event("shutdown")
 async def _close_a2a_proxy_http_client():
     global _a2a_proxy_client
     if _a2a_proxy_client is None:
@@ -504,8 +742,10 @@ async def log_request_body(request: Request, call_next):
         logging.info(
             f"Response {request.method} {request.url.path} status={status_code} elapsed_ms={elapsed_ms}"
         )
-router = APIRouter()
-agent_server = ConversationServer(router)
+# 阶段48-perf: 旧版这里曾有 `router = APIRouter()` 和
+# `agent_server = ConversationServer(router)` —— 已迁移到 lifespan()。
+# 顶层文件开头的 `router = APIRouter()` 会在 lifespan 启动时被 ConversationServer(router)
+# 注入内部端点，然后通过 app.include_router(router) 挂到 app 上。
 
 def _normalize_agent_name(name: str) -> str:
     n = (name or "").strip()
@@ -866,7 +1106,7 @@ async def _inject_auto_ocr_parts(body: dict) -> int:
     return len(extracted_blocks)
 
 
-@app.post("/a2a")
+@router.post("/a2a")
 async def a2a_streaming_proxy(request: Request):
     try:
         body = await request.json()
@@ -2903,7 +3143,7 @@ def _get_backend_notification_service():
     except Exception:
         return None
 
-@app.get("/api/wechat/template-ids")
+@router.get("/api/wechat/template-ids")
 async def get_wechat_template_ids():
     svc = _get_backend_notification_service()
     template_ids = getattr(svc, "template_ids", {}) if svc else {}
@@ -2913,7 +3153,7 @@ async def get_wechat_template_ids():
         "medication_reminder": template_ids.get("medication_reminder", ""),
     }
 
-@app.post("/api/wechat/bind-openid")
+@router.post("/api/wechat/bind-openid")
 async def bind_wechat_openid(request: Request, user: dict = Depends(get_current_user)):
     payload = {}
     try:
@@ -3305,7 +3545,6 @@ async def _wechat_medication_reminder_loop():
             logging.error(f"微信用药提醒扫描异常: {e}")
         await asyncio.sleep(max(5, interval_sec))
 
-@app.on_event("startup")
 async def _start_wechat_medication_reminder_loop():
     if os.getenv("ENABLE_WECHAT_MEDICATION_REMINDER", "1") != "1":
         return
@@ -3314,7 +3553,6 @@ async def _start_wechat_medication_reminder_loop():
     except Exception as e:
         logging.warning(f"启动微信用药提醒扫描失败: {e}")
 
-@app.on_event("startup")
 async def _start_wechat_subscribe_worker():
     if os.getenv("ENABLE_WECHAT_SUBSCRIBE_WORKER", "1") != "1":
         return
@@ -3324,7 +3562,7 @@ async def _start_wechat_subscribe_worker():
         logging.warning(f"启动微信订阅消息队列worker失败: {e}")
 
 # 直接挂载到 app 的调试端点，便于排查提醒函数签名
-@app.get("/debug/reminder-signature")
+@router.get("/debug/reminder-signature")
 async def _debug_reminder_signature_app_level():
     try:
         fn = add_medication_reminder
@@ -3440,7 +3678,7 @@ def _set_local_reminder_active(reminder_id: int, enabled: bool) -> bool:
         _save_local_reminders({"reminders": items})
     return ok
 
-@app.get("/api/medication-reminder-plans")
+@router.get("/api/medication-reminder-plans")
 async def list_medication_reminder_plans(active_only: bool = True, user: dict = Depends(get_current_user)):
     uid = str(user.get("id") or user.get("user_id") or user.get("uid"))
     dbm = None
@@ -3572,7 +3810,7 @@ async def list_medication_reminder_plans(active_only: bool = True, user: dict = 
         return {"success": True, "plans": []}
 
 
-@app.get("/api/debug/db-tables")
+@router.get("/api/debug/db-tables")
 async def _debug_db_tables():
     try:
         dbm = get_db_manager()
@@ -3594,7 +3832,7 @@ async def _debug_db_tables():
     return {"tables": names}
 
 
-@app.get("/api/debug/db-columns/{table}")
+@router.get("/api/debug/db-columns/{table}")
 async def _debug_db_columns(table: str):
     try:
         dbm = get_db_manager()
@@ -3613,7 +3851,7 @@ async def _debug_db_columns(table: str):
     return {"columns": rows}
 
 
-@app.post("/api/debug/init-med-tables")
+@router.post("/api/debug/init-med-tables")
 async def _debug_init_med_tables():
     try:
         dbm = get_db_manager()
@@ -3778,8 +4016,8 @@ def _ensure_consultation_tables(dbm):
         except Exception as e:
             logging.warning(f"DB init warning: {e}")
 
-@app.get("/api/consultations")
-@app.get("/consultations")
+@router.get("/api/consultations")
+@router.get("/consultations")
 async def list_consultations(agent_id: Optional[str] = None, user: dict = Depends(get_current_user)):
     uid = _get_user_id(user)
     try:
@@ -3826,8 +4064,8 @@ async def list_consultations(agent_id: Optional[str] = None, user: dict = Depend
         logging.error(f"List consultations failed: {e}")
         return []
 
-@app.post("/api/consultations")
-@app.post("/consultations")
+@router.post("/api/consultations")
+@router.post("/consultations")
 async def create_consultation(request: Request, user: dict = Depends(get_current_user)):
     payload = await request.json()
     uid = _get_user_id(user)
@@ -3879,8 +4117,8 @@ async def create_consultation(request: Request, user: dict = Depends(get_current
         return {"error": str(e)}
 
 
-@app.get("/api/consultations/{cid}/messages")
-@app.get("/consultations/{cid}/messages")
+@router.get("/api/consultations/{cid}/messages")
+@router.get("/consultations/{cid}/messages")
 async def get_consultation_messages_legacy(cid: str, user: dict = Depends(get_current_user)):
     uid = _get_user_id(user)
     try:
@@ -3930,7 +4168,7 @@ async def get_consultation_messages_legacy(cid: str, user: dict = Depends(get_cu
         logging.error(f"Get messages failed: {e}")
         return {"success": False, "messages": [], "error": str(e)}
 
-@app.post("/api/consultations/message")
+@router.post("/api/consultations/message")
 async def save_consultation_message_endpoint(request: Request, user: dict = Depends(get_current_user)):
     """保存单条消息 (兼容 api.js saveConsultationMessage)"""
     body = await request.json()
@@ -3977,7 +4215,7 @@ async def save_consultation_message_endpoint(request: Request, user: dict = Depe
         return {"error": str(e)}
 
 
-@app.post("/consultations/{cid}/messages")
+@router.post("/consultations/{cid}/messages")
 async def send_consultation_message_legacy(cid: str, request: Request, user: dict = Depends(get_current_user)):
     """兼容旧接口"""
     body = await request.json()
@@ -4127,7 +4365,7 @@ def _save_user_summaries(user_id: str, items: list) -> None:
         logging.error(f"保存用户就诊摘要失败: {e}")
 
 
-@app.get("/summaries")
+@router.get("/summaries")
 async def list_summaries(
     user: dict = Depends(get_current_user),
     startDate: str | None = None,
@@ -4291,7 +4529,7 @@ async def list_summaries(
     return items
 
 
-@app.post("/summaries")
+@router.post("/summaries")
 async def create_summary(request: Request, user: dict = Depends(get_current_user)):
     payload = await request.json()
     uid = _get_user_id(user)
@@ -4362,7 +4600,7 @@ async def create_summary(request: Request, user: dict = Depends(get_current_user
     return summary
 
 
-@app.put("/summaries/{sid}")
+@router.put("/summaries/{sid}")
 async def update_summary(sid: str, request: Request, user: dict = Depends(get_current_user)):
     payload = await request.json()
     uid = _get_user_id(user)
@@ -4451,7 +4689,7 @@ async def update_summary(sid: str, request: Request, user: dict = Depends(get_cu
     return updated
 
 
-@app.delete("/summaries/{sid}")
+@router.delete("/summaries/{sid}")
 async def delete_summary(sid: str, user: dict = Depends(get_current_user)):
     uid = _get_user_id(user)
     try:
@@ -4472,7 +4710,7 @@ async def delete_summary(sid: str, user: dict = Depends(get_current_user)):
     return {"success": True, "deleted": str(sid)}
 
 
-@app.post("/summaries/generate")
+@router.post("/summaries/generate")
 async def generate_ai_summary(request: Request, user: dict = Depends(get_current_user)):
     payload = await request.json()
     visit_date = _normalize_date(payload.get("visitDate"))
@@ -4704,11 +4942,11 @@ async def generate_ai_summary(request: Request, user: dict = Depends(get_current
     return generated
 
 
-@app.api_route("/ping", methods=["GET", "POST"])
+@router.api_route("/ping", methods=["GET", "POST"])
 async def ping():
     return "Pong"
 
-@app.post("/api/audio/transcribe")
+@router.post("/api/audio/transcribe")
 async def transcribe_audio_with_qwen(
     file: UploadFile = File(...),
     current_user: Optional[Dict[str, Any]] = Depends(get_current_user_optional),
@@ -4780,7 +5018,7 @@ async def transcribe_audio_with_qwen(
 
 # 智能路由接口 - 统一API入口
 
-@app.post("/smart_chat")
+@router.post("/smart_chat")
 async def smart_chat(
     request: Request,
     current_user: Optional[Dict[str, Any]] = Depends(get_current_user_optional),
@@ -4982,7 +5220,7 @@ from fastapi.responses import StreamingResponse
 import json as _json
 
 
-@app.post("/v2/chat/stream")
+@router.post("/v2/chat/stream")
 async def v2_chat_stream(request: Request, user: dict = Depends(get_current_user)):
     """
     v2 流式端点：调用 LangGraph 真流式输出 LLM 答案
@@ -5111,7 +5349,7 @@ async def v2_chat_stream(request: Request, user: dict = Depends(get_current_user
 
 
 # 阶段48-16: HITL 中断后, 用户在 confirm dialog 中点击确认/取消, 调此 endpoint 接着跑
-@app.post("/v2/chat/resume")
+@router.post("/v2/chat/resume")
 async def v2_chat_resume(request: Request, user: dict = Depends(get_current_user)):
     """阶段48-16: HumanInTheLoop 中断后, 用 decisions 接着跑 graph.
 
@@ -5178,7 +5416,7 @@ async def v2_chat_resume(request: Request, user: dict = Depends(get_current_user
 
 
 # 阶段38-2: 多 LLM provider 路由 SSE 端点
-@app.post("/v2/models/stream")
+@router.post("/v2/models/stream")
 async def v2_models_stream(request: Request):
     """
     阶段38-2: 多模型 SSE 流式端点
@@ -5285,8 +5523,8 @@ async def v2_models_stream(request: Request):
 
 
 # 包含路由
+# 注: `app.include_router(router)` 已在 lifespan() 启动时执行（必须晚于 ConversationServer(router)）
 app.include_router(auth_router)  # 认证路由
-app.include_router(router)       # 会话路由
 
 # 启动服务
 if __name__ == "__main__":

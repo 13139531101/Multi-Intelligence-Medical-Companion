@@ -39,6 +39,10 @@ spec:
     metadata:
       labels:
         app: pha-health-advisor
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "10011"
+        prometheus.io/path: "/anp/metrics"
     spec:
       containers:
         - name: mcp
@@ -108,6 +112,10 @@ spec:
     metadata:
       labels:
         app: pha-health-records
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "10010"
+        prometheus.io/path: "/anp/metrics"
     spec:
       containers:
         - name: mcp
@@ -173,6 +181,10 @@ spec:
     metadata:
       labels:
         app: pha-medication-reminder
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "10012"
+        prometheus.io/path: "/anp/metrics"
     spec:
       containers:
         - name: mcp
@@ -238,6 +250,10 @@ spec:
     metadata:
       labels:
         app: pha-visit-summary
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "10013"
+        prometheus.io/path: "/anp/metrics"
     spec:
       containers:
         - name: mcp

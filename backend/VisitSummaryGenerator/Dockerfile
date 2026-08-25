@@ -17,4 +17,5 @@ ENV HOST=0.0.0.0
 EXPOSE 10013
 
 WORKDIR /app/VisitSummaryGenerator
-CMD ["python", "main.py", "--host", "0.0.0.0", "--port", "10013", "--agent_url", "http://visit_summary:10013/"]
+# 阶段48-ops: 多 worker 并发（workers=CPU核数，最多4个）
+CMD ["sh", "-c", "uvicorn app:app --host 0.0.0.0 --port 10013 --workers 4"]

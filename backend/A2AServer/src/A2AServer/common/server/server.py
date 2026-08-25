@@ -40,6 +40,7 @@ class A2AServer:
         endpoint="/",
         agent_card: AgentCard = None,
         task_manager: TaskManager = None,
+        on_startup: callable = None,
     ):
         self.host = host
         self.port = port
@@ -48,6 +49,7 @@ class A2AServer:
         self.ready_event = asyncio.Event()
         self.task_manager = task_manager
         self.agent_card = agent_card
+        self._custom_on_startup = on_startup
         self.app = Starlette()
         # 添加 CORS 中间件
         self.app.add_middleware(
@@ -66,6 +68,11 @@ class A2AServer:
         from contextlib import asynccontextmanager
         @asynccontextmanager
         async def lifespan_wrapper(_app):
+            if self._custom_on_startup:
+                try:
+                    await self._custom_on_startup()
+                except Exception as e:
+                    logger.error(f"custom on_startup error: {e}")
             await self._on_startup()
             yield
             await self._on_shutdown()
@@ -80,7 +87,7 @@ class A2AServer:
 
         import uvicorn
 
-        uvicorn.run(self.app, host=self.host, port=self.port, log_config=None)
+        uvicorn.run(self.app, host=self.host, port=self.port, log_config=None, workers=1)
 
     def _get_agent_card(self, request: Request) -> JSONResponse:
         return JSONResponse(self.agent_card.model_dump(exclude_none=True))
