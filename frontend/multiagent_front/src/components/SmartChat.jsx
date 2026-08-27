@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from "react";
+import { HEALTH_ADVISOR_NAME, HEALTH_RECORDS_NAME, MEDICATION_REMINDER_NAME, VISIT_SUMMARY_NAME } from "../config/agents"
 import {
   Box,
   Paper,
@@ -370,22 +371,22 @@ const SmartChat = () => {
   const agentHints = [
     {
       icon: "📋",
-      title: "健康档案管理员",
+      title: HEALTH_RECORDS_NAME,
       example: '"查看我的健康档案"',
     },
     {
       icon: "👩‍⚕️",
-      title: "健康顾问",
+      title: HEALTH_ADVISOR_NAME,
       example: '"我有头痛症状"',
     },
     {
       icon: "💊",
-      title: "用药提醒助手",
+      title: MEDICATION_REMINDER_NAME,
       example: '"设置用药提醒"',
     },
     {
       icon: "📄",
-      title: "就诊摘要生成器",
+      title: VISIT_SUMMARY_NAME,
       example: '"生成就诊摘要"',
     },
   ];

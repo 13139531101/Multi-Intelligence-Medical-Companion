@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
+import { HEALTH_ADVISOR_NAME } from "../config/agents"
 import {
   Container,
   Box,
@@ -130,7 +131,7 @@ const Consultation = () => {
         const agents = await listRemoteAgents();
         if (Array.isArray(agents) && agents.length > 0) {
           const advisor =
-            agents.find((a) => a?.name === "健康顾问") ||
+            agents.find((a) => a?.name === HEALTH_ADVISOR_NAME) ||
             agents.find((a) => (a?.name || "").includes("顾问")) ||
             agents[0];
           const addr = advisor?.url || advisor?.address || "";

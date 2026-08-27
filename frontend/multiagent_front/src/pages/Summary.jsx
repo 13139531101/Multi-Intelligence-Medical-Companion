@@ -72,6 +72,7 @@ import {
 } from "../api/healthApi";
 import { listRemoteAgents, getAgentCard, sendTaskStreaming } from "../api/api";
 import { v4 as uuidv4 } from "uuid";
+import { VISIT_SUMMARY_NAME } from "../config/agents";
 
 const Summary = () => {
   const [summaries, setSummaries] = useState([]);
@@ -193,7 +194,7 @@ const Summary = () => {
       // Try to re-init
       await initAgent();
       if (!agentCardState?.agentEndpointUrl) {
-        alert("无法连接到就诊摘要智能体");
+        alert(`无法连接到${VISIT_SUMMARY_NAME}智能体`);
         return;
       }
     }
@@ -345,7 +346,7 @@ const Summary = () => {
       }));
       setSummaries(mapped);
     } catch (error) {
-      console.error("获取就诊摘要失败:", error);
+      console.error(`获取${VISIT_SUMMARY_NAME}失败:`, error);
     } finally {
       setLoading(false);
     }
@@ -361,7 +362,7 @@ const Summary = () => {
       await fetchSummaries();
       handleCloseDialog();
     } catch (error) {
-      console.error("保存就诊摘要失败:", error);
+      console.error(`保存${VISIT_SUMMARY_NAME}失败:`, error);
     }
   };
 
@@ -369,14 +370,14 @@ const Summary = () => {
     setGenerating(true);
 
     if (!agentCardState?.agentEndpointUrl) {
-      alert("未找到就诊摘要智能体，请稍后重试");
+      alert(`未找到${VISIT_SUMMARY_NAME}智能体，请稍后重试`);
       setGenerating(false);
       return;
     }
 
     try {
       // 构造Prompt
-      const prompt = `请根据以下信息生成一份结构化的就诊摘要JSON：
+      const prompt = `请根据以下信息生成一份结构化的${VISIT_SUMMARY_NAME}JSON：
       
       就诊日期: ${dayjs(aiFormData.visitDate).format("YYYY-MM-DD")}
       医生: ${aiFormData.doctor}
@@ -486,12 +487,12 @@ const Summary = () => {
   };
 
   const handleDelete = async (id) => {
-    if (window.confirm("确定要删除这个就诊摘要吗？")) {
+    if (window.confirm(`确定要删除这个${VISIT_SUMMARY_NAME}吗？`)) {
       try {
         await deleteSummary(id);
         await fetchSummaries();
       } catch (error) {
-        console.error("删除就诊摘要失败:", error);
+        console.error(`删除${VISIT_SUMMARY_NAME}失败:`, error);
       }
     }
   };
@@ -618,7 +619,7 @@ const Summary = () => {
         <Container maxWidth="lg" sx={{ pt: 2 }}>
           <Chip
             icon={<Assignment fontSize="small" />}
-            label="visit_summary · 就诊摘要"
+            label={`visit_summary · ${VISIT_SUMMARY_NAME}`}
             size="small"
             sx={{ bgcolor: "#FFF3E0", color: "#E65100", fontWeight: 500 }}
           />
@@ -634,7 +635,7 @@ const Summary = () => {
             }}
           >
             <Typography variant="h4" gutterBottom>
-              就诊摘要
+              {VISIT_SUMMARY_NAME}
             </Typography>
             <Box>
               <Button
@@ -716,7 +717,7 @@ const Summary = () => {
             <Grid container spacing={3}>
               {recentSummaries.length === 0 ? (
                 <Grid item xs={12}>
-                  <Alert severity="info">暂无最近的就诊摘要</Alert>
+                  <Alert severity="info">{`暂无最近的${VISIT_SUMMARY_NAME}`}</Alert>
                 </Grid>
               ) : (
                 recentSummaries.map((summary) => (
@@ -1074,7 +1075,7 @@ const Summary = () => {
             >
               <Box sx={{ mb: 2 }}>
                 <Alert severity="info" icon={<SmartToy />}>
-                  您可以直接告诉我您的需求，例如："生成最近3个月的就诊摘要" 或
+                  您可以直接告诉我您的需求，例如：`"生成最近3个月的${VISIT_SUMMARY_NAME}"` 或
                   "总结上次在市一医院的检查结果"。
                   AI会自动筛选记录并生成摘要，同时保存到您的历史记录中。
                 </Alert>
@@ -1247,7 +1248,7 @@ const Summary = () => {
           maxWidth="md"
           fullWidth
         >
-          <DialogTitle>AI智能生成就诊摘要</DialogTitle>
+          <DialogTitle>{`AI智能生成${VISIT_SUMMARY_NAME}`}</DialogTitle>
           <DialogContent>
             <Alert severity="info" sx={{ mb: 2 }}>
               上传就诊相关文件（如病历、检查报告等），AI将自动分析并生成结构化摘要
@@ -1347,7 +1348,7 @@ const Summary = () => {
           fullWidth
         >
           <DialogTitle>
-            {editingSummary ? "编辑就诊摘要" : "添加就诊摘要"}
+            {editingSummary ? `编辑${VISIT_SUMMARY_NAME}` : `添加${VISIT_SUMMARY_NAME}`}
           </DialogTitle>
           <DialogContent>
             <Grid container spacing={2} sx={{ mt: 1 }}>
@@ -1655,7 +1656,7 @@ const Summary = () => {
         {/* 智能助手 */}
         <AgentAssistant
           agentType="summary"
-          contextPrompt="当前用户正在就诊摘要页面, 可能需要关于整理病历内容、生成简单摘要、整理检查报告等方面的帮助。"
+          contextPrompt={`当前用户正在${VISIT_SUMMARY_NAME}页面, 可能需要关于整理病历内容、生成简单摘要、整理检查报告等方面的帮助。`}
           position="bottom-right"
           size="medium"
         />

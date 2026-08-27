@@ -11,6 +11,7 @@
 //   4. 点击 "创建" — 1 步到位的 submit (含 idempotency-key)
 
 import React, { useState, useEffect, useCallback, useMemo } from "react";
+import { HEALTH_RECORDS_NAME, VISIT_SUMMARY_NAME } from "../config/agents"
 import {
   Box,
   Button,
@@ -57,13 +58,13 @@ const PRESCRIPTION_LABEL_HINT =
 
 const KIND_META = {
   health_record: {
-    label: "健康档案",
+    label: HEALTH_RECORDS_NAME,
     table: "health_records",
     dateField: { key: "record_date", label: "日期" },
     titleHint: "比如 2024-01 体检报告 (留空会用附件名)",
   },
   visit_summary: {
-    label: "就诊摘要",
+    label: VISIT_SUMMARY_NAME,
     table: "visit_summaries",
     dateField: { key: "visit_date", label: "就诊日期" },
     titleHint: "比如 2024-01-15 协和内分泌门诊",
@@ -318,8 +319,8 @@ export default function HealthRecordForm({
         <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 2 }}>
           <Typography variant="h6">
             {mode === "edit"
-              ? `编辑${activeKind === "visit_summary" ? "就诊摘要" : "健康档案"}`
-              : `新增${activeKind === "visit_summary" ? "就诊摘要" : "健康档案"}`}
+              ? `编辑${activeKind === "visit_summary" ? VISIT_SUMMARY_NAME : HEALTH_RECORDS_NAME}`
+              : `新增${activeKind === "visit_summary" ? VISIT_SUMMARY_NAME : HEALTH_RECORDS_NAME}`}
           </Typography>
           <Box sx={{ flex: 1 }} />
           {onCancel && (

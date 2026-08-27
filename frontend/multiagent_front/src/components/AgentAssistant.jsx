@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from "react";
+import { HEALTH_ADVISOR_NAME, HEALTH_RECORDS_NAME, MEDICATION_REMINDER_NAME, VISIT_SUMMARY_NAME } from "../config/agents"
 import {
   Box,
   Paper,
@@ -56,10 +57,10 @@ const AgentAssistant = ({
   const processedEventIds = useRef(new Set());
   const lastPendingStatusRef = useRef({});
 
-  // 智能体配置映射
+  // 智能体配置映射（阶段48-config: 名字从 @/config/agents 读取）
   const agentConfigs = {
     health_records: {
-      name: "健康档案管理员",
+      name: HEALTH_RECORDS_NAME,
       color: "#4CAF50",
       defaultPrompt: "我需要关于健康档案管理的帮助",
       suggestions: [
@@ -70,7 +71,7 @@ const AgentAssistant = ({
       ],
     },
     consultation: {
-      name: "健康顾问",
+      name: HEALTH_ADVISOR_NAME,
       color: "#2196F3",
       defaultPrompt: "我需要健康咨询和建议",
       suggestions: [
@@ -81,7 +82,7 @@ const AgentAssistant = ({
       ],
     },
     medication: {
-      name: "用药提醒助手",
+      name: MEDICATION_REMINDER_NAME,
       color: "#FF9800",
       defaultPrompt: "我需要用药管理方面的帮助",
       suggestions: [
@@ -92,7 +93,7 @@ const AgentAssistant = ({
       ],
     },
     summary: {
-      name: "就诊摘要生成器",
+      name: VISIT_SUMMARY_NAME,
       color: "#9C27B0",
       defaultPrompt: "帮我写就诊摘要, 或者帮我整理检查报告",
       suggestions: [

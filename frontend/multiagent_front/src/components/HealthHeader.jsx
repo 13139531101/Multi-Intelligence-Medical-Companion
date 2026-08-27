@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import { HEALTH_RECORDS_NAME, VISIT_SUMMARY_NAME } from "../config/agents"
 import {
   AppBar,
   Toolbar,
@@ -99,7 +100,7 @@ const HealthHeader = () => {
       icon: <Dashboard />,
     },
     {
-      label: "健康档案",
+      label: HEALTH_RECORDS_NAME,
       path: "/v2/health-records",
       icon: <FolderOpen />,
     },
@@ -114,7 +115,7 @@ const HealthHeader = () => {
       icon: <Medication />,
     },
     {
-      label: "就诊摘要",
+      label: VISIT_SUMMARY_NAME,
       path: "/summary",
       icon: <Assignment />,
     },

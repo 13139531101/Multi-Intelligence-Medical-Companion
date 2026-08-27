@@ -70,6 +70,11 @@ import {
   addMedication,
   updateMedication,
 } from "../api/healthApi";
+import {
+  HEALTH_ADVISOR_NAME,
+  HEALTH_RECORDS_NAME,
+  MEDICATION_REMINDER_NAME,
+} from "../config/agents";
 
 // 阶段48-5: 重新设计 - 添加药品 + 智能体建议 + 真正历史
 const PERIODS = [
@@ -529,12 +534,12 @@ export default function NewMedication() {
         <Stack direction="row" spacing={1}>
           <Chip
             icon={<Medication fontSize="small" />}
-            label="medication_reminder · 用药提醒"
+            label={`medication_reminder · ${MEDICATION_REMINDER_NAME}`}
             size="small"
             sx={{ bgcolor: "#F3E5F5", color: "#7B1FA2", fontWeight: 500 }}
           />
           <Chip
-            label="health_advisor · 健康顾问"
+            label={`health_advisor · ${HEALTH_ADVISOR_NAME}`}
             size="small"
             variant="outlined"
             sx={{ fontSize: "0.7rem" }}
@@ -1087,7 +1092,7 @@ export default function NewMedication() {
               </Avatar>
               <Box>
                 <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
-                  健康顾问 AI
+                  {HEALTH_ADVISOR_NAME} AI
                 </Typography>
                 <Typography variant="caption" color="text.secondary">
                   agent: health_advisor + medication_reminder

@@ -5,6 +5,7 @@
 // 即时返回 file_id, OCR 异步跑 (前端可选轮询 ocr_status)
 
 import React, { useState, useRef, useEffect } from "react";
+import { HEALTH_RECORDS_NAME, VISIT_SUMMARY_NAME } from "../config/agents"
 import {
   Box,
   Button,
@@ -32,8 +33,8 @@ import {
 const API_BASE = import.meta?.env?.VITE_API_BASE || "http://localhost:13002";
 
 const PURPOSE_LABEL = {
-  health_record: "健康档案",
-  visit_summary: "就诊摘要",
+  health_record: HEALTH_RECORDS_NAME,
+  visit_summary: VISIT_SUMMARY_NAME,
   report: "报告",
   avatar: "头像",
   other: "其他",

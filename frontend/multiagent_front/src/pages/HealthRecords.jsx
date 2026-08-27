@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import { HEALTH_RECORDS_NAME } from "../config/agents"
 import {
   Container,
   Grid,
@@ -547,7 +548,7 @@ const HealthRecords = () => {
             }}
           >
             <Typography variant="h4" gutterBottom>
-              健康档案
+              {HEALTH_RECORDS_NAME}
             </Typography>
             <Button
               variant="contained"

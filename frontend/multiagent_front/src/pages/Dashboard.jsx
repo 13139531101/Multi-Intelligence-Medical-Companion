@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
+import { HEALTH_ADVISOR_NAME, HEALTH_RECORDS_NAME, MEDICATION_REMINDER_NAME, VISIT_SUMMARY_NAME } from "../config/agents"
 import {
   Box,
   Container,
@@ -76,7 +77,7 @@ import ReactMarkdown from "react-markdown";
 const AGENTS = [
   {
     id: "health_advisor",
-    name: "健康顾问",
+    name: HEALTH_ADVISOR_NAME,
     en: "health_advisor",
     desc: "综合问诊、用药咨询、健康建议",
     icon: SmartToy,
@@ -87,7 +88,7 @@ const AGENTS = [
   },
   {
     id: "health_records",
-    name: "档案管理",
+    name: HEALTH_RECORDS_NAME,
     en: "health_records",
     desc: "上传检查报告, 自动识别内容, 整理档案",
     icon: Description,
@@ -98,7 +99,7 @@ const AGENTS = [
   },
   {
     id: "medication_reminder",
-    name: "用药提醒",
+    name: MEDICATION_REMINDER_NAME,
     en: "medication_reminder",
     desc: "每日服药、定时提醒、依从性追踪",
     icon: Medication,
@@ -109,7 +110,7 @@ const AGENTS = [
   },
   {
     id: "visit_summary",
-    name: "就诊摘要",
+    name: VISIT_SUMMARY_NAME,
     en: "visit_summary",
     desc: "AI 自动汇总病史、医嘱、随访",
     icon: Assignment,

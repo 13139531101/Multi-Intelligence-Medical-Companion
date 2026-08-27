@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
+import { HEALTH_ADVISOR_NAME, HEALTH_RECORDS_NAME, MEDICATION_REMINDER_NAME, VISIT_SUMMARY_NAME } from "../config/agents"
 import {
   Box,
   Drawer,
@@ -334,10 +335,10 @@ const WELCOME = `你好，我是 PHA 健康咨询助手。
 
 const AGENT_LIST = [
   { id: "all", name: "全部对话", color: "#999" },
-  { id: "health_advisor", name: "健康顾问", color: "#1565C0" },
-  { id: "health_records", name: "健康档案", color: "#00897B" },
-  { id: "medication_reminder", name: "用药提醒", color: "#7B1FA2" },
-  { id: "visit_summary", name: "就诊摘要", color: "#E65100" },
+  { id: "health_advisor", name: HEALTH_ADVISOR_NAME, color: "#1565C0" },
+  { id: "health_records", name: HEALTH_RECORDS_NAME, color: "#00897B" },
+  { id: "medication_reminder", name: MEDICATION_REMINDER_NAME, color: "#7B1FA2" },
+  { id: "visit_summary", name: VISIT_SUMMARY_NAME, color: "#E65100" },
 ];
 
 export default function NewChat() {
