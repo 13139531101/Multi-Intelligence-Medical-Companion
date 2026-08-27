@@ -228,29 +228,148 @@ class DomainManifest:
         return m
 
 
+def _build_manifest_from_env() -> Optional[DomainManifest]:
+    """
+    阶段48-config: 完全从环境变量构建 manifest。
+    如果 PHA_DOMAIN 没有配置，返回 None 回退到 YAML 方式。
+    """
+    domain_name = os.getenv("PHA_DOMAIN")
+    if not domain_name:
+        return None
+
+    m = DomainManifest()
+    m.source_path = "<env>"
+
+    # domain
+    m.domain = DomainConfig(
+        name=domain_name,
+        display_name=os.getenv("PHA_DOMAIN_DISPLAY_NAME", domain_name),
+        description=os.getenv("PHA_DOMAIN_DESCRIPTION", ""),
+        version=os.getenv("PHA_DOMAIN_VERSION", "0.1.0"),
+    )
+
+    # host
+    m.host = HostConfig(
+        name=os.getenv("PHA_HOST_NAME", "health_advisor"),
+        fallback_keywords=_parse_list(os.getenv("PHA_HOST_FALLBACK_KEYWORDS", "怎么办,怎么,为什么")),
+        classify_model=os.getenv("PHA_HOST_CLASSIFY_MODEL", "deepseek-chat"),
+    )
+
+    # did
+    m.did_domain = os.getenv("PHA_DID_DOMAIN", "pha.local")
+    m.did_prefix = os.getenv("PHA_DID_PREFIX", "did:wba")
+
+    # mcp
+    m.mcp_transport = os.getenv("PHA_MCP_TRANSPORT", "streamable_http")
+
+    # tool filter
+    blacklist_str = os.getenv("PHA_TOOL_BLACKLIST", "")
+    m.tool_filter_blacklist = _parse_list(blacklist_str)
+
+    # agents: 从环境变量构建（支持最多 4 个）
+    agent_names = os.getenv("PHA_AGENT_NAMES", "health_advisor,health_records,medication_reminder,visit_summary")
+    for name in _parse_list(agent_names):
+        env_prefix = f"{name.upper().replace('-', '_')}_"
+        agent = AgentSpec(
+            name=name,
+            display_name=os.getenv(f"{env_prefix}DISPLAY_NAME", name),
+            description=os.getenv(f"{env_prefix}DESCRIPTION", ""),
+            keywords=_parse_list(os.getenv(f"{env_prefix}KEYWORDS", "")),
+            tools_module=os.getenv(f"{env_prefix}TOOLS_MODULE", name),
+            phacore_modules=_parse_list(os.getenv(f"{env_prefix}PHACORE_MODULES", "ocr")),
+            aliases=_parse_list(os.getenv(f"{env_prefix}ALIASES", "")),
+            dangerously=os.getenv(f"{env_prefix}DANGEROUSLY", "false").lower() == "true",
+            port=int(os.getenv(f"{env_prefix}PORT", _get_default_port(name))),
+            peers=_parse_list(os.getenv(f"{env_prefix}PEERS", "")),
+        )
+        m.agents.append(agent)
+
+    # service_discovery
+    sd = ServiceDiscovery()
+    for agent in m.agents:
+        port_env = f"{agent.name.upper().replace('-', '_')}_PORT"
+        if port_env in os.environ:
+            try:
+                sd.services[agent.name] = int(os.environ[port_env])
+            except ValueError:
+                pass
+    m.service_discovery = sd
+
+    logger.info("[DomainManifest] built from env: domain=%s, agents=%d", m.domain.name, len(m.agents))
+    return m
+
+
+def _parse_list(value: str) -> List[str]:
+    """解析逗号分隔的字符串为空列表"""
+    if not value or not value.strip():
+        return []
+    return [s.strip() for s in value.split(",") if s.strip()]
+
+
+def _get_default_port(name: str) -> str:
+    """根据 name 返回默认端口"""
+    defaults = {
+        "health_records": "10010",
+        "health_advisor": "10011",
+        "medication_reminder": "10012",
+        "visit_summary": "10013",
+    }
+    return defaults.get(name, "10000")
+
+
+def _apply_env_overrides(manifest: DomainManifest) -> None:
+    """用环境变量覆盖 manifest 中的 agent 端口（向后兼容）"""
+    for agent in manifest.agents:
+        env_key = f"{agent.name.upper().replace('-', '_')}_PORT"
+        if env_key in os.environ:
+            try:
+                agent.port = int(os.environ[env_key])
+            except ValueError:
+                pass
+
+
 def load_default() -> DomainManifest:
-    """根据 PHA_DOMAIN_MANIFEST 环境变量加载 manifest.
+    """
+    阶段48-config: 完全从环境变量构建 manifest（推荐方式）。
 
     优先级:
-      1. $PHA_DOMAIN_MANIFEST 完整路径 或 不带后缀的文件名 (在 examples/domain_configs/ 下找)
-      2. 默认 examples/domain_configs/pha.health.yaml
+      1. PHA_DOMAIN_MANIFEST=env → 从环境变量构建（客户推荐方式）
+      2. PHA_DOMAIN_MANIFEST=<yaml文件> → 从 YAML 文件加载（向后兼容）
+      3. 默认 pha.health.yaml 存在 → 从 YAML 加载
+      4. 完全 fallback 硬编码（最后兜底）
 
-    不需要依赖 yaml 也能 fallback (硬编码 PHA 默认 4 agent)
+    从环境变量构建时，所有 agent 配置均从 .env 读取，实现"只改 .env 即可部署"。
     """
     env = os.getenv(DEFAULT_MANIFEST_ENV)
-    if env:
+
+    # 模式1: env 模式（阶段48-config 推荐方式）
+    if env == "env":
+        manifest = _build_manifest_from_env()
+        if manifest:
+            return manifest
+        logger.warning("[DomainManifest] PHA_DOMAIN_MANIFEST=env 但 PHA_DOMAIN 未配置，回退到 YAML 方式")
+
+    # 模式2: 指定 YAML 文件
+    if env and env != "env":
         if env.endswith((".yaml", ".yml")):
             path = env if os.path.exists(env) else _MANIFEST_DIR / env
         else:
             path = _MANIFEST_DIR / f"{env}.yaml"
         if Path(path).exists():
-            return DomainManifest.from_yaml(path)
-        logger.warning("[DomainManifest] env %s=%s 找不到, 用默认", DEFAULT_MANIFEST_ENV, env)
+            manifest = DomainManifest.from_yaml(path)
+            _apply_env_overrides(manifest)
+            return manifest
+        logger.warning("[DomainManifest] env %s=%s 找不到, 回退", DEFAULT_MANIFEST_ENV, env)
 
+    # 模式3: 默认 YAML
     default = _MANIFEST_DIR / "pha.health.yaml"
     if default.exists():
-        return DomainManifest.from_yaml(default)
-    return _hardcoded_pha_manifest()
+        manifest = DomainManifest.from_yaml(default)
+    else:
+        manifest = _hardcoded_pha_manifest()
+
+    _apply_env_overrides(manifest)
+    return manifest
 
 
 def _hardcoded_pha_manifest() -> DomainManifest:

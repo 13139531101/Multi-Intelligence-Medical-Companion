@@ -177,17 +177,22 @@ async def call_anp_rpc(
 # 已知 PHA agent 配置（默认发现列表）
 # ============================================================
 def get_default_agent_urls() -> list[str]:
-    """从环境变量读 agent URL 列表，默认值匹配 docker-compose"""
+    """从环境变量读 agent URL 列表（阶段48-config）"""
     urls = os.getenv("PHA_ANP_AGENT_URLS", "").strip()
     if urls:
         return [u.strip() for u in urls.split(",") if u.strip()]
-    # 默认（docker compose 内）
-    return [
-        "http://health_records:10010",
-        "http://health_advisor:10011",
-        "http://medication_reminder:10012",
-        "http://visit_summary:10013",
+    # fallback: 从环境变量拼装（阶段48-config）
+    agents = [
+        ("health_records", "HEALTH_RECORDS_PORT", 10010),
+        ("health_advisor", "HEALTH_ADVISOR_PORT", 10011),
+        ("medication_reminder", "MEDICATION_REMINDER_PORT", 10012),
+        ("visit_summary", "VISIT_SUMMARY_PORT", 10013),
     ]
+    result = []
+    for name, env_key, default in agents:
+        port = int(os.getenv(env_key, str(default)))
+        result.append(f"http://{name}:{port}")
+    return result
 
 
 # ============================================================

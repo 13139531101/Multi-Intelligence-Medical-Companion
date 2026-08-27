@@ -55,7 +55,7 @@ class DatabaseConfig:
             'host': os.getenv('DB_HOST', 'localhost'),
             'port': int(os.getenv('DB_PORT', 5432)),
             'user': os.getenv('DB_USER', 'pha'),
-            'password': os.getenv('DB_PASSWORD', 'pha_pwd'),
+            'password': os.getenv('DB_PASSWORD', 'pha_pass'),
             'dbname': os.getenv('DB_NAME', os.getenv('POSTGRES_DB', 'personal_health_assistant')),
             'autocommit': False,
         }

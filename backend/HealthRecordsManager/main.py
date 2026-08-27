@@ -166,7 +166,7 @@ def build_app(host: str, port: int, agent_prompt_file: str, model_name: str,
                 "description": "健康档案管理员",
                 "version": "2.0-stage48-A2A",
                 "did": "did:wba:pha.local:health_records",
-                "endpoints": [{"url": "http://health_records:10010/anp", "type": "ANP"}],
+                "endpoints": [{"url": f"http://health_records:{os.getenv('PORT') or os.getenv('HEALTH_RECORDS_PORT', '10010')}/anp", "type": "ANP"}],
                 "capabilities": {"streaming": True},
             })
 

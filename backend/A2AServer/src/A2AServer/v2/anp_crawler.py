@@ -330,18 +330,16 @@ def resolve_did_to_url(did: str, include_anp_path: bool = True) -> Optional[str]
     except Exception:
         pass
 
-    # 2. Legacy fallback（硬编码映射）
-    port_map = {
-        "hostapi": (13002, False),       # hostapi 的 ANP 在 /anp（hostapi 本身 mount 了 create_hostapi_anp_app）
-        "health_advisor": (10011, True),
-        "health_records": (10010, True),
-        "medication_reminder": (10012, True),
-        "visit_summary": (10013, True),
-    }
-    if name in port_map:
-        port, has_anp = port_map[name]
+    # 2. Fallback: 从环境变量读端口（阶段48-config）
+    try:
+        env_key = f"{name.upper().replace('-', '_')}_PORT"
+        port = int(os.environ[env_key])
+        # hostapi 默认无 /anp（hostapi 的 ANP 在 /anp 路径下）
+        has_anp = True if name != "hostapi" else False
         path = "/anp" if (include_anp_path and has_anp) else ""
         return f"http://{name}:{port}{path}"
+    except Exception:
+        pass
     return None
 
 

@@ -133,7 +133,7 @@ def build_app(host: str, port: int, agent_prompt_file: str, model_name: str,
                 "description": "用药提醒助手",
                 "version": "2.0-stage48-A2A",
                 "did": "did:wba:pha.local:medication_reminder",
-                "endpoints": [{"url": "http://medication_reminder:10012/anp", "type": "ANP"}],
+                "endpoints": [{"url": f"http://medication_reminder:{os.getenv('PORT') or os.getenv('MEDICATION_REMINDER_PORT', '10012')}/anp", "type": "ANP"}],
                 "capabilities": {"streaming": True},
             })
 

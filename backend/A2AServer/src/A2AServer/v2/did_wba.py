@@ -345,14 +345,13 @@ def get_default_port(name: str) -> int:
             return manifest.service_discovery.get_port(name)
     except Exception:
         pass
-    # legacy fallback
-    legacy = {
-        "health_advisor": 10011,
-        "health_records": 10010,
-        "medication_reminder": 10012,
-        "visit_summary": 10013,
-    }
-    return legacy.get(name, 10000)
+    # fallback: 从环境变量读（阶段48-config）
+    try:
+        env_key = f"{name.upper().replace('-', '_')}_PORT"
+        return int(os.environ[env_key])
+    except Exception:
+        pass
+    return 10000
 
 
 __all__ = [

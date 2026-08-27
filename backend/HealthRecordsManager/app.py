@@ -6,7 +6,7 @@ from main import build_app
 import os
 
 _host = os.getenv("HOST", "0.0.0.0")
-_port = int(os.getenv("PORT", "10010"))
+_port = int(os.getenv("PORT") or os.getenv("HEALTH_RECORDS_PORT", "10010"))
 _model = os.getenv("LLM_MODEL", "deepseek-chat")
 _provider = os.getenv("PROVIDER", "deepseek")
 _prompt = os.getenv("PROMPT_FILE", "memory_enhanced_agent_prompt.md")

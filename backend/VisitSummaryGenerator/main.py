@@ -134,7 +134,7 @@ def build_app(host: str, port: int, agent_prompt_file: str, model_name: str,
                 "description": "就诊摘要生成",
                 "version": "2.0-stage48-A2A",
                 "did": "did:wba:pha.local:visit_summary",
-                "endpoints": [{"url": "http://visit_summary:10013/anp", "type": "ANP"}],
+                "endpoints": [{"url": f"http://visit_summary:{os.getenv('PORT') or os.getenv('VISIT_SUMMARY_PORT', '10013')}/anp", "type": "ANP"}],
                 "capabilities": {"streaming": True},
             })
 
@@ -241,7 +241,7 @@ def build_app(host: str, port: int, agent_prompt_file: str, model_name: str,
                 logger.exception("[ANP:visit_summary] error")
                 return ORjsonResponse({"jsonrpc": "2.0", "error": {"code": -32603, "message": str(e)[:200]}})
 
-        async def did_document(_request: Request):
+        async def did_document(request: Request):
             did = request.path_params.get("did", "")
             try:
                 from A2AServer.v2.did_wba import get_keystore

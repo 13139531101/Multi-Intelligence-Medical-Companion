@@ -146,7 +146,7 @@ def build_app(host: str, port: int, agent_prompt_file: str, model_name: str,
                 "description": "健康顾问 AI",
                 "version": "2.0-stage48-A2A",
                 "did": "did:wba:pha.local:health_advisor",
-                "endpoints": [{"url": "http://health_advisor:10011/anp", "type": "ANP"}],
+                "endpoints": [{"url": f"http://health_advisor:{os.getenv('PORT') or os.getenv('HEALTH_ADVISOR_PORT', '10011')}/anp", "type": "ANP"}],
                 "capabilities": {"streaming": True},
             })
 
@@ -253,7 +253,7 @@ def build_app(host: str, port: int, agent_prompt_file: str, model_name: str,
                 logger.exception("[ANP:health_advisor] error")
                 return ORjsonResponse({"jsonrpc": "2.0", "error": {"code": -32603, "message": str(e)[:200]}})
 
-        async def did_document(_request: Request):
+        async def did_document(request: Request):
             did = request.path_params.get("did", "")
             try:
                 from A2AServer.v2.did_wba import get_keystore
