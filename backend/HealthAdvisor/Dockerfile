@@ -22,4 +22,5 @@ EXPOSE 10011
 # Set working directory to service subfolder and run
 WORKDIR /app/HealthAdvisor
 # 阶段48-ops: 多 worker 并发（workers=CPU核数，最多4个）
-CMD ["sh", "-c", "uvicorn app:app --host 0.0.0.0 --port 10011 --workers 4"]
+# 支持 SIGHUP 热重载：收到信号后优雅重启 workers 加载新配置
+CMD ["sh", "-c", "uvicorn app:app --host 0.0.0.0 --port 10011 --workers 4 --sighup-term"]

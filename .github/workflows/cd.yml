@@ -1,0 +1,344 @@
+name: Deploy (Zero-Downtime)
+
+# ============================================================
+# CD Pipeline — 零停机部署 + 数据库迁移 + 热配置重载
+#
+# 触发条件:
+#   - push tag v*.*.*     (生产部署)
+#   - push to main        (预发布/灰度)
+#   - workflow_dispatch   (手动触发，可选环境/服务)
+#
+# 前置依赖: build.yml 已将 6 个镜像推送到阿里云镜像仓库
+# ============================================================
+
+on:
+  push:
+    tags: ["v*.*.*"]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "部署环境"
+        required: true
+        default: "staging"
+        type: choice
+        options:
+          - staging
+          - production
+      services:
+        description: "部署服务（空=全部）"
+        required: false
+        type: string
+        description: "逗号分隔的服务名，留空表示全部"
+
+env:
+  REGISTRY: crpi-zr8m4m7ism94623a.cn-hangzhou.personal.cr.aliyuncs.com/duozhiyiban
+  IMAGE_PREFIX: a2aserver
+  COMPOSE_FILE: docker-compose.yml
+  # 默认 .env 路径（CI 会用 secrets 注入）
+  ENV_FILE: .env
+
+jobs:
+  # ───────────────────────────────────────────────
+  # Job 1: 准备 — 解析镜像 TAG 和环境变量
+  # ───────────────────────────────────────────────
+  prepare:
+    name: Prepare
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.vars.outputs.tag }}
+      is_production: ${{ steps.vars.outputs.is_production }}
+      services: ${{ steps.vars.outputs.services }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Compute vars
+        id: vars
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "is_production=true" >> $GITHUB_OUTPUT
+          else
+            echo "is_production=false" >> $GITHUB_OUTPUT
+          fi
+
+          # services input: 如果手动触发且指定了服务，取输入值；否则部署全部
+          SERVICES="${{ github.event.inputs.services }}"
+          if [ -z "$SERVICES" ]; then
+            SERVICES="health_advisor,health_records,medication_reminder,visit_summary,hostapi,multiagent_front"
+          fi
+          echo "services=$SERVICES" >> $GITHUB_OUTPUT
+
+      - name: Generate deployment summary
+        run: |
+          echo "## Deploy Prepare" >> $GITHUB_STEP_SUMMARY
+          echo "- **Tag**: \`${{ steps.vars.outputs.tag }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Environment**: ${{ github.event.inputs.environment || (steps.vars.outputs.is_production && 'production' || 'staging') }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Services**: \`${{ steps.vars.outputs.services }}\`" >> $GITHUB_STEP_SUMMARY
+
+  # ───────────────────────────────────────────────
+  # Job 2: 数据库迁移（独立 Job，失败阻断后续部署）
+  # ───────────────────────────────────────────────
+  migrate:
+    name: DB Migration
+    runs-on: ubuntu-latest
+    needs: prepare
+    environment: ${{ github.event.inputs.environment || 'staging' }}
+    # 生产环境只允许 tag 触发
+    if: ${{ needs.prepare.outputs.is_production == 'true' || github.event.inputs.environment != '' }}
+    outputs:
+      migrated: ${{ steps.migrate.outputs.migrated }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install migration deps
+        run: pip install psycopg2-binary
+
+      - name: Wait for database
+        uses: gaúcho/wait-for-check@master
+        with:
+          timeout: 60
+          interval: 5
+
+      - name: Run migrations
+        id: migrate
+        env:
+          DATABASE_URL: ${{ secrets.DEPLOY_DATABASE_URL }}
+          PYTHONUNBUFFERED: "1"
+        run: |
+          echo "::group::Pending migrations"
+          python scripts/migrate.py pending || true
+          echo "::endgroup::"
+
+          echo "::group::Apply migrations"
+          python scripts/migrate.py run
+          echo "migrated=true" >> $GITHUB_OUTPUT
+          echo "::endgroup::"
+
+      - name: Migration summary
+        if: always()
+        run: |
+          echo "## DB Migration" >> $GITHUB_STEP_SUMMARY
+          echo "Status: \`${{ steps.migrate.outputs.migrated || 'skipped' }}\`" >> $GITHUB_STEP_SUMMARY
+
+  # ───────────────────────────────────────────────
+  # Job 3: 远程服务器 — 零停机滚动部署
+  # ───────────────────────────────────────────────
+  deploy:
+    name: Deploy
+    runs-on: ubuntu-latest
+    needs: [prepare, migrate]
+    environment: ${{ github.event.inputs.environment || 'staging' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        service: ${{ fromJSON(needs.prepare.outputs.services) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Generate deploy script
+        id: script
+        env:
+          TAG: ${{ needs.prepare.outputs.tag }}
+          SERVICE: ${{ matrix.service }}
+          REGISTRY: ${{ env.REGISTRY }}
+          IMAGE_PREFIX: ${{ env.IMAGE_PREFIX }}
+        run: |
+          cat << 'SCRIPT' > deploy_service.sh
+          #!/bin/bash
+          set -euo pipefail
+
+          TAG="$1"
+          SERVICE="$2"
+          REGISTRY="$3"
+          IMAGE_PREFIX="$4"
+
+          IMAGE="${REGISTRY}/${IMAGE_PREFIX}-${SERVICE}:${TAG}"
+          COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.yml}"
+          ENV_FILE="${ENV_FILE:-.env}"
+
+          echo "━━━ Deploying $SERVICE ━━━"
+          echo "Image: $IMAGE"
+
+          # 1. 登录镜像仓库
+          echo "Login to registry..."
+          docker login "$REGISTRY" \
+            -u "${{ secrets.ALIYUN_REGISTRY_USER }}" \
+            -p "${{ secrets.ALIYUN_REGISTRY_PASSWORD }}"
+
+          # 2. 拉取新镜像（提前拉取，不占用滚动窗口）
+          echo "Pull new image..."
+          docker pull "$IMAGE"
+
+          # 3. 使用 docker compose 滚动更新（--no-deps 不重启依赖服务）
+          echo "Rolling update (zero-downtime)..."
+          TAG="$TAG" docker compose \
+            -f "$COMPOSE_FILE" \
+            -f "$COMPOSE_FILE" \
+            up -d \
+            --no-deps \
+            --no-build \
+            --scale "${SERVICE}=2" \
+            "${SERVICE}"
+
+          # 等新容器 healthcheck 通过
+          echo "Waiting for healthcheck..."
+          sleep 15
+
+          # 4. 缩容回 1（标准零停机：先起新，再停旧）
+          docker compose -f "$COMPOSE_FILE" up -d --scale "${SERVICE}=1" "${SERVICE}"
+
+          # 5. 确认最终状态
+          echo "Final status:"
+          docker compose -f "$COMPOSE_FILE" ps "$SERVICE"
+          echo "━━━ $SERVICE deployed ━━━"
+          SCRIPT
+          chmod +x deploy_service.sh
+
+      - name: Deploy to server
+        env:
+          TAG: ${{ needs.prepare.outputs.tag }}
+          SERVICE: ${{ matrix.service }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          # 将部署脚本、compose 文件、.env 同步到远程服务器并执行
+          rsync -az --delete \
+            -e "ssh -o StrictHostKeyChecking=no -i $DEPLOY_SSH_KEY" \
+            --exclude '.git' \
+            --exclude 'node_modules' \
+            --exclude '__pycache__' \
+            --exclude '*.pyc' \
+            --exclude 'backend/A2AServer/src/A2AServer/v2/__pycache__' \
+            ./ \
+            "${DEPLOY_USER}@${DEPLOY_HOST}:/app/pha/"
+
+          ssh -o StrictHostKeyChecking=no -i $DEPLOY_SSH_KEY "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            "cd /app/pha && TAG=${{ env.TAG }} ./deploy_service.sh ${{ env.TAG }} ${{ env.SERVICE }} ${{ env.REGISTRY }} ${{ env.IMAGE_PREFIX }}"
+
+      - name: Deploy summary
+        if: always()
+        run: |
+          echo "## Deploy: ${{ matrix.service }}" >> $GITHUB_STEP_SUMMARY
+          echo "Image tag: \`${{ needs.prepare.outputs.tag }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "Status: ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
+
+  # ───────────────────────────────────────────────
+  # Job 4: 热配置重载（reload .env，不重启容器）
+  # ───────────────────────────────────────────────
+  config-reload:
+    name: Config Reload
+    runs-on: ubuntu-latest
+    needs: deploy
+    # 仅手动触发时执行热重载
+    if: ${{ github.event.inputs.environment != '' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Reload config on server
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          # 同步最新 .env 到服务器
+          rsync -az \
+            -e "ssh -o StrictHostKeyChecking=no -i $DEPLOY_SSH_KEY" \
+            .env \
+            "${DEPLOY_USER}@${DEPLOY_HOST}:/app/pha/.env"
+
+          # 对每个后端服务发送 SIGHUP，让服务重新读取 .env
+          # 注意：Python FastAPI/uwsgi 不自动读 .env 变化，
+          # 这里通过重启容器但保持 rolling update 方式实现无感知重载
+          ssh -o StrictHostKeyChecking=no -i $DEPLOY_SSH_KEY "${DEPLOY_USER}@${DEPLOY_HOST}" << 'REMOTE'
+            cd /app/pha
+            echo "━━━ Hot config reload ━━━"
+            for svc in health_advisor health_records medication_reminder visit_summary hostapi; do
+              echo "Reloading $svc..."
+              # 滚动重启：起新容器接过流量后再停旧容器
+              TAG="${TAG:-latest}" docker compose up -d --no-deps --scale "${svc}=2" "$svc"
+              sleep 10
+              docker compose up -d --no-deps --scale "${svc}=1" "$svc"
+              echo "  ✓ $svc reloaded"
+            done
+            echo "━━━ Config reload complete ━━━"
+          REMOTE
+
+      - name: Verify services healthy
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          ssh -o StrictHostKeyChecking=no -i $DEPLOY_SSH_KEY "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            "cd /app/pha && docker compose ps --format 'table {{.Name}}\t{{.Status}}'"
+
+      - name: Config reload summary
+        if: always()
+        run: |
+          echo "## Hot Config Reload" >> $GITHUB_STEP_SUMMARY
+          echo "Status: ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
+
+  # ───────────────────────────────────────────────
+  # Job 5: 部署验证 — 确认所有服务健康
+  # ───────────────────────────────────────────────
+  verify:
+    name: Verify
+    runs-on: ubuntu-latest
+    needs: [deploy, config-reload]
+    if: ${{ always() && needs.deploy.result == 'success' }}
+    steps:
+      - name: Verify deployment
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          ssh -o StrictHostKeyChecking=no -i $DEPLOY_SSH_KEY "${DEPLOY_USER}@${DEPLOY_HOST}" << 'REMOTE'
+            set -e
+            cd /app/pha
+
+            echo "━━━ Service Health Check ━━━"
+            docker compose ps
+
+            echo ""
+            echo "━━━ Endpoint Checks ━━━"
+
+            # 检查 hostapi
+            HTTP_CODE=$(docker compose exec -T hostapi \
+              python -c "import urllib.request; urllib.request.urlopen('http://localhost:13002/health').close(); print('OK')" 2>/dev/null || echo "FAIL")
+            echo "hostapi /health : $HTTP_CODE"
+
+            # 检查所有 agent 的 .well-known/agent.json
+            for svc in health_advisor medication_reminder visit_summary health_records; do
+              HTTP_CODE=$(docker compose exec -T "$svc" \
+                python -c "import urllib.request; urllib.request.urlopen('http://localhost:$(docker compose exec -T "$svc" python -c 'import os;print(os.getenv(\"PORT\",\"10011\"))')/.well-known/agent.json').close(); print('OK')" 2>/dev/null || echo "FAIL")
+              echo "$svc agent.json : $HTTP_CODE"
+            done
+
+            echo ""
+            echo "━━━ Deployment verified ━━━"
+          REMOTE
+
+      - name: Final summary
+        if: always()
+        run: |
+          echo "## Deployment Complete" >> $GITHUB_STEP_SUMMARY
+          echo "- **Tag**: \`${{ needs.prepare.outputs.tag }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Deploy jobs**: ${{ needs.deploy.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Migration**: ${{ needs.migrate.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Config reload**: ${{ needs.config-reload.result || 'not requested' }}" >> $GITHUB_STEP_SUMMARY

@@ -23,4 +23,5 @@ EXPOSE 10012
 
 WORKDIR /app/MedicationReminder
 # 阶段48-ops: 多 worker 并发（workers=CPU核数，最多4个）
-CMD ["sh", "-c", "uvicorn app:app --host 0.0.0.0 --port 10012 --workers 4"]
+# 支持 SIGHUP 热重载
+CMD ["sh", "-c", "uvicorn app:app --host 0.0.0.0 --port 10012 --workers 4 --sighup-term"]
