@@ -69,6 +69,12 @@ services:
       - SPARK_TIMEOUT_SECONDS=${SPARK_TIMEOUT_SECONDS:-25}
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - EMBEDDING_API_BASE=${EMBEDDING_API_BASE:-}
+      - EMBEDDING_PROVIDER=${EMBEDDING_PROVIDER:-}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-}
+      - EMBEDDING_API_KEY=${EMBEDDING_API_KEY:-}
+      - EMBEDDING_TIMEOUT_SECONDS=${EMBEDDING_TIMEOUT_SECONDS:-60}
+      - PHA_MAX_STREAM_SEC=${PHA_MAX_STREAM_SEC:-120}
     ports:
       - "${HEALTH_ADVISOR_EXTERNAL_PORT:-11011}:${HEALTH_ADVISOR_PORT:-10011}"
     volumes:
@@ -328,6 +334,12 @@ services:
     mem_limit: 1g
     volumes:
       - hostapi_uploads:/app/uploads
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:${HOST_API_PORT:-13002}/health').close()\" || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 40s
     depends_on:
       redis:
         condition: service_healthy
@@ -355,7 +367,8 @@ services:
     ports:
       - "5174:80"
     depends_on:
-      - hostapi
+      hostapi:
+        condition: service_healthy
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "wget -q --spider http://localhost/index.html || exit 0"]

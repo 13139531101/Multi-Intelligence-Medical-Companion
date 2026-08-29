@@ -459,6 +459,9 @@ class V2Agent:
                         # 阶段48-12: 等到 args 看起来完整才 yield (含 '}' 或完整关键词)
                         # 简化: chunk 都没 id 时直接 yield; 但有 id 时等到 full content
                         if not tc_id:
+                            # 阶段48-fix: 只有当 tool_name 和 args 都非空才 yield，避免空 tool_call
+                            if not tc_name or not tc_args_parsed:
+                                continue
                             sig_key = ("tc_sig", tc_name, full_args_str)
                             if sig_key in seen_tool_calls:
                                 continue
@@ -467,7 +470,7 @@ class V2Agent:
                                 "type": "tool_call",
                                 "id": tc_id,
                                 "name": tc_name,
-                                "args": tc_args_parsed if tc_args_parsed else {"_raw": full_args_str},
+                                "args": tc_args_parsed,
                             }
                         else:
                             # 用 tc_id 跟踪 — 但只在 iter 看到完整 args 才 yield
