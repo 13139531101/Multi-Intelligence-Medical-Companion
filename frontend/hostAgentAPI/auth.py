@@ -69,10 +69,33 @@ class UserResponse(BaseModel):
     email: Optional[str] = None
     phone: Optional[str] = None
     avatar_url: Optional[str] = None
+    # 个人资料
+    nickname: Optional[str] = None
+    birthday: Optional[str] = None  # YYYY-MM-DD
+    gender: Optional[str] = None  # male/female/other
+    # 健康偏好
+    allergies: Optional[str] = None  # JSON string array
+    chronic_diseases: Optional[str] = None  # JSON string array
+    medication_reminder_enabled: Optional[bool] = True
+    visit_reminder_enabled: Optional[bool] = True
+    # 账号
     last_login_at: Optional[datetime] = None
     login_count: int
     status: int
     created_at: datetime
+
+
+class UserProfileUpdate(BaseModel):
+    nickname: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    avatar_url: Optional[str] = None
+    birthday: Optional[str] = None
+    gender: Optional[str] = None
+    allergies: Optional[list[str]] = None
+    chronic_diseases: Optional[list[str]] = None
+    medication_reminder_enabled: Optional[bool] = None
+    visit_reminder_enabled: Optional[bool] = None
 
 
 class TokenResponse(BaseModel):
@@ -203,6 +226,16 @@ class AuthService:
                             email VARCHAR(100) UNIQUE,
                             phone VARCHAR(20) UNIQUE,
                             avatar_url VARCHAR(255),
+                            -- 个人资料
+                            nickname VARCHAR(50),
+                            birthday VARCHAR(10),
+                            gender VARCHAR(10),
+                            -- 健康偏好（JSON 字符串）
+                            allergies TEXT,
+                            chronic_diseases TEXT,
+                            medication_reminder_enabled BOOLEAN DEFAULT TRUE,
+                            visit_reminder_enabled BOOLEAN DEFAULT TRUE,
+                            -- 账号
                             last_login_at TIMESTAMP NULL,
                             login_count INTEGER DEFAULT 0,
                             status SMALLINT DEFAULT 1,
@@ -211,6 +244,20 @@ class AuthService:
                         );
                         """
                     )
+                    # 阶段48-profile: 新增字段（已有表的情况下 ALTER）
+                    for col_def in [
+                        "ADD COLUMN IF NOT EXISTS nickname VARCHAR(50)",
+                        "ADD COLUMN IF NOT EXISTS birthday VARCHAR(10)",
+                        "ADD COLUMN IF NOT EXISTS gender VARCHAR(10)",
+                        "ADD COLUMN IF NOT EXISTS allergies TEXT",
+                        "ADD COLUMN IF NOT EXISTS chronic_diseases TEXT",
+                        "ADD COLUMN IF NOT EXISTS medication_reminder_enabled BOOLEAN DEFAULT TRUE",
+                        "ADD COLUMN IF NOT EXISTS visit_reminder_enabled BOOLEAN DEFAULT TRUE",
+                    ]:
+                        try:
+                            cur.execute(f"ALTER TABLE users {col_def}")
+                        except Exception:
+                            pass
                     cur.execute(
                         """
                         CREATE TABLE IF NOT EXISTS user_sessions (
@@ -438,6 +485,9 @@ class AuthService:
             try:
                 cursor.execute("""
                     SELECT user_id, username, email, phone, avatar_url,
+                           nickname, birthday, gender,
+                           allergies, chronic_diseases,
+                           medication_reminder_enabled, visit_reminder_enabled,
                            last_login_at, login_count, status, created_at
                     FROM users WHERE user_id = %s AND status = 1
                 """, (user_id,))
@@ -549,6 +599,78 @@ async def login(login_data: UserLogin):
 async def get_user_info(current_user: Dict[str, Any] = Depends(get_current_user)):
     """获取当前用户信息"""
     return UserResponse(**current_user)
+
+
+@router.put("/user", response_model=UserResponse, summary="更新个人资料")
+async def update_user_profile(
+    profile: UserProfileUpdate,
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """更新个人资料（个人中心设置）"""
+    import json as _json
+    cursor = None
+    with auth_service.get_db_connection() as connection:
+        cursor = connection.cursor(row_factory=dict_row)
+        try:
+            # 构建动态更新语句
+            updates = []
+            values = []
+            if profile.nickname is not None:
+                updates.append("nickname = %s")
+                values.append(profile.nickname)
+            if profile.email is not None:
+                updates.append("email = %s")
+                values.append(profile.email)
+            if profile.phone is not None:
+                updates.append("phone = %s")
+                values.append(profile.phone)
+            if profile.avatar_url is not None:
+                updates.append("avatar_url = %s")
+                values.append(profile.avatar_url)
+            if profile.birthday is not None:
+                updates.append("birthday = %s")
+                values.append(profile.birthday)
+            if profile.gender is not None:
+                updates.append("gender = %s")
+                values.append(profile.gender)
+            if profile.allergies is not None:
+                updates.append("allergies = %s")
+                values.append(_json.dumps(profile.allergies, ensure_ascii=False))
+            if profile.chronic_diseases is not None:
+                updates.append("chronic_diseases = %s")
+                values.append(_json.dumps(profile.chronic_diseases, ensure_ascii=False))
+            if profile.medication_reminder_enabled is not None:
+                updates.append("medication_reminder_enabled = %s")
+                values.append(profile.medication_reminder_enabled)
+            if profile.visit_reminder_enabled is not None:
+                updates.append("visit_reminder_enabled = %s")
+                values.append(profile.visit_reminder_enabled)
+
+            if updates:
+                updates.append("updated_at = CURRENT_TIMESTAMP")
+                values.append(current_user['user_id'])
+                sql = f"UPDATE users SET {', '.join(updates)} WHERE user_id = %s"
+                cursor.execute(sql, values)
+                connection.commit()
+
+            # 重新查询返回最新数据
+            cursor.execute("""
+                SELECT user_id, username, email, phone, avatar_url,
+                       nickname, birthday, gender,
+                       allergies, chronic_diseases,
+                       medication_reminder_enabled, visit_reminder_enabled,
+                       last_login_at, login_count, status, created_at
+                FROM users WHERE user_id = %s
+            """, (current_user['user_id'],))
+            updated = cursor.fetchone()
+            return UserResponse(**updated)
+        except Exception as e:
+            connection.rollback()
+            logger.error(f"更新用户资料失败: {e}")
+            raise HTTPException(status_code=500, detail="更新失败")
+        finally:
+            if cursor:
+                cursor.close()
 
 
 @router.post("/logout", summary="用户登出")

@@ -143,6 +143,16 @@ export const verifyToken = async () => {
   }
 };
 
+// 更新个人资料（个人中心）
+export const updateUserProfile = async (profileData) => {
+  try {
+    const response = await authApi.put("/auth/user", profileData);
+    return response.data;
+  } catch (error) {
+    throw error.response?.data || { message: "更新个人资料失败" };
+  }
+};
+
 // === 健康档案API ===
 
 // 获取健康档案列表
