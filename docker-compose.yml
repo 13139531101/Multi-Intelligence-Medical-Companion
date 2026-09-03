@@ -331,7 +331,7 @@ services:
       - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
     ports:
       - "${HOST_API_EXTERNAL_PORT:-13002}:${HOST_API_PORT:-13002}"
-    mem_limit: 1g
+    mem_limit: 2g
     volumes:
       - hostapi_uploads:/app/uploads
     healthcheck:

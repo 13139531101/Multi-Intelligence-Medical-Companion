@@ -64,7 +64,7 @@ ENV HOST_API_BIND=0.0.0.0
 # 阶段48-perf: HOST_API_WORKERS 控制 uvicorn --workers 数量（默认 4）
 # 每个 worker 都会执行 lifespan()，独立初始化 ConversationServer / ADKHostManager / metrics registry。
 # 设为 1 可回退到单进程模式（便于本地调试）。
-ENV HOST_API_WORKERS=4
+ENV HOST_API_WORKERS=2
 
 # Expose service port
 EXPOSE 13002

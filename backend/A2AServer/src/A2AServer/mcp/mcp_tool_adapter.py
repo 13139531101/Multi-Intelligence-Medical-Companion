@@ -540,10 +540,15 @@ def _wrap_mcp_tool_with_userid(t):
         )
 
     def wrapped_run(**kwargs):
+        # StructuredTool only supports async; route through _arun
+        import asyncio
         cur = _resolve_user_id(kwargs)
         if cur:
             kwargs["user_id"] = cur
-        return original_run(**kwargs)
+        _config = kwargs.pop("config", None)
+        if original_arun is not None:
+            return asyncio.run(original_arun(config=_config, **kwargs))
+        raise NotImplementedError("StructuredTool does not support sync invocation")
 
     # Wrap both sync + async
     t._run = wrapped_run
@@ -552,7 +557,8 @@ def _wrap_mcp_tool_with_userid(t):
             cur = _resolve_user_id(kwargs)
             if cur:
                 kwargs["user_id"] = cur
-            return await original_arun(**kwargs)
+            _config = kwargs.pop("config", None)
+            return await original_arun(config=_config, **kwargs)
 
         try:
             t.coroutine = wrapped_arun

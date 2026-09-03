@@ -377,7 +377,7 @@ class BasicAgent:
 
 
         # Build initial conversation (system message + user query)
-        self._build_initial_conversation(sessionId, user_query, user_id=user_id, user_parts=user_parts) # This helper can be synchronous
+        await self._build_initial_conversation(sessionId, user_query, user_id=user_id, user_parts=user_parts) # This helper is now async
 
 
         # try:
@@ -389,7 +389,7 @@ class BasicAgent:
         #     # Ensure cleanup is called when run() finishes or an exception occurs
         #     await self.cleanup() # <-- AWAIT is valid here
 
-    def _build_initial_conversation(self, sessionId, user_query, user_id=None, user_parts=None):
+    async def _build_initial_conversation(self, sessionId, user_query, user_id=None, user_parts=None):
          # Helper method to build the initial conversation list (synchronous)
          self.conversation = []
          # 默认的prompt
@@ -413,6 +413,42 @@ class BasicAgent:
 
          # 加上当前的时间和用户ID信息到System Prompt
          header_info = f"当前用户ID: {final_user_id}。\n当前时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}。"
+
+         # 阶段48-profile: 从 hostapi 拉取用户健康偏好，注入 prompt
+         try:
+             import urllib.request
+             user_profile_url = os.getenv("USER_PROFILE_URL", f"http://hostapi:13002/auth/user-by-id/{final_user_id}")
+             try:
+                 req = urllib.request.Request(user_profile_url, headers={"User-Agent": "HealthAdvisor/1.0"})
+                 with urllib.request.urlopen(req, timeout=3) as resp:
+                     profile = json.loads(resp.read().decode("utf-8"))
+                 profile_parts = []
+                 if profile.get("nickname"):
+                     profile_parts.append(f"用户昵称: {profile['nickname']}")
+                 if profile.get("gender"):
+                     gender_map = {"male": "男", "female": "女", "other": "其他"}
+                     profile_parts.append(f"性别: {gender_map.get(profile['gender'], profile['gender'])}")
+                 if profile.get("birthday"):
+                     profile_parts.append(f"生日: {profile['birthday']}")
+                 if profile.get("allergies"):
+                     allergies = profile["allergies"]
+                     if isinstance(allergies, str):
+                         allergies = json.loads(allergies) if allergies.startswith("[") else [allergies]
+                     if allergies:
+                         profile_parts.append(f"过敏史: {', '.join(allergies)}")
+                 if profile.get("chronic_diseases"):
+                     diseases = profile["chronic_diseases"]
+                     if isinstance(diseases, str):
+                         diseases = json.loads(diseases) if diseases.startswith("[") else [diseases]
+                     if diseases:
+                         profile_parts.append(f"慢性病: {', '.join(diseases)}")
+                 if profile_parts:
+                     header_info += "\n[用户健康档案] " + "；".join(profile_parts)
+             except Exception:
+                 pass  # 拉不到不阻塞推理
+         except ImportError:
+             pass
+
          system_content = header_info + "\n" + agent_prompt
 
          rollup = self.session_rollups.get(sessionId, "")
@@ -454,6 +490,28 @@ class BasicAgent:
                          system_content = system_content + "\n" + memory_block
          except Exception as e:
              logger.warning(f"注入记忆上下文失败：{e}")
+
+         # 阶段48-profile: 主动调用个性化推荐工具，获取基于用户健康档案的建议
+         try:
+             for server_name, client in (self.servers or {}).items():
+                 try:
+                     rec_result = await client.call_tool(
+                         "get_personalized_recommendations",
+                         {"user_id": final_user_id, "recommendation_type": "general"},
+                         timeout_sec=10,
+                     )
+                     if rec_result and hasattr(rec_result, "content"):
+                         rec_text = "".join(
+                             c.text for c in rec_result.content
+                             if hasattr(c, "text") and c.text
+                         )
+                         if rec_text:
+                             system_content += "\n[个性化健康建议参考] " + self._clip_text(rec_text, 800)
+                             break
+                 except Exception:
+                     pass
+         except Exception:
+             pass
 
          try:
              conv = self.session_conversations[sessionId]

@@ -289,6 +289,35 @@ class V2Agent:
                 "require_user_input": False,
             }
 
+    async def _get_user_profile_text(self, user_id: str | None) -> str:
+        """阶段48-profile: 从 hostapi 拉取用户健康偏好文本，简洁格式注入 query 前缀"""
+        if not user_id:
+            return ""
+        try:
+            import urllib.request
+            url = f"http://hostapi:13002/auth/user-by-id/{user_id}"
+            req = urllib.request.Request(url, headers={"User-Agent": "HealthAdvisor/1.0"})
+            with urllib.request.urlopen(req, timeout=3) as resp:
+                profile = json.loads(resp.read().decode("utf-8"))
+            items = []
+            if profile.get("allergies"):
+                allergies = profile["allergies"]
+                if isinstance(allergies, str):
+                    allergies = json.loads(allergies) if allergies.startswith("[") else [allergies]
+                if allergies:
+                    items.append(f"过敏: {', '.join(allergies)}")
+            if profile.get("chronic_diseases"):
+                diseases = profile["chronic_diseases"]
+                if isinstance(diseases, str):
+                    diseases = json.loads(diseases) if diseases.startswith("[") else [diseases]
+                if diseases:
+                    items.append(f"慢病: {', '.join(diseases)}")
+            if items:
+                return "【用户健康档案】" + " | ".join(items)
+        except Exception as _e:
+            logger.warning(f"[_get_user_profile_text] failed: {_e}")
+        return ""
+
     async def stream(
         self,
         query: str,
@@ -369,6 +398,22 @@ class V2Agent:
             _stream_start = _t.time()
             _MAX_ITER = int(os.getenv("PHA_MAX_TOOL_ITER", "6"))  # 阶段48-12
             _MAX_STREAM_SEC = int(os.getenv("PHA_MAX_STREAM_SEC", "45"))
+
+            # 阶段48-profile: 拉取用户健康档案，注入 query 前缀（最多等1秒）
+            try:
+                import asyncio
+                profile_text = await asyncio.wait_for(
+                    self._get_user_profile_text(user_id), timeout=1.0
+                )
+            except asyncio.TimeoutError:
+                profile_text = ""
+                logger.warning(f"[v2_agent:{self.name}] profile fetch timeout, skipping")
+            except Exception as _e:
+                profile_text = ""
+                logger.warning(f"[v2_agent:{self.name}] profile fetch error: {_e}")
+            logger.info(f"[v2_agent:{self.name}] profile_text={repr(profile_text[:80] if profile_text else '')}")
+            if profile_text:
+                query = f"{profile_text}\n\n[用户问题] {query}"
 
             # 阶段48-12: 用 messages 模式 (LangGraph 0.3+), 每个 chunk 是一个增量 message
             try:

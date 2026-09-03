@@ -159,7 +159,7 @@ class AuthService:
             return None
         self._pool_init_attempted = True
         try:
-            max_size = int(os.getenv("AUTH_DB_POOL_MAX_SIZE", os.getenv("DB_POOL_MAX_SIZE", "20")))
+            max_size = int(os.getenv("AUTH_DB_POOL_MAX_SIZE", os.getenv("DB_POOL_MAX_SIZE", "2")))
         except Exception:
             max_size = 20
         try:
@@ -599,6 +599,16 @@ async def login(login_data: UserLogin):
 async def get_user_info(current_user: Dict[str, Any] = Depends(get_current_user)):
     """获取当前用户信息"""
     return UserResponse(**current_user)
+
+
+@router.get("/user-by-id/{user_id}", response_model=UserResponse, summary="内部接口：根据user_id获取用户信息（免认证）")
+async def get_user_by_id_route(user_id: str):
+    """供 health_advisor 等内部服务在 system prompt 构建时获取用户健康档案，无需 JWT 认证"""
+    try:
+        user = auth_service.get_user_by_id(user_id)
+        return UserResponse(**user)
+    except HTTPException:
+        raise HTTPException(status_code=404, detail="用户不存在")
 
 
 @router.put("/user", response_model=UserResponse, summary="更新个人资料")

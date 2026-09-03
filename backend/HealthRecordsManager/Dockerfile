@@ -25,4 +25,4 @@ EXPOSE 10010
 WORKDIR /app/HealthRecordsManager
 # 阶段48-ops: 多 worker 并发（workers=CPU核数，最多4个）
 # 支持 SIGHUP 热重载
-CMD ["sh", "-c", "uvicorn app:app --host 0.0.0.0 --port 10010 --workers 4 --sighup-term"]
+CMD ["sh", "-c", "uvicorn app:app --host 0.0.0.0 --port 10010 --workers 4 "]
