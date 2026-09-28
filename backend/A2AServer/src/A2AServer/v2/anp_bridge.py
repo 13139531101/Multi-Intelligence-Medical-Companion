@@ -259,6 +259,9 @@ def create_hostapi_anp_app():
                 "routing": result.get("routing"),
                 "content": result.get("content", ""),
                 "tool_calls": result.get("tool_calls", []),
+                # 阶段48-CRAG + ReAct 反思：把 RAG 来源 / 反思 元信息透传给客户端
+                "rag": result.get("rag", {}),
+                "critique": result.get("critique", {}),
             }
 
         @interface

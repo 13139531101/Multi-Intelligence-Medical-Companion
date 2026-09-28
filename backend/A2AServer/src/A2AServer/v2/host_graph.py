@@ -114,6 +114,12 @@ class HostState(TypedDict, total=False):
     # === ReAct 反思模式 ===
     critique_result: dict      # {"is_adequate": bool, "issues": [...], "reasoning": str, "suggested_revision": str}
     final_response_text: str   # critique 修订后的最终文本（critique_node 写入）
+    # === 阶段48-CRAG: Corrective RAG 决策结果 ===
+    crag_action: str           # CORRECT | AMBIGUOUS | INCORRECT
+    merged_context: str        # 合并后的本地+web 上下文文本（注入 agent prompt）
+    source_mix: str            # local | web | mixed | none
+    web_sources: list          # web 来源 [{title, url, snippet}]
+    confidence_level: str      # high | medium | low
 
 
 def _get_query(state) -> str:
@@ -528,19 +534,24 @@ async def crag_correct_node(state: HostState) -> dict:
     user_id = state.get("user_id", "default") or "default"
     rag_result = state.get("rag_result") or {}
     retrieval_needed = rag_result.get("retrieval_needed", False)
+    chunks = rag_result.get("chunks", []) or []
+    score = rag_result.get("score", 0.0)
+    is_relevant = rag_result.get("is_relevant", False)
 
-    # 不需要检索时，直接透传
-    if not retrieval_needed:
+    # 早期返回的条件：
+    # - retrieval_needed=False 表示磁吸判断"不需要RAG"（闲聊/明确指令）
+    # - 且本地有结果 且 is_relevant=True 时，直接透传（CORRECT）
+    # 否则即使 should_retrieve=False 也走 CRAG 决策，
+    # 因为「不需要RAG」可能只是因为本地 archive 没有相关内容，
+    # 此时应触发 web 搜索兜底。
+    if not retrieval_needed and is_relevant and chunks:
         return {
             "crag_action": "CORRECT",
             "merged_context": rag_result.get("context_text", ""),
-            "source_mix": "none",
+            "source_mix": "local",
             "web_sources": [],
             "confidence_level": "high",
         }
-
-    score = rag_result.get("score", 0.0)
-    is_relevant = rag_result.get("is_relevant", False)
 
     try:
         from .crag import decide_action, get_web_search_provider, merge_local_web
@@ -565,8 +576,9 @@ async def crag_correct_node(state: HostState) -> dict:
             }
 
         # AMBIGUOUS 或 INCORRECT：需要 web 搜索
-        web_provider = get_web_search_provider()
-        web_results = await web_provider.search(query, num_results=5)
+        # 使用带 fallback 的高层接口：主 provider 失败时自动降级到 LocalMockProvider
+        from .crag.web_search import get_web_search_results
+        web_results = await get_web_search_results(query, num_results=5)
 
         if not web_results:
             # Web 搜索失败
