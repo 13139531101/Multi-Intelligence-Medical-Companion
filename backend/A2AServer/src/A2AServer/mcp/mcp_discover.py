@@ -86,12 +86,19 @@ def _find_mcp_tool_files(agent_name: str) -> list[Path]:
     if agent_name in PHACORE_AGENT_ALIASES or agent_name == "PhaCore":
         # PhaCore 共享库: 加载所有 shared_*.py
         phacore_dir = _REPO_ROOT / "backend" / "PhaCore" / "mcpserver"
+        if not phacore_dir.exists():
+            phacore_dir = _REPO_ROOT / "PhaCore" / "mcpserver"
         if phacore_dir.exists():
             files.extend(sorted(phacore_dir.glob("shared_*.py")))
         return files
 
     dir_name = AGENT_DIR_MAP.get(agent_name, agent_name)
+    # 阶段48-ops: 兼容两种路径结构：
+    # 1. _REPO_ROOT/backend/<Agent>/mcpserver (旧/A2AServer场景)
+    # 2. _REPO_ROOT/<Agent>/mcpserver (health_advisor容器直接部署)
     mcpserver_dir = _REPO_ROOT / "backend" / dir_name / "mcpserver"
+    if not mcpserver_dir.exists():
+        mcpserver_dir = _REPO_ROOT / dir_name / "mcpserver"
     if not mcpserver_dir.exists():
         logger.debug("[mcp_discover] 目录不存在: %s", mcpserver_dir)
         return files
@@ -231,10 +238,12 @@ def _safe_load_module(file_path: str, module_name: str, timeout_sec: float = 3.0
     # 准备 sys.path
     file_path = Path(file_path).resolve()
     paths_to_add = [
-        str(file_path.parent.parent),  # backend/HealthAdvisor
-        str(file_path.parent.parent.parent),  # backend
+        str(file_path.parent.parent),  # backend/HealthAdvisor or HealthAdvisor
+        str(file_path.parent.parent.parent),  # backend or parent
         str(_REPO_ROOT),
         str(_REPO_ROOT / "backend"),
+        # 阶段48-ops: 兼容 health_advisor 容器直接部署（无 backend 前缀）
+        str(_REPO_ROOT / "HealthAdvisor"),
     ]
     for p in paths_to_add:
         if p and p not in sys.path:

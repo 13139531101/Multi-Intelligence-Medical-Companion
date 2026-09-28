@@ -20,6 +20,7 @@ dependencies = [
     "lmstudio",
     "openai",
     "google-genai>=1.10.0",
+    "duckduckgo-search>=5.0",  # 阶段48-CRAG: web search provider
 ]
 
 [tool.setuptools]

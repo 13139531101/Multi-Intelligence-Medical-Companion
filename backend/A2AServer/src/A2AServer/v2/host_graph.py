@@ -506,6 +506,133 @@ async def rag_retrieve_node(state: HostState) -> dict:
 
 
 # ============================================================
+# 阶段48-CRAG: Corrective RAG 节点
+# ============================================================
+async def crag_correct_node(state: HostState) -> dict:
+    """
+    CRAG Corrective 节点：判断本地 RAG 结果质量，决定是否触发 web 搜索。
+
+    分支策略：
+    - CORRECT   : 本地结果足够好，直接使用 context_text
+    - AMBIGUOUS : 本地结果部分相关，触发 web 搜索并合并
+    - INCORRECT : 本地结果不相关，丢弃本地，切换纯 web 搜索
+
+    输出写入 state：
+    - crag_action      : CORRECT | AMBIGUOUS | INCORRECT
+    - merged_context   : 混合后的上下文文本（注入 agent prompt）
+    - source_mix       : local | web | mixed | none
+    - web_sources      : web 来源列表 [{title, url, snippet}]
+    - confidence_level : high | medium | low
+    """
+    query = state.get("query", "")
+    user_id = state.get("user_id", "default") or "default"
+    rag_result = state.get("rag_result") or {}
+    retrieval_needed = rag_result.get("retrieval_needed", False)
+
+    # 不需要检索时，直接透传
+    if not retrieval_needed:
+        return {
+            "crag_action": "CORRECT",
+            "merged_context": rag_result.get("context_text", ""),
+            "source_mix": "none",
+            "web_sources": [],
+            "confidence_level": "high",
+        }
+
+    score = rag_result.get("score", 0.0)
+    is_relevant = rag_result.get("is_relevant", False)
+
+    try:
+        from .crag import decide_action, get_web_search_provider, merge_local_web
+        from .crag.action_policy import action_to_source_mix, action_to_confidence_level
+
+        # Step 1: 决策
+        action = decide_action(score, is_relevant)
+        logger.info(
+            "[crag_correct] action=%s score=%.2f is_relevant=%s query=%s",
+            action, score, is_relevant, query[:30]
+        )
+
+        # Step 2: 根据 action 执行
+        if action == "CORRECT":
+            # 本地结果足够好，直接使用
+            return {
+                "crag_action": action,
+                "merged_context": rag_result.get("context_text", ""),
+                "source_mix": action_to_source_mix(action),
+                "web_sources": [],
+                "confidence_level": action_to_confidence_level(action),
+            }
+
+        # AMBIGUOUS 或 INCORRECT：需要 web 搜索
+        web_provider = get_web_search_provider()
+        web_results = await web_provider.search(query, num_results=5)
+
+        if not web_results:
+            # Web 搜索失败
+            logger.warning("[crag_correct] web search returned 0 results")
+            if action == "INCORRECT":
+                return {
+                    "crag_action": "INCORRECT",
+                    "merged_context": "（未找到相关健康档案，网络搜索也未返回可用结果）",
+                    "source_mix": "none",
+                    "web_sources": [],
+                    "confidence_level": "low",
+                }
+            else:
+                # AMBIGUOUS 但 web 失败，退回本地
+                return {
+                    "crag_action": "AMBIGUOUS",
+                    "merged_context": rag_result.get("context_text", ""),
+                    "source_mix": "local",
+                    "web_sources": [],
+                    "confidence_level": "medium",
+                }
+
+        # 合并本地 + web
+        # 把原始 chunk 对象传给 merge_local_web（需要 SearchResult 兼容对象）
+        local_chunks = []
+        for c in rag_result.get("chunks", []):
+            # 重建为兼容对象（merge.py 需要 .chunk_text 属性）
+            class ChunkStub:
+                pass
+            stub = ChunkStub()
+            stub.chunk_text = c.get("text", "")
+            stub.score = c.get("score", 0.0)
+            stub.title = c.get("title", "")
+            stub.source_type = c.get("source", "").split("/")[0] if c.get("source") else ""
+            stub.source_id = c.get("source", "").split("/")[-1] if c.get("source") else ""
+            local_chunks.append(stub)
+
+        merged_ctx = await merge_local_web(
+            local_chunks=local_chunks,
+            web_results=web_results,
+            query=query,
+            local_context_text=rag_result.get("context_text", ""),
+            action=action,
+        )
+
+        return {
+            "crag_action": action,
+            "merged_context": merged_ctx.merged_text,
+            "source_mix": merged_ctx.source_mix,
+            "web_sources": merged_ctx.web_sources,
+            "confidence_level": merged_ctx.confidence_level,
+        }
+
+    except Exception as e:
+        logger.warning("[crag_correct] CRAG 处理失败: %s", e)
+        # 失败时退回本地结果
+        return {
+            "crag_action": "CORRECT",
+            "merged_context": rag_result.get("context_text", ""),
+            "source_mix": "local",
+            "web_sources": [],
+            "confidence_level": "medium",
+        }
+
+
+# ============================================================
 # 图节点
 # ============================================================
 async def classify_node(state: HostState) -> dict:
@@ -558,19 +685,33 @@ def invoke_agent_node(agent_name: str):
             full_content = ""
             tool_calls = []
 
-            # Magentic RAG: 注入检索上下文到 query
+            # Magentic RAG + CRAG: 注入检索上下文到 query
+            # 优先使用 CRAG 混合后的 merged_context（包含 web 搜索结果）
             user_query = state.get("query", "")
-            rag_result = state.get("rag_result") or {}
-            if rag_result.get("context_text"):
-                context_text = rag_result["context_text"]
+            merged_context = state.get("merged_context", "")
+            crag_action = state.get("crag_action", "CORRECT")
+            source_mix = state.get("source_mix", "none")
+
+            if merged_context:
+                # 根据 source_mix 生成不同的注入提示
+                if source_mix == "web":
+                    source_hint = "【信息来源】本次回答主要基于网络搜索结果，未找到您的个人健康档案记录。"
+                elif source_mix == "mixed":
+                    source_hint = "【信息来源】结合了您的个人健康档案和网络搜索结果。"
+                elif source_mix == "local":
+                    source_hint = "【信息来源】主要基于您的个人健康档案。"
+                else:
+                    source_hint = ""
+
                 enriched_query = (
-                    f"{context_text}\n\n"
+                    f"{merged_context}\n\n"
+                    f"{source_hint}\n\n"
                     f"【用户问题】{user_query}\n\n"
-                    f"请基于上述参考档案回答用户问题。如果参考档案不相关，请忽略并基于你的知识回答。"
+                    f"请基于上述参考信息回答用户问题。"
                 )
                 logger.info(
-                    "[rag_inject] query enriched with rag context: ctx_len=%d is_relevant=%s",
-                    len(context_text), rag_result.get("is_relevant", False)
+                    "[rag_inject] query enriched with CRAG context: ctx_len=%d action=%s source_mix=%s",
+                    len(merged_context), crag_action, source_mix
                 )
             else:
                 enriched_query = user_query
@@ -702,13 +843,18 @@ async def aggregate_node(state: HostState) -> dict:
                 "layer": state.get("routing_layer"),
                 "target": state.get("target_agent"),
             },
-            # Magentic RAG 元信息
+            # Magentic RAG + CRAG 元信息
             "rag": {
                 "used": bool(state.get("rag_result", {}).get("chunks")),
                 "is_relevant": state.get("rag_result", {}).get("is_relevant", False),
                 "score": state.get("rag_result", {}).get("score", 0.0),
                 "reason": state.get("rag_result", {}).get("reason", ""),
                 "chunks_count": len(state.get("rag_result", {}).get("chunks", [])),
+                # 阶段48-CRAG 新增字段
+                "crag_action": state.get("crag_action", "CORRECT"),
+                "source_mix": state.get("source_mix", "none"),  # local | web | mixed | none
+                "web_sources": state.get("web_sources", []),   # [{title, url, snippet}]
+                "confidence_level": state.get("confidence_level", "high"),
             },
             # ReAct 反思元信息
             "critique": {
@@ -838,6 +984,7 @@ def build_host_graph(*, use_checkpointer: bool = True, mode: str = "single"):
     g.add_node("classify", classify_node)
     g.add_node("clarify", clarify_node)  # 阶段48-29: 主动询问澄清
     g.add_node("rag_retrieve", rag_retrieve_node)  # Magentic RAG (Self-RAG Stage 1)
+    g.add_node("crag_correct", crag_correct_node)  # 阶段48-CRAG: Corrective RAG 分支决策
     g.add_node("critique", react_critique_node)  # ReAct 反思模式
     g.add_node("aggregate", aggregate_node)
     # 阶段30新增
@@ -858,8 +1005,9 @@ def build_host_graph(*, use_checkpointer: bool = True, mode: str = "single"):
     logger.info("[build_graph] agents=%s node_by_name=%s default=%s", [s.name for s in agents], node_by_name, default_node)
 
     if mode == "single":
-        # Magentic RAG: clarify → rag_retrieve → invoke → critique → aggregate
+        # Magentic RAG + CRAG: clarify → rag_retrieve → crag_correct → invoke → critique → aggregate
         g.add_edge("clarify", "rag_retrieve")
+        g.add_edge("rag_retrieve", "crag_correct")  # CRAG 分支决策
 
         def _rag_path(state: HostState) -> str:
             # 需要澄清时，跳过 agent 调用
@@ -883,9 +1031,9 @@ def build_host_graph(*, use_checkpointer: bool = True, mode: str = "single"):
             logger.info("[rag_path] %s -> %s", canonical, result)
             return result
 
-        # rag_path_map: node_name -> node_name (path function returns node_name, must match a key)
+        # crag_correct → invoke（沿用相同的路由逻辑）
         rag_path_map = {"aggregate": "aggregate", **{v: v for v in node_by_name.values()}}  # {node: node}
-        g.add_conditional_edges("rag_retrieve", _rag_path, rag_path_map)
+        g.add_conditional_edges("crag_correct", _rag_path, rag_path_map)
 
         for spec in agents:
             g.add_edge(spec.node_name, "critique")

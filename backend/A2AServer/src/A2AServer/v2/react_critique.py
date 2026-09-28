@@ -143,7 +143,168 @@ def _build_llm():
 
 
 # ============================================================
-# Critique 节点（用于 host_graph）
+# 内部 Critique + Revision（单轮，由 iterative_critique_loop 调用）
+# ============================================================
+async def _critique_once(
+    query: str,
+    content: str,
+    tool_calls_summary: str,
+    llm,
+) -> tuple[str, bool, list[str], str]:
+    """
+    执行单次 critique。
+
+    Returns:
+        (critique_text, needs_revision, issues, reasoning)
+    """
+    critique_messages = [
+        SystemMessage(content=CRITIQUE_SYSTEM_PROMPT),
+        HumanMessage(content=CRITIQUE_HUMAN_TEMPLATE.format(
+            query=query or "(未提供)",
+            response=content or "(未提供)",
+            tool_calls=tool_calls_summary or "(无)",
+        )),
+    ]
+    critique_result = await llm.ainvoke(critique_messages)
+    critique_text = critique_result.content if hasattr(critique_result, "content") else str(critique_result)
+
+    needs_revision = any(kw in critique_text for kw in [
+        "需要修订", "建议修订", "请修订", "存在安全隐患", "准确性存疑"
+    ])
+    issues = _extract_issues(critique_text)
+    return critique_text, needs_revision, issues
+
+
+async def _revision_once(
+    query: str,
+    content: str,
+    issues: list[str],
+    llm,
+) -> str:
+    """执行单次 revision"""
+    revision_messages = [
+        SystemMessage(content=REVISION_SYSTEM_PROMPT),
+        HumanMessage(content=REVISION_HUMAN_TEMPLATE.format(
+            query=query or "(未提供)",
+            original_response=content or "(未提供)",
+            critique_issues="\n".join([f"- {iss}" for iss in issues]),
+        )),
+    ]
+    revision_result = await llm.ainvoke(revision_messages)
+    revised = revision_result.content if hasattr(revision_result, "content") else str(revision_result)
+    if revised and len(revised.strip()) > 10:
+        logger.info("[iterative_critique] revision applied, len %d -> %d", len(content), len(revised))
+        return revised
+    return content
+
+
+# ============================================================
+# 迭代 ReAct 反思循环（阶段48新增）
+# ============================================================
+async def iterative_critique_loop(
+    query: str,
+    content: str,
+    tool_calls: list[dict],
+    max_iterations: int = 2,
+) -> tuple[str, CritiqueResult]:
+    """
+    迭代 ReAct 反思循环：critique → revision → critique（最多2轮）
+
+    每轮：
+    1. critique_node 评估回答质量
+    2. 若需要 revision，调用 revision_node
+    3. 用修订后的内容进行下一轮 critique
+    4. 最多 max_iterations 轮，防止无限循环
+
+    Args:
+        query: 用户原始问题
+        content: agent 生成的原始回答
+        tool_calls: 工具调用记录
+        max_iterations: 最大迭代轮数
+
+    Returns:
+        (final_text, critique_result_obj)
+    """
+    # 无内容时跳过
+    if not content or len(content.strip()) < 10:
+        logger.debug("[iterative_critique] 内容过短，跳过审核")
+        return content, CritiqueResult(
+            is_adequate=True, issues=[], reasoning="内容过短，跳过审核"
+        )
+
+    llm = _build_llm()
+    if llm is None:
+        logger.warning("[iterative_critique] LLM 不可用，跳过审核")
+        return content, CritiqueResult(
+            is_adequate=True, issues=[], reasoning="LLM 不可用，跳过审核"
+        )
+
+    # 构建工具调用摘要
+    tool_calls_summary = "无工具调用"
+    if tool_calls:
+        tc_lines = []
+        for tc in tool_calls:
+            name = tc.get("name", "?")
+            args = tc.get("args", {})
+            if isinstance(args, dict):
+                args_str = ", ".join(f"{k}={v}" for k, v in args.items())
+            else:
+                args_str = str(args)
+            tc_lines.append(f"- {name}({args_str})")
+        tool_calls_summary = "\n".join(tc_lines)
+
+    current_content = content
+    final_issues = []
+    final_reasoning = ""
+    iterations_used = 0
+
+    for i in range(max_iterations):
+        iterations_used = i + 1
+        critique_text, needs_revision, issues = await _critique_once(
+            query, current_content, tool_calls_summary, llm
+        )
+        final_issues = issues
+        final_reasoning += f"\n[第{i+1}轮批判]\n{critique_text}"
+
+        logger.info(
+            "[iterative_critique] round=%d/%d needs_revision=%s issues=%d query=%s",
+            i + 1, max_iterations, needs_revision, len(issues), query[:30]
+        )
+
+        if not needs_revision:
+            # 质量合格，停止迭代
+            break
+
+        if i < max_iterations - 1 and issues:
+            # 需要 revision，进行下一轮
+            try:
+                current_content = await _revision_once(query, current_content, issues, llm)
+            except Exception as e:
+                logger.warning("[iterative_critique] revision failed at round %d: %s", i + 1, e)
+                break
+
+    # 最后一轮的结果
+    needs_final_revision = any(kw in final_reasoning for kw in [
+        "需要修订", "建议修订", "请修订", "存在安全隐患", "准确性存疑"
+    ])
+
+    critique_result_obj = CritiqueResult(
+        is_adequate=not needs_final_revision,
+        issues=final_issues,
+        suggested_revision=current_content if current_content != content else None,
+        reasoning=final_reasoning.strip(),
+    )
+
+    logger.info(
+        "[iterative_critique] done: iterations=%d is_adequate=%s query=%s",
+        iterations_used, critique_result_obj.is_adequate, query[:30]
+    )
+
+    return current_content, critique_result_obj
+
+
+# ============================================================
+# Critique 节点（用于 host_graph，单轮版，向后兼容）
 # ============================================================
 async def critique_node(state: dict) -> dict:
     """
@@ -321,4 +482,5 @@ __all__ = [
     "CritiqueResult",
     "critique_node",
     "critique_response",
+    "iterative_critique_loop",
 ]

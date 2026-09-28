@@ -2,6 +2,7 @@
 
 # 核心框架
 fastmcp>=0.1.0
+mcp<2.0  # 阶段48-ops: 固定 mcp<2.0 否则 FastMCP API 不兼容
 rpds-py>=0.7.1
 fastapi>=0.104.0
 uvicorn>=0.24.0

@@ -5,7 +5,9 @@ WORKDIR /app
 
 # Install Python deps from backend root requirements
 COPY requirements.txt /tmp/backend-requirements.txt
-RUN pip install --timeout 120 -r /tmp/backend-requirements.txt || echo "deps install failed"
+RUN pip install --timeout 120 -r /tmp/backend-requirements.txt
+# 阶段48-ops: 强制安装 mcp<2.0 避免 FastMCP API 不兼容
+RUN pip install --timeout 60 "mcp<2.0"
 
 # Copy service code
 COPY . ./
