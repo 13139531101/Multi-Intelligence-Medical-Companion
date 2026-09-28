@@ -37,7 +37,7 @@ def _get_db_pool(cfg: Dict[str, Any]) -> ConnectionPool | None:
         return None
     _db_pool_init_attempted = True
     try:
-        max_size = int(os.getenv("DB_POOL_MAX_SIZE", "20"))
+        max_size = int(os.getenv("DB_POOL_MAX_SIZE", "2"))
         timeout = float(os.getenv("DB_POOL_TIMEOUT", "5"))
         _db_pool = ConnectionPool(_build_db_dsn(cfg), max_size=max(max_size, 1), timeout=timeout)
         return _db_pool
