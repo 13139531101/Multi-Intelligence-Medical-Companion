@@ -115,6 +115,8 @@ class HostState(TypedDict, total=False):
     # === ReAct 反思模式 ===
     critique_result: dict      # {"is_adequate": bool, "issues": [...], "reasoning": str, "suggested_revision": str}
     final_response_text: str   # critique 修订后的最终文本（critique_node 写入）
+    # === 阶段48-P2: 长期记忆 ===
+    memory_context: str        # 检索到的相似历史上下文（注入 system_prompt）
     # === 阶段48-CRAG: Corrective RAG 决策结果 ===
     crag_action: str           # CORRECT | AMBIGUOUS | INCORRECT
     merged_context: str        # 合并后的本地+web 上下文文本（注入 agent prompt）
@@ -678,6 +680,46 @@ async def crag_correct_node(state: HostState) -> dict:
 
 
 # ============================================================
+# 记忆召回（阶段48-P2）
+# ============================================================
+def _inject_memory_context(state: dict) -> None:
+    """
+    在路由前检索用户相似历史记忆，注入 state["memory_context"]。
+    agent 会在 system_prompt 中引用这段上下文。
+    """
+    try:
+        from AgentMemorySystem import AgentMemorySystem as _AMS
+        user_id = state.get("user_id", "") or ""
+        query = state.get("query", "") or ""
+        if not user_id or not query:
+            return
+        ms = _AMS()
+        results = ms.search_memories(
+            query=query,
+            agent_id=state.get("target_agent", "health_advisor"),
+            user_id=user_id,
+            memory_types=["long_term", "working"],
+            limit=3,
+            min_similarity=0.5,
+        )
+        if results:
+            snippets = []
+            for r in results[:3]:
+                c = r.get("content", {}) or {}
+                text = c.get("text", "") or c.get("structured_data", {}).get("query", "")
+                if text:
+                    snippets.append(f"- {text[:200]}")
+            if snippets:
+                state["memory_context"] = (
+                    "【相关历史对话】\n" + "\n".join(snippets)
+                    + "\n（以上仅供参考，以当前情况为准）"
+                )
+                logger.info("[memory] injected %d history snippets for user=%s", len(snippets), user_id)
+    except Exception as e:
+        logger.debug("[memory] injection skipped: %s", e)
+
+
+# ============================================================
 # 图节点
 # ============================================================
 async def classify_node(state: HostState) -> dict:
@@ -686,6 +728,13 @@ async def classify_node(state: HostState) -> dict:
     返回 dict 更新 state
     """
     state.setdefault("events", [])
+
+    # 阶段48-P2: 记忆召回 — 注入相似历史上下文
+    user_id = state.get("user_id", "") or ""
+    query = state.get("query", "")
+    target_agent = state.get("target_agent", "health_advisor")
+    if user_id and query:
+        _inject_memory_context(state)
 
     # 第 1 层
     if _layer1_metadata(state):
@@ -775,6 +824,12 @@ def invoke_agent_node(agent_name: str):
                     )
             except Exception as e:
                 logger.debug("[skill_inject] failed: %s", e)
+
+            # 阶段48-P2: 注入历史记忆上下文
+            memory_context = state.get("memory_context", "")
+            if memory_context:
+                enriched_query = f"{memory_context}\n\n{enriched_query}"
+                logger.info("[memory] memory_context injected, len=%d", len(memory_context))
 
             async for event in agent.stream(
                 enriched_query,
@@ -892,6 +947,42 @@ async def aggregate_node(state: HostState) -> dict:
         CRITIQUE_ISSUES_COUNT.labels(agent=agent).observe(len(issues))
     except Exception:
         pass  # metrics are best-effort
+
+    # 阶段48-P2: 异步存储本次对话到记忆系统
+    try:
+        from AgentMemorySystem import AgentMemorySystem as _AMS
+        user_id = state.get("user_id", "") or ""
+        if user_id and final_text and len(final_text) > 20:
+            import threading
+            def _store():
+                try:
+                    ms = _AMS()
+                    ms.store_memory(
+                        agent_id=state.get("target_agent", "health_advisor"),
+                        user_id=user_id,
+                        content={
+                            "text": f"Q: {state.get('query', '')}\nA: {final_text[:500]}",
+                            "structured_data": {
+                                "query": state.get("query", ""),
+                                "response_len": len(final_text),
+                                "crag_action": state.get("crag_action", "N/A"),
+                                "confidence": state.get("confidence_level", "N/A"),
+                                "critique_adequate": critique_result.get("is_adequate", True),
+                            },
+                            "metadata": {
+                                "conversation_id": state.get("conversation_id", ""),
+                                "routing_layer": state.get("routing_layer", 0),
+                            },
+                        },
+                        memory_type="long_term",
+                        importance=0.6,
+                        tags=["health", "query"],
+                    )
+                except Exception:
+                    pass
+            threading.Thread(target=_store, daemon=True).start()
+    except Exception:
+        pass  # memory is best-effort
 
     return {
         "final_response": {
