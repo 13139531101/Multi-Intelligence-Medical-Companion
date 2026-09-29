@@ -46,11 +46,13 @@ class CritiqueResult:
         issues: list[str],
         suggested_revision: str | None = None,
         reasoning: str = "",
+        iterations: int = 1,
     ):
         self.is_adequate = is_adequate  # True = 无需 revision
         self.issues = issues              # 发现的问题列表
         self.suggested_revision = suggested_revision  # 修订建议（如果需要）
         self.reasoning = reasoning        # 批判理由
+        self.iterations = iterations      # 反思循环轮数
 
 
 # ============================================================
@@ -293,6 +295,7 @@ async def iterative_critique_loop(
         issues=final_issues,
         suggested_revision=current_content if current_content != content else None,
         reasoning=final_reasoning.strip(),
+        iterations=iterations_used,
     )
 
     logger.info(
@@ -331,6 +334,7 @@ async def critique_node(state: dict) -> dict:
                 is_adequate=True,
                 issues=[],
                 reasoning="内容过短，跳过审核",
+                iterations=1,
             ).__dict__,
             "final_response_text": content,
         }
@@ -357,6 +361,7 @@ async def critique_node(state: dict) -> dict:
                 is_adequate=True,
                 issues=[],
                 reasoning="LLM 不可用，跳过审核",
+                iterations=1,
             ).__dict__,
             "final_response_text": content,
         }
@@ -390,6 +395,7 @@ async def critique_node(state: dict) -> dict:
             issues=issues,
             suggested_revision=None,
             reasoning=critique_text,
+            iterations=1,
         )
 
         # Step 2: 若需要 revision，调用 revision LLM（直接格式化字符串）
@@ -475,6 +481,7 @@ async def critique_response(
         issues=cr.get("issues", []),
         suggested_revision=cr.get("suggested_revision"),
         reasoning=cr.get("reasoning", ""),
+        iterations=cr.get("iterations", 1),
     )
 
 

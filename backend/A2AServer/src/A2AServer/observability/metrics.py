@@ -153,6 +153,59 @@ AGENT_TOOL_INVOCATION = Counter(
     ["agent", "tool_name", "result"],
 )
 
+# ============================================================
+# 5b. 阶段48-CRAG: Corrective RAG 专项指标
+# ============================================================
+
+CRAG_ACTIONS = Counter(
+    "pha_crag_actions_total",
+    "CRAG action decisions (CORRECT/AMBIGUOUS/INCORRECT)",
+    ["agent", "action"],  # action: correct | ambiguous | incorrect
+)
+
+CRAG_WEB_SOURCES = Histogram(
+    "pha_crag_web_sources_count",
+    "Number of web sources returned per query",
+    ["agent", "action"],
+    buckets=[0, 1, 2, 3, 5, 10],
+)
+
+CRAG_LATENCY = Histogram(
+    "pha_crag_latency_seconds",
+    "CRAG decision latency (web search + merge)",
+    ["agent"],
+    buckets=[0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0],
+)
+
+CRAG_CONFIDENCE = Gauge(
+    "pha_crag_confidence_level",
+    "Last query confidence level (1=high, 2=medium, 3=low)",
+    ["agent"],
+)
+
+# ============================================================
+# 5c. 阶段48-Critique: ReAct 反思质量指标
+# ============================================================
+
+CRITIQUE_ITERATIONS = Histogram(
+    "pha_critique_iterations_total",
+    "Critique loop iterations per query",
+    ["agent"],
+    buckets=[1, 2, 3],
+)
+
+CRITIQUE_REVISION_TRIGGERED = Counter(
+    "pha_critique_revision_total",
+    "Critique revision triggered",
+    ["agent", "was_revised"],  # was_revised: true | false
+)
+
+CRITIQUE_ISSUES_COUNT = Histogram(
+    "pha_critique_issues_count",
+    "Number of issues found per critique",
+    ["agent"],
+    buckets=[0, 1, 2, 3, 5, 10],
+)
 
 # ============================================================
 # 6. 基础设施指标

@@ -32,11 +32,11 @@ from fastapi import APIRouter, Response
 
 from .monitoring import (
     get_metrics,
-    get_prometheus_metrics,
     print_summary,
 )
 from .rate_limit import get_rate_limiter
 from .tool_cache import get_tool_cache
+from ..observability.metrics import generate_latest, CONTENT_TYPE_LATEST
 
 # v2_agent 仅在 /v2/status 端点里用，懒加载（避免未装 langchain 时模块加载失败）
 def _get_v2_agent_singleton_keys():
@@ -123,8 +123,8 @@ async def health_deep():
 # ============================================================
 def _prometheus_response():
     return Response(
-        content=get_prometheus_metrics(),
-        media_type="text/plain; version=0.0.4; charset=utf-8",
+        content=generate_latest(),
+        media_type=CONTENT_TYPE_LATEST,
     )
 
 health_router.add_api_route(

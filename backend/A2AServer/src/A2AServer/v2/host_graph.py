@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time as _time_module
 from typing import AsyncIterable, Any, Literal, Optional
 
 logger = logging.getLogger(__name__)
@@ -514,6 +515,30 @@ async def rag_retrieve_node(state: HostState) -> dict:
 # ============================================================
 # 阶段48-CRAG: Corrective RAG 节点
 # ============================================================
+_CRAG_METRICS_INIT = False
+
+
+def _record_crag_metrics(action: str, web_count: int, latency: float, agent: str, confidence: str) -> None:
+    """Record CRAG metrics (lazy import to avoid circular deps)."""
+    global _CRAG_METRICS_INIT
+    try:
+        if not _CRAG_METRICS_INIT:
+            from ..observability.metrics import (
+                CRAG_ACTIONS, CRAG_WEB_SOURCES, CRAG_LATENCY, CRAG_CONFIDENCE,
+            )
+            _CRAG_METRICS_INIT = True
+        from ..observability.metrics import (
+            CRAG_ACTIONS, CRAG_WEB_SOURCES, CRAG_LATENCY, CRAG_CONFIDENCE,
+        )
+        CRAG_ACTIONS.labels(agent=agent, action=action).inc()
+        CRAG_WEB_SOURCES.labels(agent=agent, action=action).observe(web_count)
+        CRAG_LATENCY.labels(agent=agent).observe(latency)
+        conf_map = {"high": 1, "medium": 2, "low": 3}
+        CRAG_CONFIDENCE.labels(agent=agent).set(conf_map.get(confidence, 2))
+    except Exception:
+        pass  # metrics are best-effort
+
+
 async def crag_correct_node(state: HostState) -> dict:
     """
     CRAG Corrective 节点：判断本地 RAG 结果质量，决定是否触发 web 搜索。
@@ -545,6 +570,7 @@ async def crag_correct_node(state: HostState) -> dict:
     # 因为「不需要RAG」可能只是因为本地 archive 没有相关内容，
     # 此时应触发 web 搜索兜底。
     if not retrieval_needed and is_relevant and chunks:
+        _record_crag_metrics("correct", 0, 0.0, target_agent, "high")
         return {
             "crag_action": "CORRECT",
             "merged_context": rag_result.get("context_text", ""),
@@ -553,6 +579,7 @@ async def crag_correct_node(state: HostState) -> dict:
             "confidence_level": "high",
         }
 
+    crag_start = _time_module.perf_counter()
     try:
         from .crag import decide_action, get_web_search_provider, merge_local_web
         from .crag.action_policy import action_to_source_mix, action_to_confidence_level
@@ -567,6 +594,7 @@ async def crag_correct_node(state: HostState) -> dict:
         # Step 2: 根据 action 执行
         if action == "CORRECT":
             # 本地结果足够好，直接使用
+            _record_crag_metrics("correct", 0, 0.0, target_agent, "high")
             return {
                 "crag_action": action,
                 "merged_context": rag_result.get("context_text", ""),
@@ -583,7 +611,9 @@ async def crag_correct_node(state: HostState) -> dict:
         if not web_results:
             # Web 搜索失败
             logger.warning("[crag_correct] web search returned 0 results")
+            latency = _time_module.perf_counter() - crag_start
             if action == "INCORRECT":
+                _record_crag_metrics("incorrect", 0, latency, target_agent, "low")
                 return {
                     "crag_action": "INCORRECT",
                     "merged_context": "（未找到相关健康档案，网络搜索也未返回可用结果）",
@@ -593,6 +623,7 @@ async def crag_correct_node(state: HostState) -> dict:
                 }
             else:
                 # AMBIGUOUS 但 web 失败，退回本地
+                _record_crag_metrics("ambiguous", 0, latency, target_agent, "medium")
                 return {
                     "crag_action": "AMBIGUOUS",
                     "merged_context": rag_result.get("context_text", ""),
@@ -623,6 +654,8 @@ async def crag_correct_node(state: HostState) -> dict:
             local_context_text=rag_result.get("context_text", ""),
             action=action,
         )
+        latency = _time_module.perf_counter() - crag_start
+        _record_crag_metrics(action, len(merged_ctx.web_sources), latency, target_agent, merged_ctx.confidence_level)
 
         return {
             "crag_action": action,
@@ -844,6 +877,21 @@ async def aggregate_node(state: HostState) -> dict:
     # ReAct 反思：优先用 critique 修订后的文本
     final_text = state.get("final_response_text") or agent_resp.get("content", "")
     critique_result = state.get("critique_result") or {}
+
+    # 阶段48-ops: 记录 critique 质量指标
+    try:
+        from ..observability.metrics import (
+            CRITIQUE_ITERATIONS, CRITIQUE_REVISION_TRIGGERED, CRITIQUE_ISSUES_COUNT,
+        )
+        agent = state.get("target_agent", "unknown")
+        iterations = critique_result.get("iterations", 1)
+        issues = critique_result.get("issues", [])
+        was_revised = bool(critique_result.get("suggested_revision"))
+        CRITIQUE_ITERATIONS.labels(agent=agent).observe(iterations)
+        CRITIQUE_REVISION_TRIGGERED.labels(agent=agent, was_revised=str(was_revised).lower()).inc()
+        CRITIQUE_ISSUES_COUNT.labels(agent=agent).observe(len(issues))
+    except Exception:
+        pass  # metrics are best-effort
 
     return {
         "final_response": {
