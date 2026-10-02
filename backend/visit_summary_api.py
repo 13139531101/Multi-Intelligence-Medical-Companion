@@ -68,7 +68,7 @@ except ImportError:
                 + "/"
                 + (os.environ.get("MEMORY_DB_NAME") or os.environ.get("DB_NAME") or "personal_health_assistant")
             )
-            _db_pool = ConnectionPool(dsn, max_size=max(int(os.getenv("DB_POOL_MAX_SIZE", "2")), 1))
+            _db_pool = ConnectionPool(dsn, min_size=0, max_size=max(int(os.getenv("DB_POOL_MAX_SIZE", "2")), 1))
             return _db_pool
         except Exception:
             _db_pool = None

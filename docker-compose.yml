@@ -7,6 +7,18 @@ services:
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-pha_pass}
       - POSTGRES_DB=${POSTGRES_DB:-personal_health_assistant}
       - POSTGRES_MAX_CONNECTIONS=200
+    # 修复: 官方 pgvector/postgres 镜像**不认** POSTGRES_MAX_CONNECTIONS 这个环境
+    # 变量（只有 POSTGRES_USER/PASSWORD/DB 是 entrypoint 认的），所以上面那行一直是
+    # 空操作，max_connections 实际停在默认 100。连接数一超就 FATAL: sorry, too many
+    # clients already —— 连超级用户都登不进去，auth 拿不到连接 → /v2/chat/stream
+    # 401/500 → 前端表现为"AG-UI 不能用（空回复）"。
+    # 这里用 -c 显式传给 postgres，让那行 env 真正生效。
+    command:
+      [
+        "postgres",
+        "-c",
+        "max_connections=${POSTGRES_MAX_CONNECTIONS:-200}",
+      ]
     ports:
       - "5432:5432"
     volumes:
@@ -21,6 +33,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
 
   redis:
     image: redis:7-alpine
@@ -35,6 +48,7 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
+    restart: unless-stopped
 
   health_advisor:
     image: ${REGISTRY:-crpi-zr8m4m7ism94623a.cn-hangzhou.personal.cr.aliyuncs.com}/${NAMESPACE:-duozhiyiban}/${IMAGE_PREFIX:-a2aserver-}health_advisor:${TAG:-latest}
@@ -89,6 +103,7 @@ services:
       timeout: 5s
       retries: 20
       start_period: 40s
+    restart: unless-stopped
 
   medication_reminder:
     image: ${REGISTRY:-crpi-zr8m4m7ism94623a.cn-hangzhou.personal.cr.aliyuncs.com}/${NAMESPACE:-duozhiyiban}/${IMAGE_PREFIX:-a2aserver-}medication_reminder:${TAG:-latest}
@@ -126,6 +141,7 @@ services:
       timeout: 5s
       retries: 20
       start_period: 40s
+    restart: unless-stopped
 
   visit_summary:
     image: ${REGISTRY:-crpi-zr8m4m7ism94623a.cn-hangzhou.personal.cr.aliyuncs.com}/${NAMESPACE:-duozhiyiban}/${IMAGE_PREFIX:-a2aserver-}visit_summary:${TAG:-latest}
@@ -165,6 +181,7 @@ services:
       timeout: 5s
       retries: 20
       start_period: 40s
+    restart: unless-stopped
 
   health_records:
     image: ${REGISTRY:-crpi-zr8m4m7ism94623a.cn-hangzhou.personal.cr.aliyuncs.com}/${NAMESPACE:-duozhiyiban}/${IMAGE_PREFIX:-a2aserver-}health_records:${TAG:-latest}
@@ -218,6 +235,7 @@ services:
       timeout: 5s
       retries: 20
       start_period: 40s
+    restart: unless-stopped
 
   admin_backend:
     image: ${REGISTRY:-crpi-zr8m4m7ism94623a.cn-hangzhou.personal.cr.aliyuncs.com}/${NAMESPACE:-duozhiyiban}/${IMAGE_PREFIX:-a2aserver-}admin_backend:${TAG:-latest}
@@ -258,12 +276,18 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - EMBEDDING_TIMEOUT_SECONDS=${EMBEDDING_TIMEOUT_SECONDS:-60}
       - A2A_MEDICAL_KB_MAX_UPLOAD_MB=${A2A_MEDICAL_KB_MAX_UPLOAD_MB:-50}
+      # 修复: 此前没设 → 连接池 max_size 用 psycopg_pool 默认值，且 min_size 默认 4
+      # 会在每个进程启动时预开 4 条常驻连接。配合下面 postgres 的 max_connections，
+      # 这是"连接被打满、auth 500"的直接成因之一。
+      - DB_POOL_MAX_SIZE=${DB_POOL_MAX_SIZE:-3}
+      - DB_POOL_TIMEOUT=${DB_POOL_TIMEOUT:-5}
     ports:
       - "${ADMIN_BACKEND_BIND_IP:-127.0.0.1}:${ADMIN_BACKEND_PORT:-8000}:8000"
     volumes:
       - ./backend/uploads:/app/uploads
     depends_on:
       - postgres
+    restart: unless-stopped
 
   admin_frontend:
     image: ${REGISTRY:-crpi-zr8m4m7ism94623a.cn-hangzhou.personal.cr.aliyuncs.com}/${NAMESPACE:-duozhiyiban}/${IMAGE_PREFIX:-a2aserver-}admin_frontend:${TAG:-latest}
@@ -275,6 +299,7 @@ services:
       - "${ADMIN_FRONTEND_BIND_IP:-127.0.0.1}:${ADMIN_FRONTEND_PORT:-3002}:80"
     depends_on:
       - admin_backend
+    restart: unless-stopped
 
   hostapi:
     image: ${REGISTRY:-crpi-zr8m4m7ism94623a.cn-hangzhou.personal.cr.aliyuncs.com}/${NAMESPACE:-duozhiyiban}/${IMAGE_PREFIX:-a2aserver-}hostapi:${TAG:-latest}
@@ -311,6 +336,12 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - DASHSCOPE_API_BASE=${DASHSCOPE_API_BASE:-}
       - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY:-}
+      # 阶段48-p3: v2 主链路 rerank（DashScope gte-rerank-v2，不本地部署模型）
+      # 没配 key 或设为 0 时自动降级为纯向量序，不影响主链路
+      - RERANK_ENABLED=${RERANK_ENABLED:-1}
+      - RERANK_MODEL=${RERANK_MODEL:-gte-rerank-v2}
+      - RERANK_API_BASE=${RERANK_API_BASE:-}
+      - RERANK_TIMEOUT=${RERANK_TIMEOUT:-8}
       - WECHAT_APP_ID=${WECHAT_APP_ID:-}
       - WECHAT_APP_SECRET=${WECHAT_APP_SECRET:-}
       - WECHAT_TEMPLATE_TASK_COMPLETE=${WECHAT_TEMPLATE_TASK_COMPLETE:-}
@@ -335,6 +366,15 @@ services:
       - ALIYUN_OCR_ENDPOINT=${ALIYUN_OCR_ENDPOINT}
       - ALIYUN_OCR_TYPE=${ALIYUN_OCR_TYPE}
       - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      # 阶段48-fix: MCP 传输方式（.env.example 有定义但此前未传递到容器）
+      - PHA_MCP_TRANSPORT=${PHA_MCP_TRANSPORT:-streamable_http}
+      # 修复: hostapi 此前没有池上限 → auth 池 + LangGraph checkpointer 池都按默认值
+      # 开连接，且 --workers 2 时翻倍。与 agents 保持一致显式封顶。
+      - DB_POOL_MAX_SIZE=${DB_POOL_MAX_SIZE:-3}
+      - DB_POOL_TIMEOUT=${DB_POOL_TIMEOUT:-5}
+      - AUTH_DB_POOL_MAX_SIZE=${AUTH_DB_POOL_MAX_SIZE:-3}
+      - AUTH_DB_POOL_TIMEOUT=${AUTH_DB_POOL_TIMEOUT:-5}
+      - HOST_API_WORKERS=${HOST_API_WORKERS:-2}
     ports:
       - "${HOST_API_EXTERNAL_PORT:-13002}:${HOST_API_PORT:-13002}"
     mem_limit: 2g
@@ -357,6 +397,7 @@ services:
         condition: service_healthy
       health_records:
         condition: service_healthy
+    restart: unless-stopped
 
   # multiagent_front: AI 浮窗前端 (阶段48-25+)
   multiagent_front:
@@ -454,6 +495,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
 
   promtail:
     image: grafana/promtail:3.2.1

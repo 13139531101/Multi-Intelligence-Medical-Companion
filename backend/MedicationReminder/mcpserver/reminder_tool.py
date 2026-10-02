@@ -556,11 +556,45 @@ def get_today_reminders(user_id: str) -> Dict[str, Any]:
         # 按时间排序
         today_reminders.sort(key=lambda x: x["time"])
 
+        # 阶段48-fix: 生成式 UI —— 工具直接带一条 page_update 指令。
+        # 链路: 本工具 -> v2_agent.py(json.dumps) -> bridge.py(转 page_update 事件)
+        #      -> api.py(SSE) -> copilotkit_runtime.py(PAGE_UPDATE) -> useChat.jsx
+        #      -> componentRegistry.call('TodayDashboard') -> setData -> 页面即时刷新。
+        # 此前唯一会发 page_update 的是 HealthAdvisor 的 a2a_integration_tool，但它
+        # (a) 被 _load_inprocess_mcp_tools 的 SKIP_TOOLS 排除, (b) 挂在 health_advisor
+        # 名下 —— 而"我今天要吃什么药"路由到的是 medication_reminder, 于是这条链
+        # 永远走不到。数据本来就在手里, 直接在这里发最可靠。
+        # params 形状必须对齐 AiInfoCardView 的 `type === 'medications'` 分支:
+        # 它读 data.medications[].name / .dose。
+        page_update = None
+        if today_reminders:
+            page_update = {
+                # 阶段48-28: 页面无关名，TodayDashboard 与 Dashboard 共用
+                "component": "AiInfoCard",
+                "action": "setData",
+                "params": {
+                    "type": "medications",
+                    "title": f"今日用药（{today}）",
+                    "medications": [
+                        {
+                            "name": r["medication_name"],
+                            "dose": r["dosage"],
+                            "time": r["time"],
+                            "notes": r["notes"],
+                            "is_taken": r["is_taken"],
+                        }
+                        for r in today_reminders
+                    ],
+                },
+                "summary": f"今日 {len(today_reminders)} 项用药",
+            }
+
         return {
             "status": "success",
             "date": today,
             "reminders": today_reminders,
-            "count": len(today_reminders)
+            "count": len(today_reminders),
+            "page_update": page_update,
         }
     except Exception as e:
         return {

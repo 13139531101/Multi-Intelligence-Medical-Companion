@@ -35,6 +35,12 @@ _metrics = {
     "request_errors": 0,
     "llm_api_calls": 0,
     "llm_api_errors": 0,
+    # 阶段48-p3: rerank 指标
+    "rerank_calls": 0,
+    "rerank_success": 0,
+    "rerank_skipped": 0,
+    "rerank_errors": 0,
+    "rerank_latencies": [],  # 滚动窗口
     "started_at": time.time(),
 }
 
@@ -74,6 +80,33 @@ def record_llm_call(error: bool = False):
     _metrics["llm_api_calls"] += 1
     if error:
         _metrics["llm_api_errors"] += 1
+
+
+def record_rerank(outcome: str, latency_sec: float = 0.0):
+    """阶段48-p3: 记录一次 rerank 结果.
+
+    outcome: "success" | "skipped"（未配置/候选不足）| "error"（调用失败已降级）
+    """
+    _metrics["rerank_calls"] += 1
+    if outcome == "success":
+        _metrics["rerank_success"] += 1
+    elif outcome == "skipped":
+        _metrics["rerank_skipped"] += 1
+    else:
+        _metrics["rerank_errors"] += 1
+    if latency_sec:
+        _metrics["rerank_latencies"].append(latency_sec)
+        if len(_metrics["rerank_latencies"]) > MAX_LATENCY_WINDOW:
+            _metrics["rerank_latencies"] = _metrics["rerank_latencies"][-MAX_LATENCY_WINDOW:]
+
+
+def _pctl(values: list, q: float) -> float:
+    """简单分位数（无依赖，空列表返回 0）"""
+    if not values:
+        return 0.0
+    s = sorted(values)
+    idx = min(len(s) - 1, max(0, int(len(s) * q)))
+    return float(s[idx])
 
 
 def get_metrics() -> dict:
@@ -130,6 +163,17 @@ def get_metrics() -> dict:
                 _metrics["llm_api_errors"] / max(1, _metrics["llm_api_calls"]) * 100, 1
             ),
         },
+        "rerank": {
+            "calls": _metrics["rerank_calls"],
+            "success": _metrics["rerank_success"],
+            "skipped": _metrics["rerank_skipped"],
+            "errors": _metrics["rerank_errors"],
+            "success_rate": round(
+                _metrics["rerank_success"] / max(1, _metrics["rerank_calls"]) * 100, 1
+            ),
+            "latency_p50": round(_pctl(_metrics["rerank_latencies"], 0.5), 3),
+            "latency_p95": round(_pctl(_metrics["rerank_latencies"], 0.95), 3),
+        },
     }
 
 
@@ -162,6 +206,24 @@ def get_prometheus_metrics() -> str:
         "# HELP pha_request_errors Total request errors",
         "# TYPE pha_request_errors counter",
         f"pha_request_errors {m['requests']['errors']}",
+        "",
+        # 阶段48-p3: rerank
+        "# HELP pha_rerank_total Total rerank invocations",
+        "# TYPE pha_rerank_total counter",
+        f"pha_rerank_total {m['rerank']['calls']}",
+        "",
+        "# HELP pha_rerank_success Successful reranks",
+        "# TYPE pha_rerank_success counter",
+        f"pha_rerank_success {m['rerank']['success']}",
+        "",
+        "# HELP pha_rerank_errors Failed reranks (degraded to vector order)",
+        "# TYPE pha_rerank_errors counter",
+        f"pha_rerank_errors {m['rerank']['errors']}",
+        "",
+        "# HELP pha_rerank_latency_seconds Rerank latency percentiles",
+        "# TYPE pha_rerank_latency_seconds gauge",
+        f'pha_rerank_latency_seconds{{quantile="0.5"}} {m["rerank"]["latency_p50"]}',
+        f'pha_rerank_latency_seconds{{quantile="0.95"}} {m["rerank"]["latency_p95"]}',
     ]
     return "\n".join(lines)
 
@@ -180,6 +242,11 @@ def reset_metrics():
         "request_errors": 0,
         "llm_api_calls": 0,
         "llm_api_errors": 0,
+        "rerank_calls": 0,
+        "rerank_success": 0,
+        "rerank_skipped": 0,
+        "rerank_errors": 0,
+        "rerank_latencies": [],
         "started_at": time.time(),
     }
 

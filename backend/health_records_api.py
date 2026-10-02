@@ -274,7 +274,7 @@ def _get_db_pool() -> ConnectionPool | None:
         max_size = int(os.getenv("DB_POOL_MAX_SIZE", "2"))
         timeout = float(os.getenv("DB_POOL_TIMEOUT", "5"))
         _db_pool = ConnectionPool(
-            _build_db_dsn(), max_size=max(max_size, 1), timeout=timeout
+            _build_db_dsn(), min_size=0, max_size=max(max_size, 1), timeout=timeout
         )
         return _db_pool
     except Exception as e:

@@ -15,7 +15,7 @@ import {
   SmartToy as SmartToyIcon,
 } from "@mui/icons-material";
 
-const API_BASE = import.meta?.env?.VITE_API_BASE || "http://localhost:13002";
+const API_BASE = import.meta?.env?.VITE_API_BASE || "";
 
 const PALETTE = [
   "#1565C0",

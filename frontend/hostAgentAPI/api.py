@@ -5295,6 +5295,14 @@ async def v2_chat_stream(request: Request, user: dict = Depends(get_current_user
                 elif ev_type == "clarification":
                     # 阶段48-29: 主动询问澄清 → 通知前端弹澄清问题
                     yield f"event: clarification\ndata: {_json.dumps({'question': ev.get('question', ''), 'reason': ev.get('reason', '')}, ensure_ascii=False)}\n\n"
+                elif ev_type == "page_update":
+                    # 修复: 此前此处无分支 → bridge 发出的 page_update 在 SSE 层
+                    # 就被丢弃, 前端 PAGE_UPDATE 处理器永远收不到, "AI 操控页面"失效。
+                    yield f"event: page_update\ndata: {_json.dumps({'component': ev.get('component', 'page'), 'action': ev.get('action', 'setData'), 'params': ev.get('params', {}), 'summary': ev.get('summary', '')}, ensure_ascii=False)}\n\n"
+                elif ev_type == "rag_context":
+                    # 阶段48-fix: bridge 在检索完 Magnetic RAG + CRAG 后会发这个事件。
+                    # 此前无分支 → 在 SSE 层被丢弃, 前端看不到检索/纠错信息。
+                    yield f"event: rag_context\ndata: {_json.dumps({'chunks': ev.get('chunks', 0), 'score': ev.get('score', 0.0), 'is_relevant': ev.get('is_relevant', False), 'crag_action': ev.get('crag_action', ''), 'source_mix': ev.get('source_mix', '')}, ensure_ascii=False)}\n\n"
                 elif ev_type == "chunk":
                     content_for_db += ev.get("text", "")
                     yield f"event: chunk\ndata: {_json.dumps({'text': ev.get('text', '')}, ensure_ascii=False)}\n\n"

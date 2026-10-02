@@ -42,7 +42,7 @@ export default function AgentQuickFab() {
     setToolCalls([]);
     try {
       const token = localStorage.getItem("token") || "";
-      const apiBase = (import.meta?.env?.VITE_API_BASE) || "http://localhost:13002";
+      const apiBase = (import.meta?.env?.VITE_API_BASE) || "";
       const resp = await fetch(apiBase + "/v2/chat/stream", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: token ? `Bearer ${token}` : "" },
@@ -140,7 +140,7 @@ export default function AgentQuickFab() {
     setHitlLoading(true);
     try {
       const token = localStorage.getItem("token") || "";
-      const apiBase = (import.meta?.env?.VITE_API_BASE) || "http://localhost:13002";
+      const apiBase = (import.meta?.env?.VITE_API_BASE) || "";
       const resp = await fetch(apiBase + "/v2/chat/resume", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: token ? `Bearer ${token}` : "" },
@@ -185,7 +185,7 @@ export default function AgentQuickFab() {
     setHitlLoading(true);
     try {
       const token = localStorage.getItem("token") || "";
-      const apiBase = (import.meta?.env?.VITE_API_BASE) || "http://localhost:13002";
+      const apiBase = (import.meta?.env?.VITE_API_BASE) || "";
       await fetch(apiBase + "/v2/chat/resume", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: token ? `Bearer ${token}` : "" },

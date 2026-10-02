@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host",
-    "build": "touch src/components/AgentQuickFab.jsx && vite build",
+    "build": "node -e \"const fs=require('fs');const p='src/components/AgentQuickFab.jsx';const d=new Date();fs.utimesSync(p,d,d)\" && vite build",
     "preview": "vite preview"
   },
   "dependencies": {

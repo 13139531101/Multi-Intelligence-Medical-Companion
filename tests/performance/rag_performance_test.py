@@ -4,7 +4,6 @@ import os
 import statistics
 import sys
 import time
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -13,68 +12,15 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+# 本文件所在目录（rag_eval_common 就在旁边）
+_HERE = Path(__file__).resolve().parent
+if str(_HERE) not in sys.path:
+    sys.path.insert(0, str(_HERE))
+
 from backend.HealthAdvisor.mcpserver import knowledge_tool as kt
 
-
-@dataclass
-class EvalCase:
-    query: str
-    relevant_ids: list[str]
-    user_id: str
-
-
-def load_cases(file_path: str, default_user_id: str) -> list[EvalCase]:
-    p = Path(file_path)
-    if not p.exists():
-        raise FileNotFoundError(f"评测集文件不存在: {p}")
-    data = json.loads(p.read_text(encoding="utf-8"))
-    if not isinstance(data, list):
-        raise ValueError("评测集必须是 JSON 数组")
-    cases: list[EvalCase] = []
-    for row in data:
-        if not isinstance(row, dict):
-            continue
-        query = str(row.get("query", "")).strip()
-        if not query:
-            continue
-        rel_ids = row.get("relevant_ids", []) or []
-        rel_ids = [str(x).strip() for x in rel_ids if str(x).strip()]
-        uid = str(row.get("user_id", "")).strip() or default_user_id
-        cases.append(EvalCase(query=query, relevant_ids=rel_ids, user_id=uid))
-    if not cases:
-        raise ValueError("评测集为空，无法执行")
-    return cases
-
-
-def first_hit_rank(ids: list[str], relevant: set[str]) -> int:
-    for idx, sid in enumerate(ids, start=1):
-        if sid in relevant:
-            return idx
-    return 0
-
-
-def calc_metrics(top_ids: list[list[str]], cases: list[EvalCase]) -> dict[str, float]:
-    if not top_ids:
-        return {"recall_at_k": 0.0, "mrr": 0.0, "hit_rate_at_k": 0.0}
-    labeled = 0
-    hit = 0
-    rr_total = 0.0
-    for ids, case in zip(top_ids, cases):
-        relevant = set(case.relevant_ids)
-        if not relevant:
-            continue
-        labeled += 1
-        rank = first_hit_rank(ids, relevant)
-        if rank > 0:
-            hit += 1
-            rr_total += 1.0 / rank
-    if labeled == 0:
-        return {"recall_at_k": 0.0, "mrr": 0.0, "hit_rate_at_k": 0.0}
-    return {
-        "recall_at_k": hit / labeled,
-        "mrr": rr_total / labeled,
-        "hit_rate_at_k": hit / labeled,
-    }
+# 阶段48-p4: 指标实现抽到 rag_eval_common，与 v2 评测共用（避免两边算法漂移）
+from rag_eval_common import EvalCase, calc_metrics, first_hit_rank, load_cases  # noqa: F401
 
 
 def run_search(

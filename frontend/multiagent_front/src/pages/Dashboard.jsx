@@ -69,6 +69,9 @@ import {
 import { useAuth } from "../contexts/AuthContext";
 import Header from "../components/HealthHeader";
 import AgentQuickFab from "../components/AgentQuickFab";
+import AiInfoCardView from "../components/AiInfoCardView";
+import { usePageUpdater } from "../components/usePageUpdater";
+import { PAGE_COMPONENTS, PAGE_ACTIONS } from "../ai/pageContract";
 import { buildHealthTrend } from "../utils/healthMetrics";
 import ReactMarkdown from "react-markdown";
 
@@ -155,6 +158,13 @@ export default function Dashboard() {
   const [quickAskQ, setQuickAskQ] = useState(""); // 当前输入框
   const [quickAskHistory, setQuickAskHistory] = useState([]); // [{id, q, agent, reply, loading, error, time}]
   const [askTarget, setAskTarget] = useState("auto"); // 用户可选 agent 锁定, 默认 auto (host 自动路由)
+
+  // ===== AI 页面控制 =====
+  // 卡片用数组而非单值：一次对话里 AI 可能连续投递多张（先用药、再摘要）。
+  // 单值会让后一张把前一张顶掉，用户只看到最后一张。
+  const [aiCards, setAiCards] = useState([]);
+  // AI 点名的 agent —— 高亮 4 个智能体卡片里的某一个
+  const [highlightedAgent, setHighlightedAgent] = useState(null);
 
   const computeScore = (recCount, medTaken, medTotal) => {
     // 阶段48-8: deprecated, 用 utils/healthMetrics.js 的真实算法替代
@@ -275,7 +285,7 @@ export default function Dashboard() {
     try {
       const token = localStorage.getItem("token") || "";
       const apiBase =
-        import.meta?.env?.VITE_API_BASE || "http://localhost:13002";
+        import.meta?.env?.VITE_API_BASE || "";
       const metadata = { from_dashboard: true };
       if (targetAgent && targetAgent !== "auto") {
         metadata.selected_agent = targetAgent;
@@ -411,6 +421,41 @@ export default function Dashboard() {
       );
     }
   };
+
+  // ===== 向 AI 开放本页的可控点 =====
+  // 'Dashboard'  —— 本页独有的动作（刷新数据、驱动页内对话、高亮某个 agent）
+  // 'AiInfoCard' —— 页面无关名，与 TodayDashboard 共用。
+  //   后端四个卡片类工具发的是这个名字，于是用户停在哪个页面卡片都能落地。
+  usePageUpdater(PAGE_COMPONENTS.DASHBOARD, {
+    [PAGE_ACTIONS.REFRESH]: () => {
+      fetchAll();
+    },
+    [PAGE_ACTIONS.ASK_AGENT]: (params) => {
+      const q = params?.question || params?.q;
+      if (q) handleAskAgent(params?.agent, q);
+    },
+    [PAGE_ACTIONS.HIGHLIGHT_AGENT]: (params) => {
+      const target = params?.agent || params?.name;
+      if (!target) return;
+      setHighlightedAgent(target);
+      // 高亮只是视觉提示，几秒后自行褪去，免得一直亮着失去意义
+      window.setTimeout(() => setHighlightedAgent(null), 6000);
+    },
+  });
+
+  usePageUpdater(PAGE_COMPONENTS.AI_INFO_CARD, {
+    [PAGE_ACTIONS.SET_DATA]: (params) => {
+      console.log("[Dashboard] AI setData:", params);
+      setAiCards((cards) => {
+        // 同一次提问里工具可能被重放，用 title+type 去重，避免叠出两张一样的卡
+        const key = `${params?.type || ""}|${params?.title || ""}`;
+        const rest = cards.filter(
+          (c) => `${c.type || ""}|${c.title || ""}` !== key,
+        );
+        return [...rest, params].slice(-3); // 最多留 3 张
+      });
+    },
+  });
 
   return (
     <Box sx={{ minHeight: "100vh", bgcolor: "background.default" }}>
@@ -778,6 +823,23 @@ export default function Dashboard() {
           )}
         </Paper>
 
+        {/* ===== AI 页面控制: 卡片 =====
+            AI 通过 page_update 投递过来的信息卡（用药 / 档案 / 就诊摘要）。
+            放在对话面板下方、智能体卡片上方 —— 紧跟提问，符合阅读顺序。 */}
+        {aiCards.length > 0 && (
+          <Stack spacing={1.5} sx={{ mb: 3 }}>
+            {aiCards.map((card, i) => (
+              <AiInfoCardView
+                key={`${card.type || ""}-${card.title || ""}-${i}`}
+                data={card}
+                onClose={() =>
+                  setAiCards((cards) => cards.filter((_, j) => j !== i))
+                }
+              />
+            ))}
+          </Stack>
+        )}
+
         {/* 阶段48-7: 简洁 4 个 agent 卡片 - 跳转而非自动答 */}
         <Box sx={{ mb: 3 }}>
           <Stack
@@ -796,16 +858,26 @@ export default function Dashboard() {
           <Grid container spacing={1.5}>
             {AGENTS.map((ag) => {
               const Icon = ag.icon;
+              // AI 点名的 agent 优先高亮（走 highlightAgent 动作），
+              // 用户手动锁定的（askTarget）次之。两者都亮时不冲突：颜色相同。
+              const isHighlighted =
+                highlightedAgent === ag.en || highlightedAgent === ag.id;
               return (
                 <Grid item xs={6} md={3} key={ag.id}>
                   <Card
                     sx={{
                       cursor: "pointer",
                       transition: "all 0.15s",
-                      border: 1,
-                      borderColor: askTarget === ag.en ? ag.color : "divider",
+                      border: isHighlighted ? 2 : 1,
+                      borderColor:
+                        isHighlighted || askTarget === ag.en
+                          ? ag.color
+                          : "divider",
                       bgcolor:
-                        askTarget === ag.en ? ag.bgColor : "background.paper",
+                        isHighlighted || askTarget === ag.en
+                          ? ag.bgColor
+                          : "background.paper",
+                      boxShadow: isHighlighted ? 3 : 0,
                       "&:hover": { borderColor: ag.color, boxShadow: 1 },
                     }}
                     onClick={() => {

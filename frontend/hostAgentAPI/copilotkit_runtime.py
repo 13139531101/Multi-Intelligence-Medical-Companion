@@ -72,6 +72,21 @@ async def _stream_agui(
                     headers={"Authorization": auth_header},
                 )
                 resp = await client.send(req, stream=True)
+                # 修复: 此前从不检查状态码。401/403/500 的响应体是 JSON, 不含
+                # 任何 "data:" 行 → 队列里只有 _eof_ → 前端只收到 RUN_STARTED +
+                # RUN_FINISHED, 表现为"空回复且无任何报错"。
+                if resp.status_code != 200:
+                    _body = await resp.aread()
+                    await resp.aclose()
+                    _snippet = _body.decode("utf-8", errors="replace")[:300]
+                    await queue.put({
+                        "event": "error",
+                        "error": (
+                            f"上游 /v2/chat/stream 返回 HTTP {resp.status_code}: {_snippet}"
+                        ),
+                    })
+                    await queue.put({"event": "_eof_"})
+                    return
                 try:
                     buf = ""
                     async for chunk in resp.aiter_bytes():
@@ -135,7 +150,27 @@ async def _stream_agui(
         if kind == "_eof_":
             break
         elif kind == "routing":
-            continue
+            # 修复: 此前 `continue` 直接吞掉, 前端 useChat.jsx 的 `case "routing"`
+            # 永远不触发。透传 agent 名, 让前端能显示"由 XX 智能体处理"。
+            yield _agui_event("routing", {
+                "agent": ev.get("agent", ""),
+                "routing": ev.get("routing", {}),
+            })
+        elif kind == "rag_context":
+            # 阶段48-fix: bridge.v2_process_message_stream 在真正调 agent 之前会
+            # 先跑 Magnetic RAG(多跳+KG扩展+rerank) 和 CRAG(纠错), 然后发这个事件。
+            # 分发链此前无此分支 → 被静默丢弃, 前端完全看不到"这一轮到底检索到了
+            # 什么、CRAG 有没有触发联网纠错"。透传出去让前端能显示检索徽标。
+            yield _agui_event(
+                "rag_context",
+                {
+                    "chunks": ev.get("chunks", 0),
+                    "score": ev.get("score", 0.0),
+                    "isRelevant": ev.get("is_relevant", False),
+                    "cragAction": ev.get("crag_action", ""),
+                    "sourceMix": ev.get("source_mix", ""),
+                },
+            )
         elif kind == "chunk":
             content = ev.get("text") or ev.get("content", "")
             if not content:
@@ -184,23 +219,22 @@ async def _stream_agui(
                 "TOOL_CALL_RESULT",
                 {
                     "toolCallId": tc_id,
+                    # 修复: 前端 useChat.jsx 用 toolCallName 匹配结果, 此前没发 →
+                    # 工具结果永远挂不到 chip 上, UI 显示不出。
+                    "toolCallName": name,
                     "content": json.dumps(result, ensure_ascii=False)
                     if not isinstance(result, str)
                     else result,
                 },
             )
-            # 如果工具返回包含 page_update 信息，生成 PAGE_UPDATE 事件
-            if isinstance(result, dict) and result.get("page_update"):
-                pu = result["page_update"]
-                yield _agui_event(
-                    "PAGE_UPDATE",
-                    {
-                        "component": pu.get("component", "page"),
-                        "action": pu.get("action", "setData"),
-                        "params": pu.get("params", {}),
-                        "displaySummary": pu.get("summary", ""),
-                    },
-                )
+            # 注意: 这里**故意不再**从工具结果里推导 PAGE_UPDATE。
+            #
+            # bridge.v2_process_message_stream 在发完 done 之后, 会遍历同一份
+            # tool_results_log 发一个语义化的 {"event":"page_update"} 事件（它覆盖
+            # 的形状是这里的两倍: page_update 包裹式 和 component/action 直给式）。
+            # 两处都发 → 同一次工具调用会产出**两个** PAGE_UPDATE → 前端对同一份
+            # 数据执行两次 setData, 页面闪烁、弹窗重复。
+            # 统一以 bridge 的 page_update 事件为唯一来源, 见下面的 kind == "page_update"。
         elif kind == "page_update":
             # 直接的 page_update 事件
             yield _agui_event(
@@ -212,12 +246,33 @@ async def _stream_agui(
                     "displaySummary": ev.get("summary", ""),
                 },
             )
+        elif kind == "clarification":
+            # 修复: 此前无此分支 → 事件被静默丢弃。clarify 是 host_graph 的真实
+            # 节点 (bridge.py 发 {"event":"clarification","question":...}) 且它
+            # 不发 done, 所以用户只看到一条空回复, 澄清问题永远不显示。
+            yield _agui_event("clarification", {
+                "question": ev.get("question", ""),
+                "reason": ev.get("reason", ""),
+            })
+        elif kind == "interrupt":
+            # 修复: 同上, HITL 中断此前无分支 → 前端收不到确认请求。
+            yield _agui_event("interrupt", {
+                "thread_id": ev.get("thread_id"),
+                "interrupt_data": ev.get("interrupt_data"),
+            })
         elif kind == "done":
             if text_started:
                 yield _agui_event("TEXT_MESSAGE_END", {"messageId": msg_id})
-            break
+            # 修复: 此前遇 done 立即 break, 但 bridge.py 是「先发 done、再发
+            # page_update」→ 尾部 page_update 永远读不到。改为不 break,
+            # 继续 drain 队列直到 pump 放入的 _eof_。
+            continue
         elif kind == "error":
-            yield _agui_event("RUN_ERROR", {"message": ev.get("message", "agent error")})
+            # 修复: bridge/api 发的是 {"error": ...}, 此前读 ev["message"] →
+            # 永远落到兜底文案 "agent error", 真实错误丢失。
+            yield _agui_event("RUN_ERROR", {
+                "message": ev.get("error") or ev.get("message") or "agent error",
+            })
             break
 
     try:
@@ -235,7 +290,32 @@ async def copilotkit_endpoint(request: Request):
     1. CopilotKit RunAgentInput: { messages, thread_id, run_id, ... }
     2. 自写浮窗直接格式:       { message, agent_hint? }
     """
-    body = await request.json()
+    # 修复: 非 UTF-8 / 非法 JSON 的请求体会让 request.json() 抛异常 → 整个
+    # endpoint 500，前端只看到 "Internal Server Error" 且没有任何 AG-UI 事件。
+    # 这里降级成一条正常的 AG-UI 错误流。
+    try:
+        body = await request.json()
+    except Exception as e:  # noqa: BLE001
+        # 注意: Python 在 except 块结束时隐式 `del e`。而 bad_body_stream() 是
+        # 生成器, 函数体要等到 StreamingResponse 真正迭代时才执行 —— 那时 e 早已
+        # 被解绑, 直接 NameError, 于是"错误流"自己又崩了, 用户还是只看到空回复。
+        # 所以必须在进入 except 块时就把消息取出来存成普通局部变量。
+        _parse_err = str(e)
+
+        async def bad_body_stream():
+            run_id = str(uuid.uuid4())
+            yield _agui_event("RUN_STARTED", {"runId": run_id, "threadId": "default"})
+            yield _agui_event("RUN_ERROR", {"message": f"请求体解析失败: {_parse_err}"})
+            yield _agui_event("RUN_FINISHED", {"runId": run_id, "threadId": "default"})
+
+        return StreamingResponse(
+            bad_body_stream(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    if not isinstance(body, dict):
+        body = {}
     messages = body.get("messages") or []
     text, agent_hint = _extract_user_message(messages)
     if not text and "message" in body:

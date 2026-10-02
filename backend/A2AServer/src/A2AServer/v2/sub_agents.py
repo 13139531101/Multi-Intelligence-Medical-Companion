@@ -96,7 +96,14 @@ class HealthAdvisorV2(V2Agent):
 @register_agent(
     name="health_records",
     description="检查报告 OCR、存储、检索",
-    keywords=["档案", "记录", "体检", "报告", "record", "检查单"],
+    # 阶段48-28: 补高精度名词。之前只有"报告/检查单"，而"血常规""化验"这类
+    # 具体说法会被 health_advisor 的泛词（怎么办/如何/为什么）抢走 —— advisor
+    # 没有档案工具，于是"打开上个月的血常规"只回文字、不跳转。
+    # 刻意不加"打开""跳转"这类泛动词：它们和档案领域无关，加了会劫持无关查询。
+    keywords=[
+        "档案", "记录", "体检", "报告", "record", "检查单",
+        "血常规", "化验", "检验", "影像", "病理", "处方单", "化验单", "检验单",
+    ],
     tools_module="health_records",
     aliases=["健康档案管理员", "健康档案管理", "健康档案", "档案管理员"],
 )

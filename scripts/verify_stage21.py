@@ -7,7 +7,9 @@ import asyncio
 os.environ['PYTHONIOENCODING'] = 'utf-8'
 os.environ['EMBEDDING_MODEL'] = 'text-embedding-v3'  # v3 支持 dimensions 参数
 os.environ['EMBEDDING_DIM'] = '1024'  # 改表后用 1024
-os.environ['DASHSCOPE_API_KEY'] = 'sk-2917df2994074695b7b741ffb6382a3b'  # 测试用
+from _env_loader import load_env, require
+load_env()
+os.environ['DASHSCOPE_API_KEY'] = require('DASHSCOPE_API_KEY')
 import locale
 try:
     locale.setlocale(locale.LC_ALL, 'C.UTF-8')

@@ -1,7 +1,9 @@
 import os
 os.environ['PYTHONIOENCODING'] = 'utf-8'
 os.environ['EMBEDDING_MODEL'] = 'text-embedding-v3'
-os.environ['DASHSCOPE_API_KEY'] = 'sk-2917df2994074695b7b741ffb6382a3b'
+from _env_loader import load_env, require
+load_env()
+os.environ['DASHSCOPE_API_KEY'] = require('DASHSCOPE_API_KEY')
 os.environ['EMBEDDING_API_BASE'] = 'https://dashscope.aliyuncs.com/compatible-mode/v1'
 os.environ['EMBEDDING_DIM'] = '384'
 

@@ -182,8 +182,13 @@ export function ChatProvider({ children }) {
       // AG-UI 协议
       switch (eventName) {
         case "RUN_STARTED":
+          // 流开始：只标记开始，不要在这里结束流式渲染
+          // （此前与 TEXT_MESSAGE_END 共用 case，导致流一开始就把消息置为
+          //   isStreaming:false，出现渲染闪烁）
+          return;
+
         case "TEXT_MESSAGE_END":
-          // 流结束时一次性渲染完整内容，确保 formatInline 能正确匹配 markdown
+          // 文本结束：一次性渲染完整内容，确保 markdown 能正确匹配
           dispatch({
             type: "aiPatch",
             id: aiId,
@@ -226,8 +231,12 @@ export function ChatProvider({ children }) {
           return;
 
         case "TOOL_CALL_RESULT":
+          // 修复: 此前按 t.name === payload.toolCallName 匹配, 同名工具多次调用
+          // 会串味, 且后端早期版本压根不发 toolCallName → 结果永远挂不上。
+          // 改用 toolCallId (唯一) 匹配, 名字仅作兜底。
           curToolCalls = curToolCalls.map((t) =>
-            t.name === payload.toolCallName
+            (payload.toolCallId && t.id === payload.toolCallId) ||
+            (payload.toolCallName && t.name === payload.toolCallName)
               ? { ...t, result: payload.content || "" }
               : t,
           );
@@ -258,6 +267,23 @@ export function ChatProvider({ children }) {
             type: "aiPatch",
             id: aiId,
             patch: { agent: payload.agent },
+          });
+          return;
+        case "rag_context":
+          // 阶段48-fix: 后端在检索完 Magnetic RAG(多跳+KG+rerank) 与 CRAG(纠错)
+          // 后发来检索画像。此前无此分支 → 静默丢弃, 用户看不到"答得有没有依据"。
+          dispatch({
+            type: "aiPatch",
+            id: aiId,
+            patch: {
+              ragContext: {
+                chunks: payload.chunks || 0,
+                score: payload.score || 0,
+                isRelevant: !!payload.is_relevant,
+                cragAction: payload.crag_action || "",
+                sourceMix: payload.source_mix || "",
+              },
+            },
           });
           return;
         case "chunk":
@@ -292,12 +318,47 @@ export function ChatProvider({ children }) {
         case "done":
           return; // finish() 兜底
         case "error":
-          curContent += `\n[错误] ${payload.message}`;
+          // 修复: 后端发的是 {error: ...}, 此前只读 payload.message → 真实错误
+          // 永远显示成 "undefined"。
+          curContent += `\n[错误] ${payload.error || payload.message || "未知错误"}`;
           dispatch({
             type: "aiPatch",
             id: aiId,
             patch: { content: curContent, isStreaming: false },
           });
+          return;
+
+        // ===== agent 主动澄清 / HITL 中断 =====
+        // 修复: 后端 runtime 此前无这两个分支 → clarify 节点的问题永远不显示,
+        // 用户只看到一条空回复。现在由 copilotkit_runtime 转发过来。
+        case "clarification":
+          curContent +=
+            (curContent ? "\n\n" : "") + `❓ ${payload.question || "需要补充信息"}`;
+          dispatch({
+            type: "aiPatch",
+            id: aiId,
+            patch: {
+              content: curContent,
+              isStreaming: false,
+              isClarification: true,
+            },
+          });
+          dispatch({ type: "setThinking", value: false });
+          return;
+
+        case "interrupt":
+          curContent += (curContent ? "\n\n" : "") + "⏸ 需要你确认后继续";
+          dispatch({
+            type: "aiPatch",
+            id: aiId,
+            patch: {
+              content: curContent,
+              isStreaming: false,
+              isInterrupt: true,
+              interruptData: payload.interrupt_data,
+            },
+          });
+          dispatch({ type: "setThinking", value: false });
           return;
 
         // ===== AI 页面控制指令 =====
@@ -306,8 +367,25 @@ export function ChatProvider({ children }) {
           // payload: { component, action, params, displaySummary }
           if (payload.component && payload.action) {
             console.log(`[useChat] PAGE_UPDATE: ${payload.component}.${payload.action}`, payload.params);
-            // 调用组件注册表
-            componentRegistry.call(payload.component, payload.action, payload.params);
+            // 目标组件此刻可能还没挂载 —— 最典型的是"跳转到某条记录"：
+            // 后端先发 navigateTo、紧接着发 openRecord，而这时用户还停在原页面。
+            // 注册表会把未挂载的指令**排队**，等组件注册时自动排空。
+            // 所以这里不能再像以前那样提前 return，否则队列永远填不进去。
+            const r = componentRegistry.call(
+              payload.component,
+              payload.action,
+              payload.params,
+            );
+            if (r && r.queued) {
+              curContent +=
+                (curContent ? "\n\n" : "") +
+                `_（${payload.component} 将在页面打开后执行）_`;
+              dispatch({
+                type: "aiPatch",
+                id: aiId,
+                patch: { content: curContent },
+              });
+            }
             // 同时记录到 state，让 ChatPanel 显示操作摘要
             dispatch({
               type: "pageUpdate",

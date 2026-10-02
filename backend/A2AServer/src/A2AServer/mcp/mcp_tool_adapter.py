@@ -286,15 +286,18 @@ def _load_stdio_mcp_tools(agent_name: str) -> list:
     """
     try:
         import os
-        from .mcp_discover import AGENT_DIR_MAP, _REPO_ROOT
+        from .mcp_discover import AGENT_DIR_MAP, resolve_mcpserver_dir
         dir_name = AGENT_DIR_MAP.get(agent_name, agent_name)
-        # 复用 mcp_discover 的 REPO_ROOT 检测（支持 PHA_PROJECT_ROOT env var）
-        backend_dir = str(_REPO_ROOT)
 
-        mcpserver_dir = os.path.join(backend_dir, dir_name, "mcpserver")
-        if not os.path.isdir(mcpserver_dir):
-            logger.warning("[mcp_tool_adapter:stdio] dir not found: %s", mcpserver_dir)
+        # 阶段48-fix: 用统一解析器, 兼容 _REPO_ROOT/backend/<Agent> 与 _REPO_ROOT/<Agent>
+        _dir = resolve_mcpserver_dir(agent_name)
+        if _dir is None:
             return []
+        mcpserver_dir = str(_dir)
+        # 阶段48-29: 同 _load_http_mcp_tools —— PYTHONPATH 要指向装着各 Agent 目录
+        # 的那一层（Docker 下是 /app/backend），而不是 _REPO_ROOT(/app)，否则
+        # `python -m <Agent>.mcpserver._stdio_starter` 会 ModuleNotFoundError。
+        backend_dir = os.path.dirname(os.path.dirname(mcpserver_dir))
 
         tool_files = sorted(
             f for f in os.listdir(mcpserver_dir)
@@ -388,12 +391,21 @@ def _load_http_mcp_tools(agent_name: str) -> list:
         return []
 
     import os
-    from .mcp_discover import AGENT_DIR_MAP, _REPO_ROOT
+    from .mcp_discover import AGENT_DIR_MAP, resolve_mcpserver_dir
     dir_name = AGENT_DIR_MAP.get(agent_name, agent_name)
-    backend_dir = str(_REPO_ROOT)
-    mcpserver_dir = os.path.join(backend_dir, dir_name, "mcpserver")
-    if not os.path.isdir(mcpserver_dir):
+    # 阶段48-fix: 统一解析（此前只试 _REPO_ROOT/<Agent>, Docker 下必然落空）
+    _dir = resolve_mcpserver_dir(agent_name)
+    if _dir is None:
         return []
+    mcpserver_dir = str(_dir)
+    # 阶段48-29: 子进程的 PYTHONPATH 必须是**装着各 Agent 目录的那一层**，不能是
+    # _REPO_ROOT。Docker 里 _REPO_ROOT=/app，而 Agent 在 /app/backend/<Agent> ——
+    # 于是 `python -m MedicationReminder.mcpserver._http_starter` 报
+    # "No module named 'MedicationReminder'"，HTTP 通路每次冷启动都先白白失败一次，
+    # 退到 stdio 又失败，最后才靠静态 AST 扫描拿到工具。首次请求因此要等十几秒
+    # 甚至超时（表现为"第一次没反应，第二次正常"）。
+    # mcpserver_dir 形如 <agent_root>/<Agent>/mcpserver，上溯两层正好是 agent_root。
+    backend_dir = os.path.dirname(os.path.dirname(mcpserver_dir))
     tool_files = sorted(
         f for f in os.listdir(mcpserver_dir)
         if f.endswith("_tool.py") and not f.startswith("_")

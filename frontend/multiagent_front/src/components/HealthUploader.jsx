@@ -30,7 +30,7 @@ import {
   Delete as DeleteIcon,
 } from "@mui/icons-material";
 
-const API_BASE = import.meta?.env?.VITE_API_BASE || "http://localhost:13002";
+const API_BASE = import.meta?.env?.VITE_API_BASE || "";
 
 const PURPOSE_LABEL = {
   health_record: HEALTH_RECORDS_NAME,

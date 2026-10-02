@@ -45,7 +45,7 @@ class MemoryDatabaseConfig:
                 auth = f"{user}:{password}" if password else f"{user}"
                 dsn = f"postgresql://{auth}@{host}:{port}/{database}"
 
-            self._connection_pool = ConnectionPool(dsn, max_size=max(self.pool_config['pool_size'], 1))
+            self._connection_pool = ConnectionPool(dsn, min_size=0, max_size=max(self.pool_config['pool_size'], 1))
             self._enabled = True
             logger.info("记忆系统 PostgreSQL 连接池初始化成功")
         except Exception as e:

@@ -585,7 +585,7 @@ export default function NewChat() {
     if (!currentConvId && messages.length <= 1) setConvTitle(text.slice(0, 24));
 
     const token = localStorage.getItem("token") || "";
-    const apiBase = import.meta?.env?.VITE_API_BASE || "http://localhost:13002";
+    const apiBase = import.meta?.env?.VITE_API_BASE || "";
     try {
       const resp = await fetch(apiBase + "/v2/chat/stream", {
         method: "POST",

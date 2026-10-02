@@ -22,7 +22,7 @@ import {
   Refresh as RefreshIcon,
 } from "@mui/icons-material";
 
-const API_BASE = import.meta?.env?.VITE_API_BASE || "http://localhost:13002";
+const API_BASE = import.meta?.env?.VITE_API_BASE || "";
 
 const COLOR_BY_DOMAIN = {
   personal_health_assistant: "#1565C0",

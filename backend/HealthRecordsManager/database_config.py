@@ -39,7 +39,7 @@ def _get_db_pool(cfg: Dict[str, Any]) -> ConnectionPool | None:
     try:
         max_size = int(os.getenv("DB_POOL_MAX_SIZE", "2"))
         timeout = float(os.getenv("DB_POOL_TIMEOUT", "5"))
-        _db_pool = ConnectionPool(_build_db_dsn(cfg), max_size=max(max_size, 1), timeout=timeout)
+        _db_pool = ConnectionPool(_build_db_dsn(cfg), min_size=0, max_size=max(max_size, 1), timeout=timeout)
         return _db_pool
     except Exception as e:
         logger.warning(f"DB连接池初始化失败，将回退为直连: {e}")

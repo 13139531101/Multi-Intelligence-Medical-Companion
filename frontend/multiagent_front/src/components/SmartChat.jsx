@@ -1,3 +1,14 @@
+/**
+ * ⚠️ 已废弃 / DEPRECATED —— 死代码，无任何地方 import 本文件。
+ *
+ * 历史遗留：早期直连 /smart_chat 的实现，已被下面这套取代
+ *   - 浮窗对话：components/useChat.jsx（走 /api/copilotkit 的 AG-UI 流）
+ *   - 整页对话：pages/NewChat.jsx
+ *
+ * 保留仅为考古，请勿在新代码中引用。若确认不再需要，可直接删除本文件。
+ * （另注：本文件读的是 localStorage 的 `access_token`，而实际写入的是 `token`，
+ *   即便挂上去也拿不到鉴权头。）
+ */
 import React, { useState, useRef, useEffect } from "react";
 import { HEALTH_ADVISOR_NAME, HEALTH_RECORDS_NAME, MEDICATION_REMINDER_NAME, VISIT_SUMMARY_NAME } from "../config/agents"
 import {

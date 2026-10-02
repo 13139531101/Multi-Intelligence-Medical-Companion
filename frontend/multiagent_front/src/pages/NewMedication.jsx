@@ -463,7 +463,7 @@ export default function NewMedication() {
     try {
       const token = localStorage.getItem("token") || "";
       const apiBase =
-        import.meta?.env?.VITE_API_BASE || "http://localhost:13002";
+        import.meta?.env?.VITE_API_BASE || "";
       // 真正调 LLM
       const resp = await fetch(apiBase + "/v2/chat/stream", {
         method: "POST",

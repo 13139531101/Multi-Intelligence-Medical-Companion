@@ -34,7 +34,7 @@ def _get_pool() -> ConnectionPool:
         return _db_pool
     max_size = int(os.getenv("DB_POOL_MAX_SIZE", "5"))
     timeout = float(os.getenv("DB_POOL_TIMEOUT", "5"))
-    _db_pool = ConnectionPool(_build_db_dsn(), max_size=max(max_size, 1), timeout=timeout)
+    _db_pool = ConnectionPool(_build_db_dsn(), min_size=0, max_size=max(max_size, 1), timeout=timeout)
     return _db_pool
 
 

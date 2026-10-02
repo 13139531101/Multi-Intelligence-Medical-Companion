@@ -551,10 +551,23 @@ class V2Agent:
                         if tr_key in seen_tool_calls:
                             continue
                         seen_tool_calls.add(tr_key)
+                        # 修复: 此前是 str(content)[:500] —— dict 经 str() 得到的是
+                        # Python repr (单引号), 不是合法 JSON, 且 500 字符会把带
+                        # page_update 的工具结果截断 → 下游 json.loads 必然失败,
+                        # "AI 操控页面"因此失效。改为 json.dumps 并放宽上限。
+                        #
+                        # 阶段48-28: 上限从 4000 提到 20000。截断是**静默**的 ——
+                        # bridge.py 解析失败后 except 吞掉，两个 isinstance 分支都跳过，
+                        # 结果是既没有 page_update 也没有日志，极难排查。
+                        # 代价只是 SSE 负载变大，而工具结果本来就已经在 tool_results 里。
+                        if isinstance(content, (dict, list)):
+                            _output = json.dumps(content, ensure_ascii=False, default=str)[:20000]
+                        else:
+                            _output = str(content)[:20000]
                         yield {
                             "type": "tool_result",
                             "name": tool_name,
-                            "output": str(content)[:500],
+                            "output": _output,
                         }
 
             # 结束事件

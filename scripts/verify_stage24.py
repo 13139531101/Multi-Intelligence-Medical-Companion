@@ -5,7 +5,9 @@ import time
 import asyncio
 
 os.environ['PYTHONIOENCODING'] = 'utf-8'
-os.environ['DASHSCOPE_API_KEY'] = 'sk-2917df2994074695b7b741ffb6382a3b'  # 本地测试用
+from _env_loader import load_env, require
+load_env()
+os.environ['DASHSCOPE_API_KEY'] = require('DASHSCOPE_API_KEY')
 os.environ['DEEPSEEK_API_KEY'] = 'sk-test-deepseek-fake'  # 测试用（真实 key 在容器里）
 os.environ['PHA_PROVIDER_RATE_LIMIT'] = '100'
 

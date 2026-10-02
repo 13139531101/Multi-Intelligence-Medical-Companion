@@ -208,6 +208,34 @@ CRITIQUE_ISSUES_COUNT = Histogram(
 )
 
 # ============================================================
+# 5d. 阶段48-p3: v2 主链路 rerank 指标
+# ============================================================
+# 注意: 这些必须注册在**本模块**的 REGISTRY 上。
+# 曾经把 rerank 指标写进 A2AServer/v2/monitoring.py —— 那个模块的
+# get_prometheus_metrics() 挂在 /metrics 上会被本模块的路由遮蔽
+# (api.py 先 include 了 observability 的 /metrics), 于是 `curl /metrics
+# | grep rerank` 永远是空的。指标注册在哪, 就得在哪被 scrape。
+
+RERANK_TOTAL = Counter(
+    "pha_rerank_total",
+    "Total rerank invocations by outcome",
+    ["outcome"],  # outcome: success | skipped | error
+)
+
+RERANK_LATENCY = Histogram(
+    "pha_rerank_latency_seconds",
+    "Rerank API latency in seconds",
+    ["outcome"],
+    buckets=(0.05, 0.1, 0.2, 0.35, 0.5, 1.0, 2.0, 4.0, 8.0),
+)
+
+RERANK_CANDIDATES = Histogram(
+    "pha_rerank_candidates",
+    "Number of candidates sent to rerank",
+    buckets=(2, 4, 6, 10, 15, 20, 30, 50),
+)
+
+# ============================================================
 # 6. 基础设施指标
 # ============================================================
 

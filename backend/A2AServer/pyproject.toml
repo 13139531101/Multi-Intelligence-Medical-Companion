@@ -13,7 +13,7 @@ dependencies = [
     "requests",
     "dotenv",
     "tenacity",
-    "mcp",
+    "mcp<2.0",  # 阶段48-fix: 2.x 移除了 mcp.server.fastmcp, 所有 *_tool.py 会 import 失败
     "zhipuai",
     "cachetools",
     "asyncclick",

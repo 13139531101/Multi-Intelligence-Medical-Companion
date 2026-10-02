@@ -30,6 +30,8 @@ import TodayDashboard from "./pages/TodayDashboard";
 
 // 自写 AI 浮窗 (不依赖 CopilotKit, 仅登录后显示)
 import ChatPanel from "./components/ChatPanel";
+// 渲染 null，但挂在 <Router> 内且始终挂载 —— 给 AI 一个可用的跳转出口
+import PageRouter from "./components/PageRouter";
 import { ChatProvider } from "./components/useChat.jsx";
 import { PageDataProvider } from "./components/PageDataContext.jsx";
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
@@ -47,6 +49,8 @@ function AppShell() {
       <PageDataProvider>
         {user && <ChatPanel />}
         <Router>
+          {/* 必须在 <Router> 内部：AI 的跳转指令靠它落地 */}
+          <PageRouter />
           <Routes>
             {/* 健康助手应用路由 */}
             <Route path="/login" element={<Login />} />
@@ -158,7 +162,11 @@ function AppShell() {
             <Route path="/settings" element={<Settings />} />
             <Route path="/tasks" element={<TasksPage />} />
 
-            {/* 默认重定向 */}
+            {/* 默认重定向 — 落回 /v2/dashboard（主页面）。
+                早先之所以落到 /v2/today，是因为当时 TodayDashboard 是唯一注册了
+                usePageUpdater 的页面，停在别处 PAGE_UPDATE 会被静默丢弃。
+                现在 Dashboard 自己也注册了（含页面无关的 AiInfoCard），
+                且注册表带待执行队列，落地页不再受这个约束。 */}
             <Route path="/" element={<Navigate to="/v2/dashboard" replace />} />
             <Route path="*" element={<Navigate to="/v2/dashboard" replace />} />
           </Routes>

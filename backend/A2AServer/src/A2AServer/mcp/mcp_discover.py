@@ -79,6 +79,35 @@ PHACORE_AGENT_ALIASES = (
 )
 
 
+def resolve_mcpserver_dir(agent_name: str) -> Path | None:
+    """定位 agent 的 mcpserver 目录, 兼容两种路径结构.
+
+    1. _REPO_ROOT/backend/<Agent>/mcpserver   ← 仓库 / hostapi 容器 (/app/backend/...)
+    2. _REPO_ROOT/<Agent>/mcpserver           ← agent 容器直接部署
+
+    阶段48-fix: 此前只有 mcp_discover 里做了双路径兜底, 而 mcp_tool_adapter 的
+    http / stdio / inprocess 三条加载路径都**只**试第 2 种。Docker 里 _REPO_ROOT=/app
+    而真实目录是 /app/backend/MedicationReminder/mcpserver → 三个路径全部
+    `return []` 且不报错 → agent 手里只剩内置 write_todos → 任何工具调用都失败
+    → 生成式 UI 永远等不到 page_update。
+    统一到这里, 保证"发现"和"加载"用的是同一套解析。
+    """
+    dir_name = AGENT_DIR_MAP.get(agent_name, agent_name)
+    candidates = [
+        _REPO_ROOT / "backend" / dir_name / "mcpserver",
+        _REPO_ROOT / dir_name / "mcpserver",
+    ]
+    for cand in candidates:
+        if cand.is_dir():
+            return cand
+    logger.warning(
+        "[mcp_discover] agent=%s mcpserver 目录不存在, 试过: %s",
+        agent_name,
+        ", ".join(str(c) for c in candidates),
+    )
+    return None
+
+
 def _find_mcp_tool_files(agent_name: str) -> list[Path]:
     """找到指定 agent 下的所有 *tool.py + PhaCore 共享文件"""
     files: list[Path] = []

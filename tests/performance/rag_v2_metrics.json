@@ -1,0 +1,556 @@
+{
+  "dataset": "rag_v2_eval_dataset.json",
+  "cases": 18,
+  "top_k": 5,
+  "results": {
+    "single_hop_vector": {
+      "mode": "single_hop_vector",
+      "cases": 18,
+      "top_k": 5,
+      "avg_latency_ms": 4104.5,
+      "p95_latency_ms": 6614.8,
+      "avg_eval_score": 0.768,
+      "recall_at_k": 1.0,
+      "mrr": 0.9333,
+      "hit_rate_at_k": 1.0,
+      "by_category": {
+        "local_hit": {
+          "cases": 10,
+          "recall_at_k": 1.0,
+          "mrr": 1.0,
+          "all_hit_at_k": 1.0
+        },
+        "multi_hop": {
+          "cases": 5,
+          "recall_at_k": 1.0,
+          "mrr": 0.8,
+          "all_hit_at_k": 0.6
+        },
+        "no_answer": {
+          "cases": 3,
+          "recall_at_k": 0.0,
+          "mrr": 0.0,
+          "false_positive_rate": 0.0,
+          "note": "recall/MRR 不适用（无标注），看 false_positive_rate"
+        }
+      },
+      "top_ids": [
+        [
+          "eval-rx-001",
+          "eval-bp-001",
+          "eval-rx-003",
+          "eval-rx-002",
+          "eval-bp-002"
+        ],
+        [
+          "eval-rx-002",
+          "eval-bs-001",
+          "eval-bs-002",
+          "eval-vs-002",
+          "eval-bp-001"
+        ],
+        [
+          "eval-bp-001",
+          "eval-mr-001",
+          "eval-bp-002",
+          "eval-rx-001",
+          "eval-lab-002"
+        ],
+        [
+          "eval-lab-001",
+          "eval-mr-001",
+          "eval-bs-002",
+          "eval-lab-002",
+          "eval-bp-001"
+        ],
+        [
+          "eval-rx-003",
+          "eval-rx-001",
+          "eval-rx-002",
+          "eval-lab-001",
+          "eval-vs-001"
+        ],
+        [
+          "eval-lab-002",
+          "eval-bp-001",
+          "eval-mr-001",
+          "eval-vs-002",
+          "eval-bs-001"
+        ],
+        [
+          "eval-mr-001"
+        ],
+        [
+          "eval-bs-002",
+          "eval-bs-001",
+          "eval-rx-002",
+          "eval-bp-001",
+          "eval-vs-002"
+        ],
+        [
+          "eval-vs-002",
+          "eval-bs-002",
+          "eval-bs-001",
+          "eval-mr-001",
+          "eval-rx-002"
+        ],
+        [
+          "eval-sym-001",
+          "eval-vs-003",
+          "eval-mr-001",
+          "eval-vs-001"
+        ],
+        [
+          "eval-bp-001",
+          "eval-rx-001",
+          "eval-mr-001",
+          "eval-lab-002",
+          "eval-bp-002"
+        ],
+        [
+          "eval-bs-002",
+          "eval-bs-001",
+          "eval-bp-001",
+          "eval-rx-002",
+          "eval-vs-002"
+        ],
+        [
+          "eval-lab-001",
+          "eval-rx-003",
+          "eval-lab-002",
+          "eval-bp-001",
+          "eval-mr-001"
+        ],
+        [
+          "eval-bp-001",
+          "eval-rx-003",
+          "eval-rx-001",
+          "eval-lab-001",
+          "eval-lab-002"
+        ],
+        [
+          "eval-vs-002",
+          "eval-mr-001",
+          "eval-rx-002",
+          "eval-bs-001",
+          "eval-bs-002"
+        ],
+        [],
+        [],
+        [
+          "eval-vs-003"
+        ]
+      ]
+    },
+    "single_hop_rerank": {
+      "mode": "single_hop_rerank",
+      "cases": 18,
+      "top_k": 5,
+      "avg_latency_ms": 3830.4,
+      "p95_latency_ms": 8186.3,
+      "avg_eval_score": 0.783,
+      "recall_at_k": 1.0,
+      "mrr": 0.9556,
+      "hit_rate_at_k": 1.0,
+      "by_category": {
+        "local_hit": {
+          "cases": 10,
+          "recall_at_k": 1.0,
+          "mrr": 0.9333,
+          "all_hit_at_k": 1.0
+        },
+        "multi_hop": {
+          "cases": 5,
+          "recall_at_k": 1.0,
+          "mrr": 1.0,
+          "all_hit_at_k": 0.8
+        },
+        "no_answer": {
+          "cases": 3,
+          "recall_at_k": 0.0,
+          "mrr": 0.0,
+          "false_positive_rate": 0.0,
+          "note": "recall/MRR 不适用（无标注），看 false_positive_rate"
+        }
+      },
+      "top_ids": [
+        [
+          "eval-rx-001",
+          "eval-bp-001",
+          "eval-rx-003",
+          "eval-rx-002"
+        ],
+        [
+          "eval-rx-002",
+          "eval-bs-001",
+          "eval-vs-002",
+          "eval-bs-002",
+          "eval-bp-001"
+        ],
+        [
+          "eval-bp-001",
+          "eval-rx-001",
+          "eval-bp-002",
+          "eval-mr-001"
+        ],
+        [
+          "eval-lab-001",
+          "eval-mr-001",
+          "eval-lab-002",
+          "eval-bp-001"
+        ],
+        [
+          "eval-rx-003",
+          "eval-rx-001",
+          "eval-lab-001",
+          "eval-bp-001",
+          "eval-vs-001"
+        ],
+        [
+          "eval-lab-002",
+          "eval-vs-002",
+          "eval-bp-001",
+          "eval-mr-001"
+        ],
+        [
+          "eval-mr-001"
+        ],
+        [
+          "eval-bs-002",
+          "eval-bs-001",
+          "eval-rx-002",
+          "eval-vs-002",
+          "eval-mr-001"
+        ],
+        [
+          "eval-rx-002",
+          "eval-bs-001",
+          "eval-vs-002",
+          "eval-mr-001",
+          "eval-bs-002"
+        ],
+        [
+          "eval-sym-001",
+          "eval-vs-003",
+          "eval-vs-001",
+          "eval-mr-001"
+        ],
+        [
+          "eval-bp-001",
+          "eval-bp-002",
+          "eval-rx-001",
+          "eval-mr-001"
+        ],
+        [
+          "eval-bs-001",
+          "eval-bp-001",
+          "eval-rx-002",
+          "eval-bs-002",
+          "eval-mr-001"
+        ],
+        [
+          "eval-lab-001",
+          "eval-lab-002",
+          "eval-rx-003",
+          "eval-mr-001",
+          "eval-bp-001"
+        ],
+        [
+          "eval-rx-003",
+          "eval-bp-001",
+          "eval-vs-001",
+          "eval-lab-001"
+        ],
+        [
+          "eval-vs-002",
+          "eval-rx-002",
+          "eval-bs-001",
+          "eval-mr-001",
+          "eval-bs-002"
+        ],
+        [],
+        [],
+        [
+          "eval-vs-003"
+        ]
+      ]
+    },
+    "multi_hop_vector": {
+      "mode": "multi_hop_vector",
+      "cases": 18,
+      "top_k": 5,
+      "avg_latency_ms": 11466.2,
+      "p95_latency_ms": 30436.2,
+      "avg_eval_score": 0.772,
+      "recall_at_k": 1.0,
+      "mrr": 0.6667,
+      "hit_rate_at_k": 1.0,
+      "by_category": {
+        "local_hit": {
+          "cases": 10,
+          "recall_at_k": 1.0,
+          "mrr": 0.6167,
+          "all_hit_at_k": 1.0
+        },
+        "multi_hop": {
+          "cases": 5,
+          "recall_at_k": 1.0,
+          "mrr": 0.7667,
+          "all_hit_at_k": 1.0
+        },
+        "no_answer": {
+          "cases": 3,
+          "recall_at_k": 0.0,
+          "mrr": 0.0,
+          "false_positive_rate": 0.0,
+          "note": "recall/MRR 不适用（无标注），看 false_positive_rate"
+        }
+      },
+      "top_ids": [
+        [
+          "eval-rx-001",
+          "eval-rx-003",
+          "eval-rx-002"
+        ],
+        [
+          "eval-vs-002",
+          "eval-mr-001",
+          "eval-rx-002",
+          "eval-bs-001",
+          "eval-bs-002"
+        ],
+        [
+          "eval-vs-002",
+          "eval-mr-001",
+          "eval-bp-001",
+          "eval-bp-002",
+          "eval-bs-001"
+        ],
+        [
+          "eval-lab-001",
+          "eval-mr-001",
+          "eval-lab-002",
+          "eval-vs-001"
+        ],
+        [
+          "eval-vs-001",
+          "eval-rx-003",
+          "eval-lab-001",
+          "eval-lab-002",
+          "eval-rx-001"
+        ],
+        [
+          "eval-lab-002",
+          "eval-mr-001",
+          "eval-lab-001",
+          "eval-vs-001",
+          "eval-vs-002"
+        ],
+        [
+          "eval-mr-001",
+          "eval-lab-002",
+          "eval-lab-001"
+        ],
+        [
+          "eval-rx-002",
+          "eval-vs-002",
+          "eval-mr-001",
+          "eval-bs-002",
+          "eval-bs-001"
+        ],
+        [
+          "eval-rx-002",
+          "eval-vs-002",
+          "eval-bs-001",
+          "eval-lab-002",
+          "eval-bs-002"
+        ],
+        [
+          "eval-vs-001",
+          "eval-bp-001",
+          "eval-bp-002",
+          "eval-sym-001",
+          "eval-bs-001"
+        ],
+        [
+          "eval-vs-002",
+          "eval-mr-001",
+          "eval-bp-001",
+          "eval-rx-001",
+          "eval-bp-002"
+        ],
+        [
+          "eval-vs-002",
+          "eval-bs-001",
+          "eval-bs-002",
+          "eval-rx-002",
+          "eval-rx-001"
+        ],
+        [
+          "eval-lab-001",
+          "eval-lab-002",
+          "eval-rx-003",
+          "eval-rx-001",
+          "eval-mr-001"
+        ],
+        [
+          "eval-rx-003",
+          "eval-rx-001",
+          "eval-rx-002",
+          "eval-vs-001"
+        ],
+        [
+          "eval-vs-002",
+          "eval-rx-002",
+          "eval-lab-002",
+          "eval-bs-001",
+          "eval-bs-002"
+        ],
+        [],
+        [],
+        [
+          "eval-vs-003"
+        ]
+      ]
+    },
+    "multi_hop_rerank": {
+      "mode": "multi_hop_rerank",
+      "cases": 18,
+      "top_k": 5,
+      "avg_latency_ms": 8964.3,
+      "p95_latency_ms": 14658.8,
+      "avg_eval_score": 0.774,
+      "recall_at_k": 1.0,
+      "mrr": 0.95,
+      "hit_rate_at_k": 1.0,
+      "by_category": {
+        "local_hit": {
+          "cases": 10,
+          "recall_at_k": 1.0,
+          "mrr": 0.925,
+          "all_hit_at_k": 1.0
+        },
+        "multi_hop": {
+          "cases": 5,
+          "recall_at_k": 1.0,
+          "mrr": 1.0,
+          "all_hit_at_k": 1.0
+        },
+        "no_answer": {
+          "cases": 3,
+          "recall_at_k": 0.0,
+          "mrr": 0.0,
+          "false_positive_rate": 0.0,
+          "note": "recall/MRR 不适用（无标注），看 false_positive_rate"
+        }
+      },
+      "top_ids": [
+        [
+          "eval-rx-001",
+          "eval-rx-003",
+          "eval-rx-002"
+        ],
+        [
+          "eval-rx-002",
+          "eval-bs-001",
+          "eval-vs-002",
+          "eval-mr-001",
+          "eval-bs-002"
+        ],
+        [
+          "eval-bp-001",
+          "eval-bp-002",
+          "eval-mr-001",
+          "eval-vs-002"
+        ],
+        [
+          "eval-lab-001",
+          "eval-mr-001",
+          "eval-lab-002"
+        ],
+        [
+          "eval-rx-003",
+          "eval-rx-001",
+          "eval-lab-002",
+          "eval-lab-001",
+          "eval-bp-001"
+        ],
+        [
+          "eval-lab-002"
+        ],
+        [
+          "eval-mr-001",
+          "eval-lab-002",
+          "eval-lab-001"
+        ],
+        [
+          "eval-bs-002",
+          "eval-bs-001",
+          "eval-rx-002",
+          "eval-vs-002",
+          "eval-mr-001"
+        ],
+        [
+          "eval-rx-002",
+          "eval-bs-001",
+          "eval-lab-002",
+          "eval-vs-002",
+          "eval-mr-001"
+        ],
+        [
+          "eval-sym-001",
+          "eval-bs-001",
+          "eval-bp-001",
+          "eval-vs-003",
+          "eval-rx-003"
+        ],
+        [
+          "eval-bp-001",
+          "eval-bp-002",
+          "eval-rx-001",
+          "eval-mr-001"
+        ],
+        [
+          "eval-bs-001",
+          "eval-bp-001",
+          "eval-rx-002",
+          "eval-bs-002",
+          "eval-mr-001"
+        ],
+        [
+          "eval-lab-001",
+          "eval-lab-002",
+          "eval-rx-003",
+          "eval-mr-001",
+          "eval-rx-001"
+        ],
+        [
+          "eval-rx-003",
+          "eval-vs-001",
+          "eval-rx-001",
+          "eval-rx-002"
+        ],
+        [
+          "eval-vs-002",
+          "eval-rx-002",
+          "eval-bs-001",
+          "eval-lab-002",
+          "eval-mr-001"
+        ],
+        [],
+        [],
+        [
+          "eval-vs-003"
+        ]
+      ]
+    }
+  },
+  "gains": {
+    "rerank_mrr_gain_single": 0.0223,
+    "rerank_mrr_gain_multi": 0.2833,
+    "multi_hop_mrr_gain": -0.0056,
+    "total_mrr_gain": 0.0167,
+    "multi_hop_all_hit_gain_vs_single_rerank": 0.2,
+    "rerank_all_hit_gain_multi": 0.0
+  }
+}

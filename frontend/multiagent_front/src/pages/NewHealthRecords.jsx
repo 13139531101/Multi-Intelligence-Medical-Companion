@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
   Box,
   Container,
@@ -32,6 +33,7 @@ import {
   Card,
   CardContent,
   Avatar,
+  Snackbar,
 } from "@mui/material";
 import {
   Search,
@@ -57,6 +59,8 @@ import {
   FilterList,
 } from "@mui/icons-material";
 import Header from "../components/HealthHeader";
+import { usePageUpdater } from "../components/usePageUpdater";
+import { PAGE_COMPONENTS, PAGE_ACTIONS } from "../ai/pageContract";
 import HealthRecordForm from "../components/HealthRecordForm"; // 阶段48-22 v3+
 import AgentQuickFab from "../components/AgentQuickFab";
 import {
@@ -672,6 +676,71 @@ export default function NewHealthRecords() {
   const [extracting, setExtracting] = useState({});
   // 阶段48-22 v5: 详情弹窗 Tab 状态 (基础/正文/附件/OCR)
   const [detailTab, setDetailTab] = useState(0);
+  const [searchParams] = useSearchParams();
+
+  // ===== AI 页面控制 =====
+  // AI 说"打开上个月的血常规报告"时，后端会先让 PageRouter 跳到本页，
+  // 紧接着发 openRecord。但指令到达的瞬间本组件还没挂载，records 也还没拉，
+  // 所以 openRecord 只是把 id 记下来，等数据到位后再真正打开（见下面的 effect）。
+  const [pendingRecordId, setPendingRecordId] = useState(null);
+  const [toast, setToast] = useState("");
+
+  usePageUpdater(PAGE_COMPONENTS.HEALTH_RECORDS, {
+    [PAGE_ACTIONS.OPEN_RECORD]: (params) => {
+      const rid = params?.recordId ?? params?.id;
+      if (rid == null) return;
+      setPendingRecordId({
+        id: rid,
+        title: params?.title,
+        query: params?.query,
+      });
+    },
+    [PAGE_ACTIONS.SET_FILTER]: (params) => {
+      if (params?.type) setTab(params.type);
+    },
+    [PAGE_ACTIONS.SET_SEARCH]: (params) => {
+      setSearch(params?.q || "");
+    },
+  });
+
+  // 数据到位后把待打开的记录真正打开。
+  // 不依赖注册表队列的时机 —— 那条链路只负责把 id 送进来。
+  useEffect(() => {
+    if (!pendingRecordId || loading) return;
+    const rid = String(pendingRecordId.id);
+    const hit = records.find((r) => String(r.id) === rid);
+    if (hit) {
+      // 必须先清掉筛选，否则这条记录可能被 tab/search 过滤掉、弹窗开了但列表里没有
+      setTab("all");
+      setSearch("");
+      setDetailTab(0);
+      setDetail(hit);
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    } else {
+      // 没找到就退化为按标题/关键字过滤，而不是让页面毫无反应
+      const kw = pendingRecordId.title || pendingRecordId.query || "";
+      setTab("all");
+      setSearch(kw);
+      setToast(kw ? `未找到该记录，已按「${kw}」过滤` : "未找到该记录");
+    }
+    setPendingRecordId(null);
+  }, [records, loading, pendingRecordId]);
+
+  // 看门狗：拉取卡住时别让 pendingRecordId 永远挂着
+  useEffect(() => {
+    if (!pendingRecordId) return undefined;
+    const t = setTimeout(() => {
+      setPendingRecordId(null);
+      setToast("档案加载超时，未能打开该记录");
+    }, 8000);
+    return () => clearTimeout(t);
+  }, [pendingRecordId]);
+
+  // 整页刷新后仍能恢复：后端跳转时带的 ?openRecord=<id>
+  useEffect(() => {
+    const rid = searchParams.get("openRecord");
+    if (rid) setPendingRecordId({ id: rid });
+  }, [searchParams]);
 
   // 阶段48-22 v4: 从 AuthContext 写入的 localStorage.user 解 user_id
   //   之前没传, 子组件显示 "用户未登录"
@@ -1566,6 +1635,18 @@ export default function NewHealthRecords() {
         )}
       </Dialog>
       <AgentQuickFab />
+
+      {/* AI 跳转失败时的反馈：没找到记录 / 加载超时 */}
+      <Snackbar
+        open={!!toast}
+        autoHideDuration={5000}
+        onClose={() => setToast("")}
+        anchorOrigin={{ vertical: "bottom", horizontal: "center" }}
+      >
+        <Alert severity="warning" onClose={() => setToast("")}>
+          {toast}
+        </Alert>
+      </Snackbar>
     </Box>
   );
 }

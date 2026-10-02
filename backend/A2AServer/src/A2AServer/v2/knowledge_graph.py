@@ -119,11 +119,27 @@ CREATE INDEX IF NOT EXISTS idx_kg_entity_chunks_chunk  ON kg_entity_chunks(chunk
 """
 
 
+# 阶段48-perf: 建表 DDL 只需成功跑一次。
+#
+# 原来每次检索/每次索引都执行一遍这段 6 张表 + 6 个索引的 CREATE IF NOT EXISTS ——
+# 单条 SQL 本身很快，但它要拿 DDL 锁，且在检索热路径上每问一句就跑一次。实测
+# graph_expand_entities 单次耗时里有一部分就是这个。改成进程内一次性。
+_KG_SCHEMA_READY = False
+
+
 def ensure_kg_schema(conn) -> None:
-    """确保知识图谱表存在（幂等）"""
+    """确保知识图谱表存在（幂等）。
+
+    进程内只真正执行一次；后续调用直接返回。若首次执行抛异常（比如权限不足），
+    不会置位，下次仍会重试 —— 不能因为一次失败就永久跳过建表。
+    """
+    global _KG_SCHEMA_READY
+    if _KG_SCHEMA_READY:
+        return
     with conn.cursor() as cur:
         cur.execute(_ENSURE_SCHEMA_SQL)
     conn.commit()
+    _KG_SCHEMA_READY = True
 
 
 # ============================================================
@@ -287,15 +303,28 @@ async def graph_expand_entities(
             ensure_kg_schema(conn)
             with conn.cursor() as cur:
                 # 查找匹配的实体（按 canonical_name 或 aliases 模糊匹配）
+                #
+                # 阶段48-fix: 原写法是
+                #     OR aliases::text ILIKE ANY (ARRAY[%s] || '%')
+                #     参数 ... + ["%s"] * len(entity_names)
+                # 有两个毛病:
+                #  1) SQL 文本里那个字面量 '%' 会被 psycopg 当成占位符的开头,
+                #     直接抛 "only '%s', '%b', '%t' are allowed as placeholders, got '%'"。
+                #     （psycopg 对**参数化**查询做 %-格式化, 字面量必须写成 '%%'。）
+                #  2) 语义也不对: `ARRAY[x] || '%'` 是"往数组里追加一个元素 '%'",
+                #     得到的是 ['血压', '%'] 这种精确匹配列表, 根本不是 LIKE 模式。
+                # 改为在 Python 侧把模式串拼好、整体作为 text[] 传进去 —— 这样 SQL 文本里
+                # 一个 % 都没有, 既绕开占位符解析, 又是真正的模糊匹配。
                 placeholders = ",".join(["%s"] * len(entity_names))
+                alias_patterns = [f"%{n}%" for n in entity_names]
                 cur.execute(f"""
                     SELECT entity_id, canonical_name, entity_type
                     FROM kg_entities
                     WHERE user_id = %s
                       AND (canonical_name IN ({placeholders})
-                           OR aliases::text ILIKE ANY (ARRAY[%s] || '%'))
+                           OR aliases::text ILIKE ANY (%s))
                     LIMIT 20
-                """, [user_id] + entity_names + ["%s"] * len(entity_names))
+                """, [user_id] + entity_names + [alias_patterns])
                 rows = cur.fetchall()
 
         seed_entity_ids = [str(r[0]) for r in rows]
@@ -352,11 +381,21 @@ async def get_chunks_for_entities(
     try:
         from .rag import get_rag_store
         rag_store = get_rag_store()
-        placeholders = ",".join(["%s"] * len(entity_ids))
+        # 先把 set 定序成 list: placeholders 的个数和参数个数必须来自同一个序列,
+        # 否则 set 的迭代顺序虽然当次一致, 也容易在后续改动里被改出偏差。
+        eids = list(entity_ids)
+        placeholders = ",".join(["%s"] * len(eids))
 
         with rag_store.get_connection() as conn:
             with conn.cursor() as cur:
                 # 找所有关联的 chunk_id，按频率排序
+                #
+                # 阶段48-fix: 这条 SQL 有 4 个占位符
+                # (user_id + IN(...) 的 N 个 + LIMIT 的 1 个), 但参数只传了
+                # [user_id] + entity_ids —— **漏了 LIMIT 那一个**, 于是 psycopg 抛
+                # "the query has 4 placeholders but 3 parameters were passed"。
+                # 结果是图扩展每次都在这步炸掉: 实体明明抽到了、邻居也扩出来了,
+                # 却一个 chunk 都取不回来, KG 对检索的贡献恒为 0（且只留一行 warning）。
                 cur.execute(f"""
                     SELECT chunk_id, count(*) as cnt
                     FROM kg_entity_chunks
@@ -364,7 +403,7 @@ async def get_chunks_for_entities(
                     GROUP BY chunk_id
                     ORDER BY cnt DESC, chunk_id
                     LIMIT %s
-                """, [user_id] + list(entity_ids))
+                """, [user_id] + eids + [top_k])
                 chunk_rows = cur.fetchall()
 
         if not chunk_rows:
@@ -415,14 +454,25 @@ async def index_document_with_kg(
     user_id: str,
     source_type: str,
     source_id: str,
-    chunk_id: str,
-    text: str,
+    chunk_id: str = "",
+    text: str = "",
+    chunk_ids: Optional[List[str]] = None,
 ) -> dict:
     """
     索引文档时：先抽取实体关系，再存储。
-    由 rag.py 的 index_document 调用方在写入 chunks 后调用。
+    由 rag.py 的 index_document 在写入 chunks 后调用。
+
+    抽取只做一次 LLM 调用（对整篇文本），抽出的实体/关系关联到该文档的
+    **所有** chunk 上（chunk_ids），这样图扩展能召回整篇文档而不只是首块。
+    chunk_id 保留为单块兼容入口。
     """
-    entities, relations = await extract_entities_and_relations(text, user_id, chunk_id)
+    link_ids = [c for c in (chunk_ids or []) if c] or ([chunk_id] if chunk_id else [])
+    if not link_ids:
+        return {"kg_indexed": False, "reason": "no chunk ids"}
+
+    entities, relations = await extract_entities_and_relations(
+        text, user_id, link_ids[0]
+    )
     if not entities and not relations:
         return {"kg_indexed": False, "reason": "no entities found"}
 
@@ -450,12 +500,14 @@ async def index_document_with_kg(
                     rows = cur.fetchall()
                     actual_eid = str(rows[0][0]) if rows else e.entity_id
 
-                    # 关联 chunk
-                    cur.execute("""
-                        INSERT INTO kg_entity_chunks (entity_id, chunk_id, user_id)
-                        VALUES (%s, %s, %s)
-                        ON CONFLICT (entity_id, chunk_id) DO NOTHING
-                    """, (actual_eid, chunk_id, user_id))
+                    # 关联 chunk —— 实体挂到本文档的每个 chunk 上,
+                    # 图扩展才能召回整篇而不是只有首块
+                    for cid in link_ids:
+                        cur.execute("""
+                            INSERT INTO kg_entity_chunks (entity_id, chunk_id, user_id)
+                            VALUES (%s, %s, %s)
+                            ON CONFLICT (entity_id, chunk_id) DO NOTHING
+                        """, (actual_eid, cid, user_id))
 
                 # 插入关系（需要 source_entity_id 和 target_entity_id 已存在，这里简化处理：
                 # 关系在同一个文档内抽取，entity_id 映射在本函数内已处理）
@@ -471,8 +523,14 @@ async def index_document_with_kg(
 
             conn.commit()
 
-        logger.info("[kg] indexed: %d entities, %d relations for chunk %s", len(entities), len(relations), chunk_id)
-        return {"kg_indexed": True, "entities": len(entities), "relations": len(relations)}
+        logger.info("[kg] indexed: %d entities, %d relations for doc %s/%s (%d chunks)",
+                    len(entities), len(relations), source_type, source_id, len(link_ids))
+        return {
+            "kg_indexed": True,
+            "entities": len(entities),
+            "relations": len(relations),
+            "chunks": len(link_ids),
+        }
 
     except Exception as e:
         logger.warning("[kg] index_document_with_kg 失败: %s", e)

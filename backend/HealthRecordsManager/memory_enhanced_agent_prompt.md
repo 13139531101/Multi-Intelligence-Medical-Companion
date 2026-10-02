@@ -123,6 +123,7 @@
 - 异步趋势分析：`AsyncAnalysisTool_analyze_health_trends_async`
 - OCR 入库：`StorageTool_save_health_record` 与 `MemoryIntegrationTool_store_ocr_result`
 - 档案查询：`StorageTool_get_health_records`、`StorageTool_get_health_record_detail`
+- 跳转打开某份档案：`PageControlTool_open_health_record`
 - 用药提醒：`ReminderTool_add_medication_reminder`、`ReminderTool_get_medication_reminders`、`ReminderTool_mark_reminder_taken`
 - 健康提醒：`ReminderTool_add_health_reminder`、`ReminderTool_get_health_reminders`、`ReminderTool_complete_reminder`、`ReminderTool_delete_reminder`
 
@@ -139,6 +140,16 @@
 - 查看已保存的健康档案列表：
   - 调用 `StorageTool_get_health_records`（可选参数：`record_type`、`limit`）。
   - 若需某条详情，调用 `StorageTool_get_health_record_detail`（参数：`record_id`）。
+- 用户提到某一份具体档案 —— **无论是要求打开，还是只问在不在**：
+  - 导航类："打开上个月的血常规报告"、"帮我调出那份体检报告"、"跳到最近一次的病历"
+  - 存在性提问："有没有心电图检查报告"、"我做过胸片吗"、"上次的体检报告还在吗"
+  - **两类都必须调用** `PageControlTool_open_health_record`，参数：`{"query": "<用户描述档案的词，如 血常规；也可以直接传整句原话>", "record_type": "<可选>", "month": "<可选，YYYY-MM>"}`。
+  - 为什么存在性提问也要调：这是唯一能读到 `health_records` 表的通道。不调它就会退到向量检索，而档案正文多数是加密的、没进向量库，结果必然是"未找到"，让用户误以为档案丢了。
+  - 这个工具会指示前端跳转到档案页并打开该条记录的详情弹窗，**返回体不含档案正文**。
+  - 工具返回 `success: false` 时说明没有匹配到记录：如实告诉用户没找到，并建议换个说法或先去档案页确认；**绝对不要自己编造 record_id**，也不要因此断言"系统里没有您的档案"。
+  - **一次提问只调一次**，不要重复调用 —— 每次成功调用都会产生一对前端跳转动作，重复调用会让详情弹窗被打开两次。
+  - 不要用 `StorageTool_get_health_records` 来替代它 —— 那个只返回列表，不会让用户"跳过去"。
+  - 若你的工具列表里**没有**这个工具，说明当前不由你负责这件事：不要假装调用，直接用文字回答，并说明可以到"健康档案"页查看。
 - 用药管理（设置提醒/查看提醒/标记已服）：
   - 新增提醒：调用 `ReminderTool_add_medication_reminder` 或 `ReminderTool_add_health_reminder`。
   - 查看提醒：调用 `ReminderTool_get_medication_reminders` 或 `ReminderTool_get_health_reminders`。

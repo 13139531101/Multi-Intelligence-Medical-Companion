@@ -559,6 +559,13 @@ async def crag_correct_node(state: HostState) -> dict:
     """
     query = state.get("query", "")
     user_id = state.get("user_id", "default") or "default"
+    # 阶段48-fix: 这个函数里下面 5 处 _record_crag_metrics(..., target_agent, ...)
+    # 都在引用一个**从未定义过**的名字 —— 之前只有 invoke_agent_node(第735行) 定义了它。
+    # 于是每一次 CRAG 调用都会在记指标那一行抛 NameError, 被函数末尾的
+    # `except Exception` 吞掉, 统一退化成 {"crag_action": "CORRECT", "source_mix": "local"}。
+    # 后果不只是指标缺失: INCORRECT/AMBIGUOUS 分支里 web 搜索**已经跑完并合并好了**,
+    # 却因为这一行报错把结果整个丢掉 —— CRAG 的"纠错"能力等于完全没生效。
+    target_agent = state.get("target_agent", "health_advisor")
     rag_result = state.get("rag_result") or {}
     retrieval_needed = rag_result.get("retrieval_needed", False)
     chunks = rag_result.get("chunks", []) or []

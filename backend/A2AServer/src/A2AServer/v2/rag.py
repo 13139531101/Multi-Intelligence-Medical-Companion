@@ -222,6 +222,7 @@ class RAGStore:
         text: str,
         record_type: str = "",
         title: str = "",
+        with_kg: bool = True,
     ) -> dict:
         """
         索引一个文档：
@@ -232,20 +233,32 @@ class RAGStore:
         """
         sha = hashlib.sha256(text.encode("utf-8")).hexdigest()
 
-        # 检查是否已索引（sha 一致则跳过）
+        # 检查是否已索引（正文 sha 一致**且**元数据一致才跳过）
+        #
+        # 阶段48-fix: 原来只比 text_sha256。但 record_type / title 是落在
+        # rag_chunks 行上的, 而 magnetic_rag 的多跳检索**按 record_type 精确过滤**
+        # (RECORD_TYPE_TO_DB_TYPE: blood_pressure→vital_signs 等)。
+        # 用户在界面上把一条档案从"慢性病管理"改判成 vital_signs 时正文没变,
+        # 若这里只看 sha 就直接 return, 该档案会永远留在旧类型下 —— 正文检索还能
+        # 命中, 类型化检索则彻底隐身, 且没有任何报错。所以元数据变了必须重索引。
         with self.get_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT text_sha256 FROM rag_documents WHERE user_id=%s AND source_type=%s AND source_id=%s AND embedding_model=%s",
+                    "SELECT text_sha256, record_type, title FROM rag_documents WHERE user_id=%s AND source_type=%s AND source_id=%s AND embedding_model=%s",
                     (user_id, source_type, source_id, EMBEDDING_MODEL),
                 )
                 row = cur.fetchone()
                 if row and row[0] == sha:
-                    return {"skipped": True, "reason": "already indexed", "sha256": sha}
-                # 删旧 chunks
+                    same_meta = (row[1] or "") == (record_type or "") and (
+                        row[2] or ""
+                    ) == (title or "")
+                    if same_meta:
+                        return {"skipped": True, "reason": "already indexed", "sha256": sha}
+                # 删旧 chunks（只删本模型写的, 否则会把 HealthAdvisor 那套
+                # all-MiniLM-L6-v2 的 chunk 一并清掉 —— 跨栈误删）
                 cur.execute(
-                    "DELETE FROM rag_chunks WHERE user_id=%s AND source_type=%s AND source_id=%s",
-                    (user_id, source_type, source_id),
+                    "DELETE FROM rag_chunks WHERE user_id=%s AND source_type=%s AND source_id=%s AND embedding_model=%s",
+                    (user_id, source_type, source_id, EMBEDDING_MODEL),
                 )
 
         # 分块
@@ -255,6 +268,8 @@ class RAGStore:
 
         # Embedding（批量）
         embeddings = await self._embed.embed(pieces)
+
+        chunk_ids: List[str] = []
 
         # 写库
         with self.get_connection() as conn:
@@ -276,21 +291,47 @@ class RAGStore:
                     """,
                     (user_id, source_type, source_id, record_type, title, text, sha, EMBEDDING_MODEL, EMBEDDING_DIM, len(pieces)),
                 )
-                # 写 chunks
+                # 写 chunks（RETURNING id 供后续 KG 关联使用）
                 for i, (piece, emb) in enumerate(zip(pieces, embeddings)):
                     cur.execute(
                         """
                         INSERT INTO rag_chunks (user_id, source_type, source_id, record_type, title, chunk_index, chunk_text, embedding_model, embedding_dim, embedding, created_at, updated_at)
                         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::vector, now(), now())
+                        RETURNING id
                         """,
                         (user_id, source_type, source_id, record_type, title, i, piece, EMBEDDING_MODEL, EMBEDDING_DIM, _to_pgvector(emb)),
                     )
+                    _row = cur.fetchone()
+                    if _row:
+                        chunk_ids.append(str(_row[0]))
             conn.commit()
+
+        # 阶段48-p3: 激活知识图谱链路。
+        # index_document_with_kg 此前【没有任何调用方】→ kg_entities / kg_relations
+        # 永远是空表 → magnetic_rag 的图扩展 (get_chunks_for_entities) 恒为 no-op,
+        # 多跳检索退化成普通向量检索。这里在 chunk 落库后补上这一次调用。
+        kg_result: dict = {"kg_indexed": False, "reason": "disabled"}
+        if with_kg and chunk_ids:
+            try:
+                from .knowledge_graph import index_document_with_kg
+                kg_result = await index_document_with_kg(
+                    user_id=user_id,
+                    source_type=source_type,
+                    source_id=source_id,
+                    chunk_ids=chunk_ids,
+                    text=text,
+                )
+            except Exception as e:
+                # KG 是增强项, 失败不能影响主索引链路
+                logger.warning("[rag] KG 索引失败(已忽略): %s", e)
+                kg_result = {"kg_indexed": False, "reason": str(e)}
+
         return {
             "indexed": True,
             "chunk_count": len(pieces),
             "sha256": sha,
             "embedding_model": EMBEDDING_MODEL,
+            "kg": kg_result,
         }
 
     # ---------- 检索 ----------
@@ -316,14 +357,20 @@ class RAGStore:
         if not q_emb:
             return []
         q_vec = _to_pgvector(q_emb)
+        # 修复: rag_chunks 是「两套栈共写」的同一张表 —— v2 主链路写
+        # text-embedding-v4, HealthAdvisor/mcpserver/knowledge_tool.py 写
+        # all-MiniLM-L6-v2。此前 SQL 不按 embedding_model 过滤, 两个不同向量
+        # 空间的 embedding 一起算 cosine 距离, 排序结果被随机污染。
+        # 只召回与查询同模型的 chunk。
         sql = """
             SELECT id, user_id, source_type, source_id, record_type, title,
                    chunk_index, chunk_text,
                    1 - (embedding <=> %s::vector) AS score
             FROM rag_chunks
             WHERE user_id = %s
+              AND embedding_model = %s
         """
-        params = [q_vec, user_id]
+        params = [q_vec, user_id, EMBEDDING_MODEL]
         if source_type:
             sql += " AND source_type = %s"
             params.append(source_type)
@@ -338,13 +385,16 @@ class RAGStore:
                 cur.execute(sql, params)
                 rows = cur.fetchall()
 
+        # 反馈分批量从 rag_feedback 表读（阶段48-p3: 此前只读进程内 dict）
+        fb_map = self._load_feedback_map(user_id, [str(r[0]) for r in rows])
+
         results: List[SearchResult] = []
         for r in rows:
             score = float(r[8])
             if score < min_score:
                 continue
             chunk_id = str(r[0])
-            fb = self._feedback.get(chunk_id, 0.0)
+            fb = fb_map.get(chunk_id, 0.0)
             # 加权：score * (1 + 0.2*fb)
             final_score = score * (1.0 + 0.2 * fb)
             results.append(SearchResult(
@@ -365,9 +415,50 @@ class RAGStore:
 
     # ---------- 反馈 ----------
     def add_feedback(self, user_id: str, chunk_id: str, query: str, score_delta: float) -> None:
-        """加反馈（+1 点赞 / -1 点踩）"""
+        """加反馈（+1 点赞 / -1 点踩）
+
+        阶段48-p3: 落库到 rag_feedback 表。此前只写进程内 dict（`self._feedback`），
+        服务一重启反馈就全丢 —— 而 migrations/crag_tables.sql 早就建好了这张表。
+        内存 dict 保留为写库失败时的降级缓存。
+        """
         self._feedback[chunk_id] = self._feedback.get(chunk_id, 0.0) + score_delta
+        try:
+            with self.get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO rag_feedback (user_id, chunk_id, query, score_delta, created_at)
+                        VALUES (%s, %s, %s, %s, now())
+                        ON CONFLICT (user_id, chunk_id, query)
+                        DO UPDATE SET score_delta = rag_feedback.score_delta + EXCLUDED.score_delta
+                        """,
+                        (user_id, chunk_id, query, score_delta),
+                    )
+                conn.commit()
+        except Exception as e:
+            logger.warning("[rag] 反馈落库失败(已降级为内存缓存): %s", e)
         logger.info(f"[rag] feedback user={user_id} chunk={chunk_id[:8]} delta={score_delta} total={self._feedback[chunk_id]}")
+
+    def _load_feedback_map(self, user_id: str, chunk_ids: List[str]) -> Dict[str, float]:
+        """从 rag_feedback 表批量读回 chunk 的累计反馈分（失败则退回内存 dict）"""
+        if not chunk_ids:
+            return {}
+        try:
+            with self.get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT chunk_id, SUM(score_delta)
+                        FROM rag_feedback
+                        WHERE user_id = %s AND chunk_id = ANY(%s::text[])
+                        GROUP BY chunk_id
+                        """,
+                        (user_id, chunk_ids),
+                    )
+                    return {str(r[0]): float(r[1] or 0.0) for r in cur.fetchall()}
+        except Exception as e:
+            logger.warning("[rag] 反馈读取失败(已降级为内存缓存): %s", e)
+            return {cid: self._feedback.get(cid, 0.0) for cid in chunk_ids}
 
     # ---------- 召回 ----------
     async def recall_for_user(
@@ -398,21 +489,38 @@ class RAGStore:
 
     # ---------- 统计 ----------
     def stats(self) -> dict:
+        # 只统计本模型的行 —— rag_chunks 是两套栈共写的, 不加过滤会把
+        # HealthAdvisor 那套 all-MiniLM-L6-v2 的数据也算进来, 数字对不上
         with self.get_connection() as conn:
             with conn.cursor() as cur:
-                cur.execute("SELECT COUNT(*) FROM rag_documents")
+                cur.execute(
+                    "SELECT COUNT(*) FROM rag_documents WHERE embedding_model = %s",
+                    (EMBEDDING_MODEL,),
+                )
                 doc_count = cur.fetchone()[0]
-                cur.execute("SELECT COUNT(*) FROM rag_chunks")
+                cur.execute(
+                    "SELECT COUNT(*) FROM rag_chunks WHERE embedding_model = %s",
+                    (EMBEDDING_MODEL,),
+                )
                 chunk_count = cur.fetchone()[0]
-                cur.execute("SELECT COUNT(DISTINCT user_id) FROM rag_chunks")
+                cur.execute(
+                    "SELECT COUNT(DISTINCT user_id) FROM rag_chunks WHERE embedding_model = %s",
+                    (EMBEDDING_MODEL,),
+                )
                 user_count = cur.fetchone()[0]
+                # 阶段48-p3: 反馈已落库, 用表里的真实条数（内存 dict 只是缓存）
+                try:
+                    cur.execute("SELECT COUNT(*) FROM rag_feedback")
+                    feedback_count = cur.fetchone()[0]
+                except Exception:
+                    feedback_count = len(self._feedback)
         return {
             "doc_count": doc_count,
             "chunk_count": chunk_count,
             "user_count": user_count,
             "embedding_model": EMBEDDING_MODEL,
             "embedding_dim": EMBEDDING_DIM,
-            "feedback_count": len(self._feedback),
+            "feedback_count": feedback_count,
             "config": {
                 "chunk_size": DEFAULT_CHUNK_SIZE,
                 "chunk_overlap": DEFAULT_CHUNK_OVERLAP,

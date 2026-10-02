@@ -1,0 +1,110 @@
+[
+  {
+    "query": "我平时吃的降压药是哪两种，各自什么时候吃？",
+    "relevant_ids": ["eval-rx-001"],
+    "user_id": "rag_eval_user",
+    "category": "local_hit"
+  },
+  {
+    "query": "控制血糖的药怎么吃才有效，有什么副作用？",
+    "relevant_ids": ["eval-rx-002"],
+    "user_id": "rag_eval_user",
+    "category": "local_hit"
+  },
+  {
+    "query": "我最近三个月在家里量的血压大概是什么水平？",
+    "relevant_ids": ["eval-bp-001"],
+    "user_id": "rag_eval_user",
+    "category": "local_hit"
+  },
+  {
+    "query": "化验单上我的血脂哪几项超标了，离目标还差多少？",
+    "relevant_ids": ["eval-lab-001"],
+    "user_id": "rag_eval_user",
+    "category": "local_hit"
+  },
+  {
+    "query": "预防冠心病的那两种药服用时要注意什么？",
+    "relevant_ids": ["eval-rx-003"],
+    "user_id": "rag_eval_user",
+    "category": "local_hit"
+  },
+  {
+    "query": "我现在的肾功能和血钾血钠还正常吗？",
+    "relevant_ids": ["eval-lab-002"],
+    "user_id": "rag_eval_user",
+    "category": "local_hit"
+  },
+  {
+    "query": "体检报告里除了超重还查出哪些问题？",
+    "relevant_ids": ["eval-mr-001"],
+    "user_id": "rag_eval_user",
+    "category": "local_hit"
+  },
+  {
+    "query": "我连续血糖监测的结果怎么样，血糖在目标范围内的时间是多少？",
+    "relevant_ids": ["eval-bs-002"],
+    "user_id": "rag_eval_user",
+    "category": "local_hit"
+  },
+  {
+    "query": "内分泌科复诊说我的糖尿病出现了哪些并发症？",
+    "relevant_ids": ["eval-vs-002"],
+    "user_id": "rag_eval_user",
+    "category": "local_hit"
+  },
+  {
+    "query": "我自己记录的那些不舒服，哪些需要尽快去医院？",
+    "relevant_ids": ["eval-sym-001"],
+    "user_id": "rag_eval_user",
+    "category": "local_hit"
+  },
+  {
+    "query": "我现在的血压控制水平和我正在吃的降压方案配合得怎么样？",
+    "relevant_ids": ["eval-bp-001", "eval-rx-001"],
+    "user_id": "rag_eval_user",
+    "category": "multi_hop"
+  },
+  {
+    "query": "我的血糖记录和目前的降糖用药方案需要调整吗？",
+    "relevant_ids": ["eval-bs-001", "eval-rx-002"],
+    "user_id": "rag_eval_user",
+    "category": "multi_hop"
+  },
+  {
+    "query": "我的血脂没达标，现在吃的他汀剂量够不够？",
+    "relevant_ids": ["eval-lab-001", "eval-rx-003"],
+    "user_id": "rag_eval_user",
+    "category": "multi_hop"
+  },
+  {
+    "query": "心内科复诊之后给我新加了哪些药，为什么要加？",
+    "relevant_ids": ["eval-vs-001", "eval-rx-003"],
+    "user_id": "rag_eval_user",
+    "category": "multi_hop"
+  },
+  {
+    "query": "我的糖尿病有没有已经影响到肾脏？",
+    "relevant_ids": ["eval-vs-002", "eval-lab-002"],
+    "user_id": "rag_eval_user",
+    "category": "multi_hop"
+  },
+  {
+    "query": "我孩子对青霉素过敏，能打哪些疫苗？",
+    "relevant_ids": [],
+    "user_id": "rag_eval_user",
+    "category": "no_answer"
+  },
+  {
+    "query": "我最近在备孕，叶酸每天应该补多少？",
+    "relevant_ids": [],
+    "user_id": "rag_eval_user",
+    "category": "no_answer"
+  },
+  {
+    "query": "我上一次做胃镜是什么时候做的？",
+    "relevant_ids": [],
+    "user_id": "rag_eval_user",
+    "category": "no_answer"
+  }
+]

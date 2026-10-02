@@ -39,32 +39,9 @@ FROM nginx:alpine
 # 复制构建产物
 COPY --from=builder /app/dist /usr/share/nginx/html
 
-# nginx 配置 - 替换默认配置
-RUN echo 'server { \
-    listen 80; \
-    server_name _; \
-    root /usr/share/nginx/html; \
-    index index.html; \
-    location / { \
-        try_files $uri $uri/ /index.html; \
-    } \
-    location /api/ { \
-        proxy_pass http://hostapi:13002/api/; \
-        proxy_set_header Host $host; \
-    } \
-    location /v2/ { \
-        proxy_pass http://hostapi:13002/v2/; \
-        proxy_set_header Host $host; \
-    } \
-    location /auth/ { \
-        proxy_pass http://hostapi:13002/auth/; \
-        proxy_set_header Host $host; \
-    } \
-    location ~ ^/(health|copilotkit|smart_chat) { \
-        proxy_pass http://hostapi:13002/$1; \
-        proxy_set_header Host $host; \
-    } \
-}' > /etc/nginx/conf.d/default.conf
+# nginx 配置 - 版本控制文件（此前硬编码在此处，改一次要重建镜像）
+# 见 nginx.conf 顶部注释：动态 DNS 解析 + SSE 透传
+COPY nginx.conf /etc/nginx/conf.d/default.conf
 
 EXPOSE 80
 

@@ -184,7 +184,9 @@ def get_medication_overview(agent_address: str, user_id: Optional[str] = "") -> 
             meds = data.get("current", [])
             if meds:
                 page_update = {
-                    "component": "TodayDashboard",
+                    # 阶段48-28: 页面无关名。TodayDashboard 与 Dashboard 都注册了
+                    # 它，于是用户停在哪个页面卡片都能落地，不再只认 /v2/today。
+                    "component": "AiInfoCard",
                     "action": "setData",
                     "params": {"type": "medications", "medications": meds, "title": "当前用药"},
                     "summary": f"当前有 {len(meds)} 种用药",
@@ -211,7 +213,7 @@ def get_visit_summary_overview(agent_address: str, user_id: Optional[str] = "", 
         if isinstance(data, dict) and data.get("recent"):
             summaries = data.get("recent", [])
             page_update = {
-                "component": "TodayDashboard",
+                "component": "AiInfoCard",
                 "action": "setData",
                 "params": {"type": "visit_summaries", "summaries": summaries, "title": f"最近{days}天就诊记录"},
                 "summary": f"最近 {len(summaries)} 条就诊记录",
@@ -256,7 +258,7 @@ def get_health_records_history(agent_address: str, user_id: str, days: int = 180
         if isinstance(data, dict) and data.get("recent"):
             records = data.get("recent", [])
             page_update = {
-                "component": "TodayDashboard",
+                "component": "AiInfoCard",
                 "action": "setData",
                 "params": {"type": "health_records", "records": records, "title": f"最近{days}天健康档案"},
                 "summary": f"已加载 {len(records)} 条健康档案记录",

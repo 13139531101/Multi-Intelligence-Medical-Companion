@@ -63,3 +63,13 @@ multiagent_front/
 !frontend/multiagent_front/src/
 !frontend/multiagent_front/src/**/
 scripts/login_state.json
+
+# 阶段48: MCP 启动器由 mcp_tool_adapter 在运行时按当前工具文件重新生成
+# （见 _ensure_stdio_starter / _ensure_http_starter），属于构建产物而非源码。
+# 提交进去反而会与工具文件不同步 —— 新增工具后 starter 不会自动更新。
+backend/*/mcpserver/_http_starter.py
+backend/*/mcpserver/_stdio_starter.py
+
+# 阶段48: AG-UI 冒烟测试的输出报告。由 tests/e2e/agui_smoke.py 生成，
+# 且内容含真实用户数据（用药名等），不入库。
+tests/e2e/agui_smoke_report.txt

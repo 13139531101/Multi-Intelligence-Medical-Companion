@@ -323,6 +323,38 @@ async def v2_process_message(message) -> dict:
     return {"message": msg, "error": None, "used_v2": True, "result": result}
 
 
+def _unwrap_mcp_output(output):
+    """把工具返回值归一成 dict（拿不到就原样返回）。
+
+    为什么需要这一层
+    ----------------
+    同一个工具，走两条调用路径会得到**两种形状**：
+      - in-process（静态 AST 扫描兜底）：直接拿到 Python 返回值 → dict
+      - MCP（streamable_http / stdio）：FastMCP 把返回值序列化成 content
+        block 列表 → [{"type": "text", "text": "<JSON 字符串>"}]
+
+    而下面找 page_update 的逻辑只认 dict，于是 MCP 路径下工具明明返回了
+    success=true + page_update，事件却发不出去 —— 前端表现为"档案找到了，
+    但页面不跳"。
+
+    这个问题是 阶段48-29 修好 MCP 冷启动之后才暴露的：在那之前 HTTP/stdio
+    两条路都失败、每次都退到静态兜底（返回 dict），所以一直看不出来。
+    """
+    if isinstance(output, str):
+        try:
+            output = json.loads(output)
+        except (json.JSONDecodeError, TypeError):
+            return output
+    if isinstance(output, list):
+        for block in output:
+            if isinstance(block, dict) and isinstance(block.get("text"), str):
+                try:
+                    return json.loads(block["text"])
+                except (json.JSONDecodeError, TypeError):
+                    return block["text"]
+    return output
+
+
 async def v2_process_message_stream(message) -> AsyncIterator[dict]:
     """
     阶段48-11: v2 流式处理 — 真流式 yield 事件
@@ -451,6 +483,75 @@ async def v2_process_message_stream(message) -> AsyncIterator[dict]:
         tool_calls_log = []
         tool_results_log = []
 
+        # 阶段48-fix: 把 RAG 检索接进流式路径。
+        #
+        # 背景: 本函数（v2_process_message_stream）**从不调用 host_graph** —— 它自己
+        # 做了 Layer1/Layer2 路由, 然后直接 agent.stream()。而 /api/copilotkit →
+        # /v2/chat/stream 走的正是这条路径。也就是说 host_graph 里的
+        # rag_retrieve（Magnetic RAG: 多跳 + KG 图扩展 + rerank）、crag_correct
+        # （Corrective RAG）、critique（ReAct 反思）在**真正的产品链路上一次都不执行**,
+        # 只有非流式的 v2_process_message 才会跑到。结果是 P3 的全部 RAG 改造
+        # 对流式前端而言是死代码, /metrics 上 rerank / crag 指标恒为空。
+        #
+        # 这里补上「检索 → CRAG 决策 → 注入 context」这一步, 与 host_graph 的
+        # invoke_agent_node 保持同样的注入格式, 让两条路径拿到一致的上下文。
+        # 失败一律降级为"无检索", 绝不能让检索问题打断对话。
+        enriched_query = query
+        try:
+            from .magnetic_rag import format_rag_context, search as _mrag_search
+            from . import host_graph as _hg
+
+            _rr = await _mrag_search(
+                query=query, user_id=user_id, target_agent=target_agent
+            )
+            _rag_result = {
+                "chunks": [
+                    {
+                        "chunk_id": getattr(c, "chunk_id", "") or getattr(c, "id", ""),
+                        "score": getattr(c, "score", 0.0),
+                        "text": getattr(c, "chunk_text", ""),
+                        "source": f"{getattr(c, 'source_type', '')}/{getattr(c, 'source_id', '')}",
+                        "title": getattr(c, "title", ""),
+                    }
+                    for c in _rr.chunks
+                ],
+                "score": _rr.score,
+                "is_relevant": _rr.is_relevant,
+                "reason": _rr.reason,
+                "query": _rr.query,
+                "retrieval_needed": _rr.retrieval_needed,
+                "context_text": format_rag_context(_rr.chunks) if _rr.chunks else "",
+            }
+            _crag = await _hg.crag_correct_node({
+                "query": query,
+                "user_id": user_id,
+                "target_agent": target_agent,
+                "rag_result": _rag_result,
+            })
+            _merged_ctx = (_crag or {}).get("merged_context") or ""
+            if _merged_ctx:
+                enriched_query = (
+                    f"{_merged_ctx}\n\n"
+                    f"【用户问题】{query}\n\n"
+                    f"请基于上述参考信息回答用户问题。"
+                )
+            logger.info(
+                "[v2_stream] RAG 注入: chunks=%d score=%.2f crag=%s source_mix=%s ctx_len=%d",
+                len(_rr.chunks), _rr.score,
+                (_crag or {}).get("crag_action"), (_crag or {}).get("source_mix"),
+                len(_merged_ctx),
+            )
+            yield {
+                "event": "rag_context",
+                "chunks": len(_rr.chunks),
+                "score": _rr.score,
+                "is_relevant": _rr.is_relevant,
+                "crag_action": (_crag or {}).get("crag_action"),
+                "source_mix": (_crag or {}).get("source_mix"),
+            }
+        except Exception as _rag_err:  # noqa: BLE001 — 检索失败不能打断对话
+            logger.warning("[v2_stream] RAG/CRAG 失败(降级为无检索): %s", _rag_err)
+
         # 阶段48-12: 最大 stream 时间和最大 yield 次数限制, 防 LangGraph 死循环
         import time as _t
         _stream_started = _t.time()
@@ -459,7 +560,7 @@ async def v2_process_message_stream(message) -> AsyncIterator[dict]:
 
         yield_count = 0
         async for ev in agent.stream(
-            query,
+            enriched_query,
             conversation_id,
             user_id=user_id,
         ):
@@ -551,31 +652,44 @@ async def v2_process_message_stream(message) -> AsyncIterator[dict]:
         }
 
         # 阶段48-27: 如果工具返回了 page_update 指令，生成 PAGE_UPDATE 事件
+        #
+        # 阶段48-28: 支持一次返回多个动作。像"跳到档案页并打开某条记录"天然是两步，
+        # 而每个 page_update 只能带一个 (component, action) 对，前端也是逐事件消费的。
+        # 两种写法都认：
+        #   {"page_update": {"actions": [ {...}, {...} ]}}   ← 新，按序扇出
+        #   {"page_update": {"component": ..., "action": ...}} ← 旧，包成单元素列表
         for tr in tool_results_log:
-            output = tr.get("output")
-            # 解析 JSON 字符串
-            if isinstance(output, str):
-                try:
-                    output = json.loads(output)
-                except (json.JSONDecodeError, TypeError):
-                    pass
-            if isinstance(output, dict) and output.get("page_update"):
-                pu = output["page_update"]
+            # 归一化：字符串 → json.loads；MCP content block 列表 → 取出 text
+            # 再 loads。少了这一步，走 MCP 通路时 output 是个 list，
+            # 下面 isinstance(dict) 判空 → 工具返回的 page_update 被静默丢弃。
+            output = _unwrap_mcp_output(tr.get("output"))
+
+            pu = None
+            if isinstance(output, dict):
+                if isinstance(output.get("page_update"), dict):
+                    pu = output["page_update"]
+                elif output.get("component") and output.get("action"):
+                    # 直接返回 page_update 字段的结构
+                    pu = output
+
+            if not isinstance(pu, dict):
+                continue
+
+            actions = pu.get("actions")
+            if not isinstance(actions, list):
+                # 旧格式：单个动作
+                actions = [pu]
+
+            for act in actions:
+                if not isinstance(act, dict):
+                    continue
+                # actions[] 里的每一项也可能带自己的 summary；缺了就用外层或顶层的
                 yield {
                     "event": "page_update",
-                    "component": pu.get("component", "page"),
-                    "action": pu.get("action", "setData"),
-                    "params": pu.get("params", {}),
-                    "summary": pu.get("summary", ""),
-                }
-            # 也支持直接返回 page_update 字段的结构
-            elif isinstance(output, dict) and output.get("component") and output.get("action"):
-                yield {
-                    "event": "page_update",
-                    "component": output.get("component"),
-                    "action": output.get("action"),
-                    "params": output.get("params", {}),
-                    "summary": output.get("summary", ""),
+                    "component": act.get("component", "page"),
+                    "action": act.get("action", "setData"),
+                    "params": act.get("params", {}),
+                    "summary": act.get("summary") or pu.get("summary", ""),
                 }
     except Exception as e:
         logger.exception("[v2_bridge] stream error")

@@ -225,6 +225,34 @@ function Bubble({ msg }) {
             />
           )}
         </Box>
+        {/* RAG 检索画像: 让"这条回答有没有依据"可见 */}
+        {msg.ragContext && msg.ragContext.chunks > 0 && (
+          <Box
+            sx={{
+              mt: 0.8,
+              px: 1,
+              py: 0.4,
+              borderRadius: 1,
+              display: "inline-flex",
+              gap: 1,
+              alignItems: "center",
+              // 主题里 success/warning 只定义了 main, 没有 .50/.200 色阶,
+              // 直接写 success.50 会解析成 undefined。这里用明确的十六进制。
+              bgcolor: msg.ragContext.isRelevant ? "#E8F5E9" : "#FFF4E5",
+              border: 1,
+              borderColor: msg.ragContext.isRelevant ? "#A5D6A7" : "#FFCC80",
+            }}
+          >
+            <Typography variant="caption" sx={{ color: "text.secondary" }}>
+              📚 检索 {msg.ragContext.chunks} 篇 · 相关度{" "}
+              {(msg.ragContext.score ?? 0).toFixed(2)}
+              {msg.ragContext.cragAction
+                ? ` · CRAG ${msg.ragContext.cragAction}`
+                : ""}
+              {msg.ragContext.sourceMix ? ` · ${msg.ragContext.sourceMix}` : ""}
+            </Typography>
+          </Box>
+        )}
         {/* 工具调用展示 */}
         {msg.toolCalls && msg.toolCalls.length > 0 && (
           <Stack spacing={0.5} sx={{ mt: 0.8 }}>

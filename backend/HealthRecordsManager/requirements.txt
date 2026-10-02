@@ -1,4 +1,7 @@
 fastmcp>=0.1.0
+# 阶段48-fix: mcp 2.x 移除了 mcp.server.fastmcp, 而 mcpserver/*_tool.py 全依赖它。
+# 不钉住的话 hostapi 容器会装到 2.x, 所有 MCP tool 静默加载失败。
+mcp<2.0
 rpds-py>=0.7.1
 cryptography>=41.0.0
 Pillow>=10.0.0

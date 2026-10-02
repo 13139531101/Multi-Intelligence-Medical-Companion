@@ -5,6 +5,10 @@ import subprocess
 import httpx
 import json
 
+from _env_loader import load_env, optional, require
+
+load_env()
+
 print('=' * 70)
 print('PHA v2 E2E 测试 - hostapi HTTP 端到端 + 真实提问')
 print('=' * 70)
@@ -50,11 +54,12 @@ cmd = [
     '-v', 'I:/A2A/3/A2AServer/frontend/hostAgentAPI/init_database.py:/app/init_database.py',
     '-e', 'PYTHONPATH=/app:/app/backend',
     '-e', 'DB_HOST=postgres', '-e', 'DB_PORT=5432',
-    '-e', 'DB_USER=pha', '-e', 'DB_PASSWORD=zTlQevKV5vzq31QzRqwfcauKX3uQZ64c',
-    '-e', 'DEEPSEEK_API_KEY=sk-5de395dfb19d41a890816f61ae379cdb',
-    '-e', 'DASHSCOPE_API_KEY=sk-2917df2994074695b7b741ffb6382a3b',
-    '-e', 'QWEN_API_KEY=sk-2917df2994074695b7b741ffb6382a3b',
-    '-e', 'JWT_SECRET_KEY=ygRtTIVjkW9vkqswaiLCIRIi231Ovyl4d9TBmx3NMB8AJwE02XxwPARBX_r67A-i',
+    '-e', 'DB_USER=pha', '-e', f'DB_PASSWORD={require("DB_PASSWORD")}',
+    '-e', f'DEEPSEEK_API_KEY={require("DEEPSEEK_API_KEY")}',
+    '-e', f'DASHSCOPE_API_KEY={require("DASHSCOPE_API_KEY")}',
+    # QWEN_API_KEY 在 .env 里没有单独配置，历史上就是复用 DashScope 的 key
+    '-e', f'QWEN_API_KEY={optional("QWEN_API_KEY") or require("DASHSCOPE_API_KEY")}',
+    '-e', f'JWT_SECRET_KEY={require("JWT_SECRET_KEY")}',
     '-e', 'PHA_OAUTH_TEST_MODE=true',
     '-e', 'PHA_USE_V2=true',  # 默认开
     'crpi-zr8m4m7ism94623a.cn-hangzhou.personal.cr.aliyuncs.com/duozhiyiban/a2aserver-hostapi:v1.0.0',

@@ -41,7 +41,7 @@ import {
 } from "@mui/icons-material";
 import HealthUploader from "./HealthUploader";
 
-const API_BASE = import.meta?.env?.VITE_API_BASE || "http://localhost:13002";
+const API_BASE = import.meta?.env?.VITE_API_BASE || "";
 
 const RECORD_TYPES = [
   { value: "lab_report", label: "化验报告" },

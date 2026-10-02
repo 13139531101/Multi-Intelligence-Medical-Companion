@@ -35,6 +35,8 @@ import {
   getMedicationsHistory,
 } from "../api/healthApi";
 import { usePageUpdater } from "../components/usePageUpdater";
+import { PAGE_COMPONENTS, PAGE_ACTIONS } from "../ai/pageContract";
+import AiInfoCardView from "../components/AiInfoCardView";
 
 // 把今天分成早/中/晚三段
 const PERIODS = [
@@ -64,17 +66,13 @@ export default function TodayDashboard() {
 
   // ===== AI 页面控制: 注册组件到 ComponentRegistry =====
   const [aiData, setAiData] = useState(null); // AI 设置的数据
-  usePageUpdater('TodayDashboard', {
-    // AI 可以调用这些方法来操作页面
-    setData: (params) => {
+  // 注册的是页面无关名 AiInfoCard —— Dashboard 也注册同一个名字，
+  // 于是后端工具不必知道用户停在哪个页面就能把卡片投出来。
+  // navigateTo / showAlert 已由全局 PageRouter 接管，这里不再重复注册。
+  usePageUpdater(PAGE_COMPONENTS.AI_INFO_CARD, {
+    [PAGE_ACTIONS.SET_DATA]: (params) => {
       console.log('[TodayDashboard] AI setData:', params);
       setAiData(params);
-    },
-    navigateTo: (params) => {
-      if (params?.path) navigate(params.path);
-    },
-    showAlert: (params) => {
-      alert(params?.message || '来自 AI 的提示');
     },
   });
 
@@ -309,87 +307,13 @@ export default function TodayDashboard() {
           </Paper>
         )}
 
-        {/* ===== AI 页面控制: 显示 AI 返回的数据 ===== */}
+        {/* ===== AI 页面控制: 显示 AI 返回的数据 =====
+            渲染逻辑已抽到 components/AiInfoCardView —— Dashboard 用的是同一份，
+            两边不会再各自漂移。 */}
         {aiData && (
-          <Paper
-            sx={{
-              mt: 2,
-              p: 2.5,
-              borderRadius: 3,
-              border: "2px solid",
-              borderColor: "info.main",
-              bgcolor: "rgba(0, 145, 234, 0.08)",
-            }}
-          >
-            <Stack direction="row" alignItems="center" spacing={1.5} sx={{ mb: 1 }}>
-              <Box
-                sx={{
-                  width: 40,
-                  height: 40,
-                  borderRadius: "50%",
-                  bgcolor: "info.main",
-                  color: "white",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                }}
-              >
-                <SmartToy />
-              </Box>
-              <Box>
-                <Typography variant="h6" sx={{ fontWeight: 600 }}>
-                  AI 分析结果
-                </Typography>
-                {aiData.title && (
-                  <Typography variant="body2" color="text.secondary">
-                    {aiData.title}
-                  </Typography>
-                )}
-              </Box>
-            </Stack>
-            {/* 根据数据类型渲染 */}
-            {aiData.type === 'health_records' && aiData.records && (
-              <Box sx={{ mt: 1 }}>
-                <Typography variant="body2" sx={{ mb: 1 }}>
-                  共 {aiData.records.length} 条记录
-                </Typography>
-                {aiData.records.slice(0, 3).map((r, i) => (
-                  <Chip
-                    key={i}
-                    label={r.name || r.date || `记录 ${i + 1}`}
-                    size="small"
-                    sx={{ mr: 0.5, mb: 0.5 }}
-                  />
-                ))}
-                {aiData.records.length > 3 && (
-                  <Typography variant="caption" color="text.secondary">
-                    ... 还有 {aiData.records.length - 3} 条
-                  </Typography>
-                )}
-              </Box>
-            )}
-            {aiData.type === 'medications' && aiData.medications && (
-              <Box sx={{ mt: 1 }}>
-                <Typography variant="body2" sx={{ mb: 1 }}>
-                  当前用药 {aiData.medications.length} 种
-                </Typography>
-                {aiData.medications.map((m, i) => (
-                  <Chip
-                    key={i}
-                    label={`${m.name} ${m.dose || ''}`}
-                    size="small"
-                    color="primary"
-                    sx={{ mr: 0.5, mb: 0.5 }}
-                  />
-                ))}
-              </Box>
-            )}
-            {aiData.summary && (
-              <Typography variant="body2" sx={{ mt: 1 }}>
-                {aiData.summary}
-              </Typography>
-            )}
-          </Paper>
+          <Box sx={{ mt: 2 }}>
+            <AiInfoCardView data={aiData} />
+          </Box>
         )}
 
         {/* AI 助手 Hero — 跟吃药同等待遇, 都是核心 */}

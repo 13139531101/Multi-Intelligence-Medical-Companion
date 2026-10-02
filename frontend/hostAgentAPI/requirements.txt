@@ -31,6 +31,13 @@ langchain-openai>=1.0.0
 langgraph>=0.6.0
 # LangChain MCP 适配器 (stdio / streamable_http transport 必需)
 langchain-mcp-adapters>=0.1.0
+# 阶段48-fix: 必须钉住 mcp<2.0。
+# 所有 backend/<Agent>/mcpserver/*_tool.py 都写的是 `from mcp.server.fastmcp import FastMCP`,
+# 而 mcp 2.x 把 FastMCP 改名成了 MCPServer → 每个 tool 模块 import 即 ModuleNotFoundError
+# → load_mcp_tool_function 全部返回 None → agent 手里只剩内置 write_todos
+# → 任何工具调用都报 "not a valid tool", 生成式 UI 的 page_update 永远发不出来。
+# 这里不钉的话, langchain-mcp-adapters 会传递依赖拉到 2.x。
+mcp<2.0  # 阶段48-fix: 固定 mcp<2.0 否则 FastMCP API 不兼容
 # LangGraph Postgres checkpointer（阶段30：长时间任务持久化）
 langgraph-checkpoint-postgres>=2.0.0
 psycopg[binary,pool]>=3.2
