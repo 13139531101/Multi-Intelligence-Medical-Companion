@@ -31,20 +31,60 @@ _MCP_TRANSPORT = _os.environ.get("PHA_MCP_TRANSPORT", "streamable_http")
 from .agent_registry import register_agent
 
 
-def _load_prompt(filename: str, default: str = "") -> str:
-    """加载 prompt 文件（兼容项目原有结构）"""
-    candidates = [
-        Path(f"backend/HealthAdvisor/{filename}"),
-        Path(f"backend/HealthRecordsManager/{filename}"),
-        Path(f"backend/MedicationReminder/{filename}"),
-        Path(f"backend/VisitSummaryGenerator/{filename}"),
-    ]
-    for p in candidates:
-        if p.exists():
-            try:
-                return p.read_text(encoding="utf-8")
-            except Exception:
-                pass
+_PROMPT_FILENAME = "memory_enhanced_agent_prompt.md"
+
+
+def _prompt_roots():
+    """仓库根的候选位置。容器与本地开发目录深度不同，逐个试：
+
+      容器: /app/A2AServer/v2/sub_agents.py          → parents[2] == /app
+      仓库: .../backend/A2AServer/src/A2AServer/v2/  → parents[5] == 仓库根
+
+    Path.cwd() 排最前，因为容器的 WORKDIR 就是 /app。
+
+    注意 parents[i] 越界会抛 IndexError，所以这里必须**按需**取、且判长度 ——
+    写成模块级常量列表会在容器里直接 import 失败（容器只有 3 层 parent），
+    整个 hostapi 起不来。
+    """
+    here = Path(__file__).resolve()
+    roots = [Path.cwd()]
+    for i in (2, 5):
+        if len(here.parents) > i:
+            roots.append(here.parents[i])
+    return roots
+
+
+def _load_prompt(agent_dir: str, default: str = "", filename: str = _PROMPT_FILENAME) -> str:
+    """加载**指定 agent** 的 prompt 文件。
+
+    :param agent_dir: agent 目录名，如 "HealthAdvisor"。这个参数必须显式传 ——
+        四个 agent 的 prompt 内容完全不同（顾问/档案/用药/摘要，10.8K/11.9K/7.5K/8.5K），
+        不能让它们互相串用。
+
+    为什么改掉旧的"按固定顺序探测、返回第一个存在的文件"
+    ----------------------------------------------------
+    旧实现把四个目录写死成一个候选列表，谁先存在就用谁。而 hostapi 的
+    Dockerfile 只整体 COPY 了 HealthRecordsManager（另外三个 agent 只 COPY 了
+    mcpserver/），于是容器里四个 agent **全部**加载了 HealthRecordsManager 的
+    prompt —— 改 HealthAdvisor 的 prompt 完全没效果，且不报任何错。
+    现在按目录显式定位；四份文件都随镜像发出去（见 hostapi/Dockerfile）。
+
+    找不到时退回 default 并告警：静默退化正是上面那个 bug 藏了这么久的原因。
+    """
+    roots = _prompt_roots()
+    for root in roots:
+        p = root / "backend" / agent_dir / filename
+        try:
+            if p.is_file():
+                text = p.read_text(encoding="utf-8")
+                logger.info("[_load_prompt] %s ← %s (%d 字符)", agent_dir, p, len(text))
+                return text
+        except Exception as e:  # 权限/编码问题不该让 agent 起不来
+            logger.warning("[_load_prompt] 读取 %s 失败: %s", p, e)
+    logger.warning(
+        "[_load_prompt] 未找到 %s/%s（试过 %d 个根目录），退回内置 default",
+        agent_dir, filename, len(roots),
+    )
     return default
 
 
@@ -70,7 +110,7 @@ class HealthAdvisorV2(V2Agent):
 
     name = "health_advisor"
     system_prompt = _load_prompt(
-        "memory_enhanced_agent_prompt.md",
+        "HealthAdvisor",
         default="你是 PHA 健康顾问，基于循证医学为用户提供健康教育与建议（不能替代医生诊断）。",
     )
 
@@ -112,7 +152,7 @@ class HealthRecordsV2(V2Agent):
 
     name = "health_records"
     system_prompt = _load_prompt(
-        "memory_enhanced_agent_prompt.md",
+        "HealthRecordsManager",
         default="你是 PHA 健康档案管理员，负责检查报告、处方单的结构化存储与检索。",
     )
 
@@ -147,7 +187,7 @@ class MedicationReminderV2(V2Agent):
 
     name = "medication_reminder"
     system_prompt = _load_prompt(
-        "memory_enhanced_agent_prompt.md",
+        "MedicationReminder",
         default="你是 PHA 用药提醒助手，负责用药计划、药品相互作用提醒、依从性管理。",
     )
 
@@ -182,7 +222,7 @@ class VisitSummaryV2(V2Agent):
 
     name = "visit_summary"
     system_prompt = _load_prompt(
-        "memory_enhanced_agent_prompt.md",
+        "VisitSummaryGenerator",
         default="你是 PHA 就诊摘要生成助手，根据健康档案自动生成结构化就诊摘要。",
     )
 

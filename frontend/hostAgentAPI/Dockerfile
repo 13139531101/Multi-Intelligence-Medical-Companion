@@ -52,6 +52,14 @@ COPY backend/HealthRecordsManager/mcpserver ./backend/HealthRecordsManager/mcpse
 COPY backend/MedicationReminder/mcpserver ./backend/MedicationReminder/mcpserver
 COPY backend/VisitSummaryGenerator/mcpserver ./backend/VisitSummaryGenerator/mcpserver
 
+# === 阶段48：四个 agent 各自的 system prompt ===
+# sub_agents._load_prompt 按 agent 目录定位，四份内容完全不同。之前只整体 COPY
+# 了 HealthRecordsManager（上面第 41 行），另外三个 agent 只有 mcpserver/，
+# 于是四个 agent 全部加载了 HealthRecordsManager 那一份 —— 改别的 prompt 不生效。
+COPY backend/HealthAdvisor/memory_enhanced_agent_prompt.md ./backend/HealthAdvisor/memory_enhanced_agent_prompt.md
+COPY backend/MedicationReminder/memory_enhanced_agent_prompt.md ./backend/MedicationReminder/memory_enhanced_agent_prompt.md
+COPY backend/VisitSummaryGenerator/memory_enhanced_agent_prompt.md ./backend/VisitSummaryGenerator/memory_enhanced_agent_prompt.md
+
 # Ensure Python can resolve local package and backend modules
 ENV PYTHONPATH=/app:/app/backend
 
