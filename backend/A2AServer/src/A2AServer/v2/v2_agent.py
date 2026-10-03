@@ -26,6 +26,28 @@ from .v2_runtime import get_runtime
 logger = logging.getLogger(__name__)
 
 
+def _with_current_date(prompt: str) -> str:
+    """在 system prompt 末尾追加「今天是几号」。
+
+    模型自己**不知道**当前日期 —— 它的时间感停在训练数据那一刻。实测：今天
+    2026-10-03，用户口述「9月15号」，模型抽出的是 2025-09-15，默认到了自己
+    熟悉的年份。这类「错一年、又不容易被发现」的日期错误，光在 prompt 里写
+    「取最近一个已经过去的日期」是治不好的 —— 模型没有「现在」这个锚点，
+    再怎么推理都是错的。给它锚点才是根治。
+
+    每次调用都重新取时间，不要提成模块级常量：agent 实例会跨天复用。
+    """
+    from datetime import datetime
+    today = datetime.now()
+    week = "一二三四五六日"[today.weekday()]
+    return (
+        f"{prompt}\n\n---\n"
+        f"**当前日期：{today:%Y-%m-%d}（星期{week}）**。\n"
+        f"凡是涉及「今天/昨天/上个月/最近」这类相对时间，一律以此为准；"
+        f"用户只说了月日、没说年份时，也按这个日期推断最近一次。\n"
+    )
+
+
 class V2Agent:
     """
     PHA v2 智能体基类
@@ -163,13 +185,16 @@ class V2Agent:
         # 阶段48-14: middlewares 需要 chat_model 实例 (SummarizationMiddleware 用 model 做 summary)
         middlewares = runtime.get_middlewares(self.model, chat_model=chat_model, agent_name=self.name)
 
+        # 所有 agent 统一带上「今天几号」—— 否则模型按训练数据里的年份猜日期
+        system_prompt = _with_current_date(self.system_prompt)
+
         # DeepSeek / 自定义 endpoint：用 ChatOpenAI + base_url
         # DeepSeek 兼容 OpenAI 协议，不需要 langchain-deepseek 单独包
         if chat_model is not None:
             agent = create_agent(
                 model=chat_model,
                 tools=self._tools,
-                system_prompt=self.system_prompt,
+                system_prompt=system_prompt,
                 middleware=middlewares,
                 checkpointer=checkpointer,
             )
@@ -178,7 +203,7 @@ class V2Agent:
             agent = create_agent(
                 model=self.model,
                 tools=self._tools,
-                system_prompt=self.system_prompt,
+                system_prompt=system_prompt,
                 middleware=middlewares,
                 checkpointer=checkpointer,
             )
