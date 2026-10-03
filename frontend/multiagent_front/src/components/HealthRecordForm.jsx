@@ -751,7 +751,11 @@ function buildInitialForm(kind) {
 
 // 编辑模式预填: 把后端 record row 映射回 form state
 function initialToForm(record, kind) {
-  const tags_csv = Array.isArray(record.tags) ? record.tags.join(", ") : "";
+  // 数组来自后端 record row，字符串来自 AI 草稿（draft_health_record 传的就是
+  // "血常规,贫血" 这种逗号分隔串）。只判数组的话 AI 草稿的标签会被吞掉。
+  const tags_csv = Array.isArray(record.tags)
+    ? record.tags.join(", ")
+    : record.tags || "";
   const prescription_str =
     typeof record.prescription === "string"
       ? record.prescription

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
   Box,
@@ -665,6 +665,33 @@ function ParsedView({ detailId, files, metadata }) {
   );
 }
 
+// AI 草稿的字段归一化。
+// 原则与后端 draft_health_record 一致：抽不到就留空，**不猜日期、不编医院名**。
+// 日期留空而不是填今天 —— 用户看到一个空日期会去核对，看到"今天"很可能直接提交，
+// 把一份去年的报告记成今天的。
+const DRAFT_RECORD_TYPES = [
+  "lab_report", "imaging", "prescription", "visit", "vaccination", "other",
+];
+function normalizeDraft(f) {
+  return {
+    title: f.title || "",
+    record_type: DRAFT_RECORD_TYPES.includes(f.record_type)
+      ? f.record_type
+      : "lab_report",
+    record_date: /^\d{4}-\d{2}-\d{2}$/.test(f.record_date || "")
+      ? f.record_date
+      : "",
+    hospital: f.hospital || "",
+    doctor: f.doctor || "",
+    summary: f.summary || "",
+    tags: f.tags || "",
+    importance: ["low", "medium", "high"].includes(f.importance)
+      ? f.importance
+      : "medium",
+    content: f.content || "",
+  };
+}
+
 export default function NewHealthRecords() {
   const [tab, setTab] = useState("all");
   const [search, setSearch] = useState("");
@@ -684,6 +711,18 @@ export default function NewHealthRecords() {
   // 所以 openRecord 只是把 id 记下来，等数据到位后再真正打开（见下面的 effect）。
   const [pendingRecordId, setPendingRecordId] = useState(null);
   const [toast, setToast] = useState("");
+  // AI 填表的草稿字段。null = 没有草稿（用户自己点「新增」）。
+  // 注意这里存的**只是表单值**，没有落库 —— 用户点「创建」才真正入库。
+  const [aiDraft, setAiDraft] = useState(null);
+  // 草稿序号。HealthRecordForm 的 initialRecord 只在 useState 初始化时读一次，
+  // 不换 key 的话第二份草稿不会生效（弹窗已经开着，不会重挂载）。
+  const [draftSeq, setDraftSeq] = useState(0);
+
+  // 关弹窗时把草稿一并清掉，否则下次用户自己点「新增」会被上一次的 AI 草稿污染
+  const closeEditor = useCallback(() => {
+    setEditing(null);
+    setAiDraft(null);
+  }, []);
 
   usePageUpdater(PAGE_COMPONENTS.HEALTH_RECORDS, {
     [PAGE_ACTIONS.OPEN_RECORD]: (params) => {
@@ -700,6 +739,15 @@ export default function NewHealthRecords() {
     },
     [PAGE_ACTIONS.SET_SEARCH]: (params) => {
       setSearch(params?.q || "");
+    },
+    // AI 口述建档：把抽取好的字段填进「新增档案」表单，交给用户核对。
+    // 这里**只填不提交** —— 入库仍要用户自己点「创建」。这是整条链路安全的
+    // 地方：AI 无法凭空往档案库里塞东西，最坏情况只是填错几个字段，用户改掉即可。
+    [PAGE_ACTIONS.FILL_FORM]: (params) => {
+      const f = normalizeDraft(params?.fields || params || {});
+      setAiDraft(f);
+      setDraftSeq((n) => n + 1);
+      setEditing({}); // 无 id → 走 create 模式
     },
   });
 
@@ -1581,29 +1629,40 @@ export default function NewHealthRecords() {
       {/* 阶段48-22 v3+: 用 HealthRecordForm 替代老的 document.getElementById 表单 + 上传 Dialog */}
       <Dialog
         open={!!editing}
-        onClose={() => setEditing(null)}
+        onClose={closeEditor}
         maxWidth="md"
         fullWidth
       >
         <DialogTitle>{editing?.id ? "编辑档案" : "新增档案"}</DialogTitle>
         <DialogContent dividers>
+          {/* AI 草稿的提示条。刻意不用 autoHide —— 用户必须意识到"这是 AI 填的、
+              还没入库"，点「创建」才是确认。 */}
+          {!editing?.id && aiDraft && (
+            <Alert severity="info" sx={{ mb: 2 }}>
+              AI 已根据你的描述填好下面的字段，请核对后点「创建」入库。
+              没有把握的字段 AI 会留空，需要你补充。
+            </Alert>
+          )}
           {/* 注: 阶段48-22 v3+: 新建 / 编辑 都用 HealthRecordForm (含附件编辑能力) */}
           <HealthRecordForm
+            // 换草稿要换 key：initialRecord 只在挂载时读一次，
+            // 否则第二份草稿会在已经开着的弹窗里被忽略。
+            key={editing?.id || `draft-${draftSeq}`}
             mode={editing?.id ? "edit" : "create"}
             kind="health_record"
             userId={currentUserId}
             recordId={editing?.id}
-            initialRecord={editing?.id ? editing : null}
+            initialRecord={editing?.id ? editing : aiDraft}
             onCreated={() => {
-              setEditing(null);
+              closeEditor();
               fetchRecords();
             }}
             onUpdated={() => {
-              setEditing(null);
+              closeEditor();
               fetchRecords();
               setDetail(null);
             }}
-            onCancel={() => setEditing(null)}
+            onCancel={closeEditor}
           />
         </DialogContent>
         {editing?.id && (

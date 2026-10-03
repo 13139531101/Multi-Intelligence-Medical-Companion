@@ -101,6 +101,39 @@ _FILLER_WORDS = [
     "我做过", "做过", "我", "在吗", "在不在", "还在吗", "还有吗", "还",
 ]
 
+# draft_health_record 的枚举白名单 —— 与前端 HealthRecordForm 的 RECORD_TYPES
+# 和 IMPORTANCE 保持一致。前端拿不到的值会退化成下拉框的默认项，等于白填。
+_VALID_RECORD_TYPES = {
+    "lab_report", "imaging", "prescription", "visit", "vaccination", "other",
+}
+_VALID_IMPORTANCE = {"low", "medium", "high"}
+
+# _TYPE_ALIASES 映射到的是 lab_result / medical_record 这套值（给 SQL 的
+# record_type 列用），而前端表单用的是 lab_report / imaging / visit 那套。
+# **两套词表不一样**，不显式转换的话"化验报告"会一路掉到 other —— 用户看到的
+# 就是下拉框停在"其他"，等于白抽。
+_ALIAS_TO_FORM_TYPE = {
+    "lab_result": "lab_report",
+    "medical_record": "imaging",
+    "prescription": "prescription",
+    "hospital_record": "visit",
+    "vaccination": "vaccination",
+    "surgery": "other",
+}
+
+
+def _to_form_record_type(raw: str) -> str:
+    """任意说法 → 前端表单的 record_type。拿不准一律 other。"""
+    key = (raw or "").strip()
+    if key in _VALID_RECORD_TYPES:
+        return key
+    # 精确没中就走子串："化验报告"含"化验"、"胸部CT影像"含"影像"。
+    # 顺序沿用 _TYPE_ALIASES 的插入序，与 _guess_type 保持一致。
+    for alias, mapped in _TYPE_ALIASES.items():
+        if alias in key:
+            return _ALIAS_TO_FORM_TYPE.get(mapped, "other")
+    return "other"
+
 
 def _get_db():
     global _db_manager
@@ -117,6 +150,32 @@ def _resolve_user_id(user_id: str) -> str:
     if uid:
         return uid
     return (os.environ.get("PHA_USER_ID") or "").strip()
+
+
+def _normalize_date(value: str) -> str:
+    """'2026-09-15' / '2026/9/15' / '2026年9月15日' → '2026-09-15'；认不出返回 ''。
+
+    与 _normalize_month 的区别：这个**必须**是完整日期。认不出时返回空串而不是
+    猜一个 —— 填错日期比留空更糟，用户很可能不会注意就提交了。
+    """
+    if not value:
+        return ""
+    raw = (
+        str(value).strip()
+        .replace("/", "-")
+        .replace("年", "-")
+        .replace("月", "-")
+        .replace("日", "")
+    )
+    raw = raw.rstrip("-")
+    parts = [p for p in raw.split("-") if p.strip()]
+    if len(parts) < 3:
+        return ""
+    try:
+        y, m, d = int(parts[0]), int(parts[1]), int(parts[2])
+        return date(y, m, d).isoformat()   # date() 会挡掉 2 月 30 日这类非法日期
+    except (TypeError, ValueError):
+        return ""
 
 
 def _normalize_month(month: str) -> Optional[str]:
@@ -336,6 +395,105 @@ def open_health_record(
     except Exception as e:
         logger.error(f"[open_health_record] 失败: {e}")
         return {"success": False, "message": f"检索档案失败: {e}"}
+
+
+@mcp.tool()
+def draft_health_record(
+    title: str = "",
+    record_type: str = "",
+    record_date: str = "",
+    hospital: str = "",
+    doctor: str = "",
+    summary: str = "",
+    tags: str = "",
+    importance: str = "",
+    content: str = "",
+    user_id: str = "",
+) -> Dict[str, Any]:
+    """把用户口述的一份档案整理成**表单草稿**，填进「新增档案」表单让用户核对。
+
+    ⚠️ 这个工具**不写数据库**，一个字都不写。它只做两件事：
+      1. 把前端跳到健康档案页；
+      2. 把下面这些字段填进"新增档案"弹窗。
+    真正入库要用户自己在表单里点「创建」—— 这是刻意的人机确认环节，
+    不要试图绕过它，也不要对用户说"已经帮您保存好了"。
+
+    什么时候用：用户**口述**一份档案内容，而不是让你去查已有的档案。
+      - "帮我记一下：9月15号在协和做的血常规，血红蛋白偏低"
+      - "新增一条体检报告，去年12月的，市一医院"
+      - "我口述一张处方：二甲双胍 0.5g，一天两次"
+
+    什么时候**不要**用：
+      - 用户要"打开/查看/找"已有档案 → 用 open_health_record
+      - 用户上传了图片/PDF 让你识别 → 走 OCR 那条链路
+      - 用户只是问问题 → 直接回答
+
+    字段怎么填：从用户的话里抽取，**抽不到的留空**，不要编造医院名、医生名、
+    日期或检查数值。留空用户自己补比填错再改代价小得多。
+    用户没有明确说日期时不要自己猜一个日期。
+
+    :param title: 档案标题，如"2026-09 协和血常规"。用户没给就按"日期+类型"拼一个。
+    :param record_type: 只能是 lab_report / imaging / prescription / visit /
+        vaccination / other 之一；拿不准就 other。
+    :param record_date: YYYY-MM-DD。用户说了才填。
+    :param hospital: 医院名。用户没提就留空。
+    :param doctor: 医生名。用户没提就留空。
+    :param summary: 一句话摘要。
+    :param tags: 逗号分隔的标签，如"血常规,贫血"。
+    :param importance: low / medium / high，默认 medium。
+    :param content: 档案正文（用户口述的详细内容放这里）。
+    :param user_id: 由系统注入，不要自己编。
+    """
+    # 这个工具不碰数据库，但 user_id 仍然要校验 —— 没有用户就没有"填给谁"这回事，
+    # 而且前端表单本身也是按用户隔离的，放行只会让人以为草稿存下来了。
+    uid = _resolve_user_id(user_id)
+    if not uid:
+        return {"success": False, "message": "无法确定当前用户，未生成草稿。"}
+
+    rt = _to_form_record_type(record_type)
+
+    imp = (importance or "").strip().lower()
+    if imp not in _VALID_IMPORTANCE:
+        imp = "medium"
+
+    fields = {
+        "title": (title or "").strip(),
+        "record_type": rt,
+        "record_date": _normalize_date(record_date),
+        "hospital": (hospital or "").strip(),
+        "doctor": (doctor or "").strip(),
+        "summary": (summary or "").strip(),
+        "tags": (tags or "").strip(),
+        "importance": imp,
+        "content": (content or "").strip(),
+    }
+
+    # 一个字段都没抽到，说明这次调用没有意义 —— 让 LLM 用文字问清楚，别弹一个空表单
+    if not any(v for k, v in fields.items() if k not in ("record_type", "importance")):
+        return {
+            "success": False,
+            "message": "没有从用户的话里抽到可填的字段，请先问清楚要记录什么。",
+        }
+
+    return {
+        "success": True,
+        "draft": fields,
+        "page_update": {
+            "actions": [
+                {
+                    "component": "PageRouter",
+                    "action": "navigateTo",
+                    "params": {"path": "/v2/health-records"},
+                },
+                {
+                    "component": "HealthRecordsPage",
+                    "action": "fillForm",
+                    "params": {"fields": fields},
+                },
+            ],
+            "summary": f"已生成草稿：{fields['title'] or '新档案'}（待你确认）",
+        },
+    }
 
 
 if __name__ == "__main__":

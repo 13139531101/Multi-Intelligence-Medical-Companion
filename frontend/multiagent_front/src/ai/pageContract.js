@@ -18,7 +18,9 @@
  *   - MedicationReminder/mcpserver/reminder_tool.py     (AiInfoCard)
  *   - HealthRecordsManager/mcpserver/page_control_tool.py
  *       (PageRouter / HealthRecordsPage)
- * 用 `grep -rn '"component":' backend/*/mcpserver/` 可以一次列全。
+ * 用 `grep -rn '"component":' backend --include='*_tool.py'` 可以一次列全。
+ * （注意别在注释里写 backend 斜杠星号 斜杠mcpserver —— 那个 "星号斜杠" 会提前
+ *   结束本注释块，把后面的中文当成代码解析，报一个莫名其妙的 EOF 语法错。）
  *
  * 改动约定
  * --------
@@ -56,6 +58,10 @@ export const PAGE_ACTIONS = {
   SET_FILTER: 'setFilter',
   /** 设置档案页的搜索词 */
   SET_SEARCH: 'setSearch',
+  /** 把 AI 抽取的字段填进「新增档案」表单。
+   *  注意：只填表，**不提交** —— 用户核对后自己点「创建」才真正入库。
+   *  这是「AI 填 → 人确认」这条链路的落点，也是它安全的原因。 */
+  FILL_FORM: 'fillForm',
   /** 驱动页面内嵌对话框发起一次提问 */
   ASK_AGENT: 'askAgent',
   /** 高亮某张 agent 卡片 */
