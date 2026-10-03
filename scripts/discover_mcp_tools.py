@@ -1,7 +1,7 @@
 """阶段2-5 测试：静态扫描 4 个 agent 的 MCP 工具"""
 import os, sys
 sys.path.insert(0, 'backend/A2AServer/src')
-from A2AServer.v2.mcp_discover import discover_mcp_tools_static
+from A2AServer.mcp.mcp_discover import discover_mcp_tools_static
 
 for agent in ['health_advisor', 'health_records', 'medication_reminder', 'visit_summary']:
     print(f'=== {agent} ===')

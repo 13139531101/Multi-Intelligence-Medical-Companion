@@ -112,13 +112,25 @@ export default function TodayDashboard() {
     setLoading(false);
   };
 
-  useEffect(() => {
-    fetchMeds();
-    // 加载过去 7 天服药率 (用于 "上周 X 天按时吃药")
+  const loadWeekHistory = () =>
     getMedicationsHistory({ days: 7 })
       .then((rows) => setWeekHistory(rows || []))
       .catch(() => setWeekHistory([]));
+
+  useEffect(() => {
+    fetchMeds();
+    // 加载过去 7 天服药率 (用于 "上周 X 天按时吃药")
+    loadWeekHistory();
   }, []);
+
+  // 页面无关名，4 个页面共用（只暴露 refresh）—— 后端不必知道用户停在哪一页
+  usePageUpdater(PAGE_COMPONENTS.CURRENT_PAGE, {
+    [PAGE_ACTIONS.REFRESH]: () => {
+      // 本页加载两样东西（今日用药 + 近 7 天服药率），刷新得一起重来
+      fetchMeds();
+      loadWeekHistory();
+    },
+  });
 
   // 标记吃药 / 跳过
   const handleMark = async (med, taken) => {

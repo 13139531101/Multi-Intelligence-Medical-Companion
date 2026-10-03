@@ -119,7 +119,7 @@ class HealthAdvisorV2(V2Agent):
         try:
             return (
                 load_mcp_tools("health_advisor", transport=_MCP_TRANSPORT)
-                + load_phacore_tools(("ocr",))  # health_advisor 也需要 OCR (顾问阅报告)
+                + load_phacore_tools(("ocr", "page_control"))  # health_advisor 也需要 OCR (顾问阅报告)
             )
         except RuntimeError as e:
             if "无法定位仓库根目录" in str(e):
@@ -161,7 +161,7 @@ class HealthRecordsV2(V2Agent):
         try:
             return (
                 load_mcp_tools("health_records", transport=_MCP_TRANSPORT)
-                + load_phacore_tools(("ocr",))   # OCR 是 PhaCore owner
+                + load_phacore_tools(("ocr", "page_control"))   # OCR 是 PhaCore owner
             )
         except RuntimeError as e:
             if "无法定位仓库根目录" in str(e):
@@ -196,7 +196,7 @@ class MedicationReminderV2(V2Agent):
         try:
             return (
                 load_mcp_tools("medication_reminder", transport=_MCP_TRANSPORT)
-                + load_phacore_tools(("ocr",))   # re-export OCR (用于扫描药盒/处方)
+                + load_phacore_tools(("ocr", "page_control"))   # re-export OCR (用于扫描药盒/处方)
             )
         except RuntimeError as e:
             if "无法定位仓库根目录" in str(e):
@@ -227,9 +227,14 @@ class VisitSummaryV2(V2Agent):
     )
 
     def get_tools(self) -> List:
-        """阶段48-19: 不需要 OCR (visit_summary 处理的是已抽取的 text, 不是 image)"""
+        """阶段48-19: 不需要 OCR (visit_summary 处理的是已抽取的 text, 不是 image)
+        阶段48-29: 但需要 page_control —— 页面操作是跨领域的公共能力,
+        4 个 agent 都得有 (路由一个请求只进一个 agent, 工具只在那一个手里)"""
         try:
-            return load_mcp_tools("visit_summary", transport=_MCP_TRANSPORT)
+            return (
+                load_mcp_tools("visit_summary", transport=_MCP_TRANSPORT)
+                + load_phacore_tools(("page_control",))
+            )
         except RuntimeError as e:
             if "无法定位仓库根目录" in str(e):
                 logger.warning("[VisitSummaryV2] MCP tools unavailable: %s", e)

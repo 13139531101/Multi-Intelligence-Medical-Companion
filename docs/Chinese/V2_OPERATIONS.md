@@ -262,7 +262,7 @@ print('error:', r._error if hasattr(r, '_error') else None)
 **排查**：
 ```python
 # 检查模块加载时间
-from A2AServer.v2.mcp_discover import load_mcp_tool_function
+from A2AServer.mcp.mcp_discover import load_mcp_tool_function
 import time
 t0 = time.time()
 func = load_mcp_tool_function('health_advisor', 'diagnosis_tool', 'analyze_symptoms')

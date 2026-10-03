@@ -356,7 +356,7 @@ print('layer2:', _layer2_heuristic(state))
 **排查**：
 ```python
 # 直接调用工具函数
-from A2AServer.v2.mcp_discover import load_mcp_tool_function
+from A2AServer.mcp.mcp_discover import load_mcp_tool_function
 func = load_mcp_tool_function('health_advisor', 'diagnosis_tool', 'analyze_symptoms')
 print(func(symptoms=['头痛', '发烧']))
 ```

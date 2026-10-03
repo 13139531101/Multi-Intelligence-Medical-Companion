@@ -506,7 +506,7 @@ for tool in tools:
 ### 4.4 静态扫描 MCP 工具
 
 ```python
-from A2AServer.v2.mcp_discover import discover_mcp_tools_static
+from A2AServer.mcp.mcp_discover import discover_mcp_tools_static
 
 # 不执行 module，扫描所有 @mcp.tool() 装饰的函数
 tools = discover_mcp_tools_static("health_advisor")

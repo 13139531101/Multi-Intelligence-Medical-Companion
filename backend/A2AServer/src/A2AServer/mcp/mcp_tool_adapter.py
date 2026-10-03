@@ -24,6 +24,11 @@ from .mcp_discover import (
     discover_mcp_tools_static,
     discover_phacore_tools,        # 阶段48-19
     load_mcp_tool_function,
+    # 阶段48-29: _list_phacore_tool_names 一直在用这个名字, 却从来没 import 过.
+    # 于是它每次都抛 NameError, 被自己的 `except Exception` 吞掉, 退化到那个
+    # 写死的 OCR 兜底列表 —— 也就是说除了 OCR, **任何 PhaCore 模块都加载不出工具**,
+    # 而且不报错. OCR 能用纯粹是撞上了兜底.
+    _extract_mcp_tools_from_source,
 )
 
 logger = logging.getLogger(__name__)
@@ -192,7 +197,21 @@ def load_phacore_tools(
                     tool_func = getattr(mod, tool_name, None)
                     if tool_func is None:
                         continue
-                    lc_tool = _wrap_phacore_func_as_lc_tool(tool_func, tool_name)
+                    # 阶段48-29: 用 _wrap_function_as_base_tool, 不是早期那个
+                    # **kwargs 版包装器. 后者虽然永远"成功", 但 LangChain 只能从
+                    # `def wrapped(**kwargs)` 推出一个不透明的 kwargs 参数 ——
+                    # 模型看不到任何真实参数名, 工具挂在列表里却调不动.
+                    # 这个包装器会按 inspect.signature 建真 args_schema,
+                    # 并 register_tool_sig 让 _inject_user_id_if_needed 正常工作.
+                    desc = (tool_func.__doc__ or "").strip() or f"PhaCore tool: {tool_name}"
+                    from langchain_core.tools import BaseTool
+                    lc_tool = _wrap_function_as_base_tool(
+                        tool_func, tool_name, desc, BaseTool
+                    )
+                    if lc_tool is None:
+                        # 宁可少一个工具, 也不要一个调不动的
+                        logger.warning("[PhaCore] 包装失败, 跳过: %s", tool_name)
+                        continue
                     loaded_tools.append(lc_tool)
             except Exception as e:
                 logger.warning("[PhaCore] %s 加载失败: %s", mod_name, e)
@@ -224,25 +243,18 @@ def _list_phacore_tool_names(mod) -> list[str]:
         # Reuse _extract_mcp_tools_from_source
         tools = _extract_mcp_tools_from_source(src)
         return [t["name"] for t in tools]
-    except Exception:
-        # Hardcoded fallback
+    except Exception as e:
+        # Hardcoded fallback —— 只兜 OCR。
+        # 阶段48-29: 这里必须打日志。之前它是静默的, 于是"某个模块的工具一个都
+        # 加载不出来"和"这个模块本来就没有工具"在日志里长得一模一样。
+        logger.warning("[PhaCore] AST 解析失败, 退化到兜底列表: %s (%s)", mod, e)
         return ["extract_text_from_image", "validate_medical_document"] if "shared_ocr" in str(mod) else []
 
 
-def _wrap_phacore_func_as_lc_tool(func, func_name: str):
-    """包装 PhaCore 函数成 LangChain BaseTool (轻量, 不依赖 fastmcp runtime)."""
-    from langchain_core.tools import tool as langchain_tool
-
-    desc = (func.__doc__ or "").strip() or f"PhaCore tool: {func_name}"
-
-    @langchain_tool
-    def wrapped(**kwargs):
-        """PhaCore {func_name} wrapper."""
-        return func(**kwargs)
-
-    wrapped.name = func_name
-    wrapped.description = desc
-    return wrapped
+# 阶段48-29: 这里原本有个 _wrap_phacore_func_as_lc_tool(), 已删除.
+# 它用 `@langchain_tool def wrapped(**kwargs)` 包装, 结果模型只看到一个
+# 名为 kwargs 的不透明参数 —— 所有带参数的 PhaCore 工具(含 OCR)都调不动,
+# 而且不报错. 现在统一走 _wrap_function_as_base_tool.
 
 
 def _load_real_mcp_tools(agent_name: str, *, transport: str = "stdio") -> list:

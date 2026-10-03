@@ -2,7 +2,7 @@
 import sys
 sys.path.insert(0, 'backend/A2AServer/src')
 
-from A2AServer.v2.mcp_discover import discover_mcp_tools_static, discover_phacore_tools
+from A2AServer.mcp.mcp_discover import discover_mcp_tools_static, discover_phacore_tools
 
 print("=== PhaCore tools (NEW, 阶段 48-19) ===")
 phacore = discover_phacore_tools()

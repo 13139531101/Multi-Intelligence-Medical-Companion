@@ -457,6 +457,13 @@ export default function Dashboard() {
     },
   });
 
+  // 页面无关名，4 个页面共用（只暴露 refresh）—— 后端不必知道用户停在哪一页
+  usePageUpdater(PAGE_COMPONENTS.CURRENT_PAGE, {
+    [PAGE_ACTIONS.REFRESH]: () => {
+      fetchAll();
+    },
+  });
+
   return (
     <Box sx={{ minHeight: "100vh", bgcolor: "background.default" }}>
       <Header />

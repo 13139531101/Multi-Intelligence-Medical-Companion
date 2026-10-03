@@ -123,6 +123,12 @@ jobs:
           done
         continue-on-error: true
 
+      # 阶段48-29: 这个守卫的 docstring 一直写着「失败禁止 merge」, 但它此前
+      # 既没进 CI, import 路径也早就是错的 —— 等于从来没跑过。现在接上。
+      - name: Tool name dedup guard (blocking)
+        run: python tests/test_tool_dedup.py
+        continue-on-error: false
+
       - name: Summary
         if: always()
         run: |

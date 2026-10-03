@@ -75,6 +75,8 @@ import {
   HEALTH_RECORDS_NAME,
   MEDICATION_REMINDER_NAME,
 } from "../config/agents";
+import { usePageUpdater } from "../components/usePageUpdater";
+import { PAGE_COMPONENTS, PAGE_ACTIONS } from "../ai/pageContract";
 
 // 阶段48-5: 重新设计 - 添加药品 + 智能体建议 + 真正历史
 const PERIODS = [
@@ -456,8 +458,15 @@ export default function NewMedication() {
   };
 
   // 阶段48-5: 给 agent 发问
-  const askAgent = async () => {
-    if (!aiQuestion.trim()) return;
+  // 阶段48-29: 加可选参数 —— AI 通过 MedicationPage/askAgent 驱动时直接把问题
+  // 传进来。不能靠"先 setAiQuestion 再调 askAgent()"：setState 是异步的，
+  // 那次调用读到的还是旧的 aiQuestion。
+  const askAgent = async (override) => {
+    const question = typeof override === "string" ? override : aiQuestion;
+    if (!question.trim()) return;
+    // AI 从别的页面驱动过来时，抽屉得自己打开，否则回答看不见
+    setAiQuestion(question);
+    setAiOpen(true);
     setAiLoading(true);
     setAiReply("");
     try {
@@ -472,7 +481,7 @@ export default function NewMedication() {
           Authorization: token ? `Bearer ${token}` : "",
         },
         body: JSON.stringify({
-          message: aiQuestion + "\n\n(基于我当前的用药情况回答, 列出当前用药)",
+          message: question + "\n\n(基于我当前的用药情况回答, 列出当前用药)",
           task_type: "chat",
         }),
       });
@@ -514,6 +523,32 @@ export default function NewMedication() {
     }
     setAiLoading(false);
   };
+
+  // ===== 向 AI 开放本页的可控点 =====
+  // 阶段48-29: 用药页此前**完全没有注册**，AI 够不着它。现在补齐。
+  // 'MedicationPage' —— 本页独有的动作
+  // 'CurrentPage'  —— 页面无关名，4 个页面共用（只暴露 refresh），
+  //   于是后端不必知道用户停在哪一页就能刷新。
+  usePageUpdater(PAGE_COMPONENTS.MEDICATION, {
+    [PAGE_ACTIONS.REFRESH]: () => {
+      fetchAll();
+    },
+    [PAGE_ACTIONS.SET_VIEW]: (params) => {
+      // 白名单校验：Tab 的 value 就这三个，传进来别的值会让三个 Tab 全不选中
+      const v = params?.view;
+      if (["today", "week", "history"].includes(v)) setView(v);
+    },
+    [PAGE_ACTIONS.ASK_AGENT]: (params) => {
+      const q = params?.question || params?.q;
+      if (q) askAgent(q);
+    },
+  });
+
+  usePageUpdater(PAGE_COMPONENTS.CURRENT_PAGE, {
+    [PAGE_ACTIONS.REFRESH]: () => {
+      fetchAll();
+    },
+  });
 
   const dateText = new Date().toLocaleDateString("zh-CN", {
     year: "numeric",

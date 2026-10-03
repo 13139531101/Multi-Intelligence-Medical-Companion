@@ -75,7 +75,18 @@ import {
 } from "../api/healthApi";
 
 // 阶段48: 升级 - 加图片预览 + OCR 结果 + 详情抽屉 + 真实上传
+// 后端 record_type → 本页分类 tab 的映射。
+//
+// ⚠️ 这里有两个不同的词表，别混：后端写库用的 record_type（lab_report /
+// medical_report / symptom / hospital_record …）跟前端 tab 的 key（diagnosis /
+// exam / report / allergy / medication）**从来不是一套**。
+//
+// 阶段48-29 修：这张表原先只认 diagnosis/examination/exam/report/allergy/
+// medication/other，而后端实际在写的是 lab_report / medical_report / symptom
+// —— 它们查不到键，全部退到 other，而 other 根本不是 CATEGORIES 的 key。
+// 结果库里 26 条档案有 23 条点任何分类 tab 都看不到。下面补上实际在用的键。
 const API_TO_TYPE = {
+  // —— 原本就有的 ——
   diagnosis: { key: "diagnosis", label: "诊断", color: "#1565C0" },
   examination: { key: "exam", label: "检查", color: "#00897B" },
   exam: { key: "exam", label: "检查", color: "#00897B" },
@@ -83,6 +94,14 @@ const API_TO_TYPE = {
   allergy: { key: "allergy", label: "过敏", color: "#C62828" },
   medication: { key: "medication", label: "用药", color: "#ED6C02" },
   other: { key: "other", label: "其他", color: "#5A6776" },
+  // —— 阶段48-29 补：后端 record_type 词表（见 _TYPE_ALIASES）——
+  lab_report: { key: "exam", label: "检查", color: "#00897B" },
+  medical_report: { key: "report", label: "报告", color: "#7B1FA2" },
+  symptom: { key: "diagnosis", label: "诊断", color: "#1565C0" },
+  prescription: { key: "medication", label: "用药", color: "#ED6C02" },
+  hospital_record: { key: "diagnosis", label: "诊断", color: "#1565C0" },
+  surgery: { key: "diagnosis", label: "诊断", color: "#1565C0" },
+  vaccination: { key: "exam", label: "检查", color: "#00897B" },
 };
 
 const CATEGORIES = [
@@ -748,6 +767,13 @@ export default function NewHealthRecords() {
       setAiDraft(f);
       setDraftSeq((n) => n + 1);
       setEditing({}); // 无 id → 走 create 模式
+    },
+  });
+
+  // 页面无关名，4 个页面共用（只暴露 refresh）—— 后端不必知道用户停在哪一页
+  usePageUpdater(PAGE_COMPONENTS.CURRENT_PAGE, {
+    [PAGE_ACTIONS.REFRESH]: () => {
+      fetchRecords();
     },
   });
 

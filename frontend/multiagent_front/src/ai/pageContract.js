@@ -18,6 +18,11 @@
  *   - MedicationReminder/mcpserver/reminder_tool.py     (AiInfoCard)
  *   - HealthRecordsManager/mcpserver/page_control_tool.py
  *       (PageRouter / HealthRecordsPage)
+ *   - PhaCore/mcpserver/shared_page_control.py
+ *       (PageRouter / CurrentPage / Dashboard / HealthRecordsPage / MedicationPage)
+ *       阶段48-29 新建：补上了另外 6 个动作的生产者。PhaCore 是共享工具集，
+ *       4 个 agent 都 re-export 它 —— 因为路由是一个请求只进一个 agent，
+ *       而"刷新页面"这类操作跟领域无关，每个 agent 都得有。
  * 用 `grep -rn '"component":' backend --include='*_tool.py'` 可以一次列全。
  * （注意别在注释里写 backend 斜杠星号 斜杠mcpserver —— 那个 "星号斜杠" 会提前
  *   结束本注释块，把后面的中文当成代码解析，报一个莫名其妙的 EOF 语法错。）
@@ -35,12 +40,20 @@ export const PAGE_COMPONENTS = {
   /** 页面无关的 AI 信息卡片区。TodayDashboard 和 Dashboard 都注册它，
    *  所以同一个工具在哪个页面都能把卡片投出来 */
   AI_INFO_CARD: 'AiInfoCard',
+  /** 页面无关的「刷新当前页」。4 个页面都注册同一个名字、只暴露 refresh，
+   *  于是后端不必知道用户停在哪一页就能刷新。
+   *  ⚠️ 后端发它时**绝不能**和 navigateTo 放进同一个 actions[]：两个动作在
+   *  同一 tick 派发，navigate() 只是排了个 state 更新，此刻旧页面还挂着，
+   *  refresh 会打在旧页面上。 */
+  CURRENT_PAGE: 'CurrentPage',
   /** /v2/today —— 历史遗留名，勿改 */
   TODAY_DASHBOARD: 'TodayDashboard',
   /** /v2/dashboard */
   DASHBOARD: 'Dashboard',
   /** /v2/health-records */
   HEALTH_RECORDS: 'HealthRecordsPage',
+  /** /v2/medication */
+  MEDICATION: 'MedicationPage',
 };
 
 export const PAGE_ACTIONS = {
@@ -66,6 +79,8 @@ export const PAGE_ACTIONS = {
   ASK_AGENT: 'askAgent',
   /** 高亮某张 agent 卡片 */
   HIGHLIGHT_AGENT: 'highlightAgent',
+  /** 切换页面顶部的时间/视图标签。目前只有用药页用（今日/本周/历史） */
+  SET_VIEW: 'setView',
 };
 
 /** 单条待执行指令在注册表里的存活时长。短一点，避免陈旧指令突然触发。 */

@@ -6,7 +6,7 @@ print('=' * 70)
 print('PHA v2 MCP 工具发现 + 加载验证')
 print('=' * 70)
 
-from A2AServer.v2.mcp_discover import discover_mcp_tools_static
+from A2AServer.mcp.mcp_discover import discover_mcp_tools_static
 from A2AServer.v2.mcp_tool_adapter import load_mcp_tools
 
 agents = ['health_advisor', 'health_records', 'medication_reminder', 'visit_summary']
