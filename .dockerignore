@@ -26,6 +26,12 @@ venv
 dist
 build
 
+# MCP starter 是运行时按工具文件 AST 扫出来的构建产物（见 .gitignore 第 68-71 行）。
+# 它本来就不该进镜像：本地留一份旧的、被 COPY 进来，新加的工具就会被静默吞掉
+# —— 直到 _ensure_http_starter 发现 body 不同才重写。别让这个雷埋着。
+backend/*/mcpserver/_http_starter.py
+backend/*/mcpserver/_stdio_starter.py
+
 # Editor/OS junk
 .DS_Store
 Thumbs.db
