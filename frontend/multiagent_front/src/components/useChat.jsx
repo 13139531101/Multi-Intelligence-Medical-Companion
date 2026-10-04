@@ -74,6 +74,33 @@ function reducer(state, action) {
 
 const ChatContext = createContext(null);
 
+// 阶段48-30: 浮窗此前只发 {message}, 不带会话 id。后端于是每轮都新生成一个
+// stream_<随机8位> 当会话 id —— 而它就是 LangGraph 的 thread_id。结果是
+// **每句话都是一个全新会话**, 多轮记忆完全失效。
+// 实测: "记住我叫张三" 之后追问 "我叫什么名字" → 答 "没有可用的信息";
+//       而带上同一个会话 id 时 → 正确答出 "李四, 41岁"。
+// 用 sessionStorage: 刷新页面仍留在同一会话, 关掉标签页自然重置。
+// 不跨标签页共享, 也就不用担心两个窗口互相污染上下文。
+const CONVERSATION_KEY = "pha_chat_conversation_id";
+
+function getConversationId() {
+  try {
+    let id = sessionStorage.getItem(CONVERSATION_KEY);
+    if (!id) {
+      id =
+        "chat_" +
+        Date.now().toString(36) +
+        "_" +
+        Math.random().toString(36).slice(2, 8);
+      sessionStorage.setItem(CONVERSATION_KEY, id);
+    }
+    return id;
+  } catch {
+    // 隐私模式等禁用 storage 的场景: 退回每轮新建 (即修复前的行为), 至少不崩
+    return "chat_" + Date.now().toString(36);
+  }
+}
+
 export function ChatProvider({ children }) {
   const [state, dispatch] = useReducer(reducer, initialState);
 
@@ -93,7 +120,10 @@ export function ChatProvider({ children }) {
       resp = await fetch("/api/copilotkit", {
         method: "POST",
         headers,
-        body: JSON.stringify({ message: text }),
+        body: JSON.stringify({
+          message: text,
+          conversation_id: getConversationId(),
+        }),
       });
     } catch (e) {
       dispatch({

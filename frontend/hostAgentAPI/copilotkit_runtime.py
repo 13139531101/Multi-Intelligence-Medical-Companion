@@ -46,13 +46,17 @@ def _agui_event(event: str, data: dict) -> str:
 
 
 async def _stream_agui(
-    message: str, agent_hint: str, auth_header: str
+    message: str, agent_hint: str, auth_header: str, conversation_id: str = ""
 ) -> AsyncGenerator[str, None]:
-    """调 /v2/chat/stream 把事件翻译成 AG-UI 流出去."""
+    """调 /v2/chat/stream 把事件翻译成 AG-UI 流出去.
+
+    conversation_id 会被 /v2/chat/stream 透传成 A2A metadata.conversation_id,
+    bridge 再拿它当 LangGraph 的 thread_id。**不传就每轮都是新会话, 多轮记忆失效。**
+    """
     import asyncio
 
     run_id = str(uuid.uuid4())
-    thread_id = "default"
+    thread_id = conversation_id or "default"
     msg_id = str(uuid.uuid4())
     text_started = False
     tool_call_ids: dict = {}
@@ -61,6 +65,11 @@ async def _stream_agui(
     async def pump():
         """从 /v2/chat/stream 读 SSE, 把事件塞 queue. 用 aiter_bytes + \\n\\n split."""
         payload = {"message": message}
+        # 阶段48-30: 透传会话 id。不传的话 /v2/chat/stream 会每轮新生成
+        # stream_<随机8位> 当会话 id, 而它就是 LangGraph 的 thread_id ——
+        # 结果是每句话都是全新会话, 多轮记忆完全失效。
+        if conversation_id:
+            payload["conversation_id"] = conversation_id
         if agent_hint:
             payload["metadata"] = {"selected_agent": agent_hint}
         try:
@@ -288,7 +297,10 @@ async def copilotkit_endpoint(request: Request):
 
     支持两种入参:
     1. CopilotKit RunAgentInput: { messages, thread_id, run_id, ... }
-    2. 自写浮窗直接格式:       { message, agent_hint? }
+    2. 自写浮窗直接格式:       { message, conversation_id?, agent_hint? }
+
+    两种格式都会把会话 id (thread_id / conversation_id) 透传给 /v2/chat/stream,
+    它决定 LangGraph 的 thread_id —— 也就是多轮记忆能不能接上。
     """
     # 修复: 非 UTF-8 / 非法 JSON 的请求体会让 request.json() 抛异常 → 整个
     # endpoint 500，前端只看到 "Internal Server Error" 且没有任何 AG-UI 事件。
@@ -320,6 +332,11 @@ async def copilotkit_endpoint(request: Request):
     text, agent_hint = _extract_user_message(messages)
     if not text and "message" in body:
         text = body["message"]
+    # 阶段48-30: 会话 id。CopilotKit 用 thread_id, 自写浮窗用 conversation_id,
+    # 两个都认。缺省为空串 → 后端退回"每轮新会话"的旧行为, 不会更差。
+    conversation_id = (
+        body.get("conversation_id") or body.get("thread_id") or ""
+    )
     auth_header = request.headers.get("Authorization", "")
 
     if not text:
@@ -341,7 +358,7 @@ async def copilotkit_endpoint(request: Request):
         )
 
     return StreamingResponse(
-        _stream_agui(text, agent_hint, auth_header),
+        _stream_agui(text, agent_hint, auth_header, conversation_id),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

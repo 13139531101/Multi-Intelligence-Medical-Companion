@@ -15,10 +15,13 @@ import Settings from "./pages/Settings";
 import TasksPage from "./pages/TasksPage";
 
 // 健康助手应用页面
+// 阶段48-30: 移除了 HealthRecords / Medication 两个 v1 页面的路由与 import。
+// 它们此前声明在 /health-records 与 /medication 上, 而这两个路径在文件下方
+// 又被声明成 <Navigate to="/v2/...">。React Router 6 是**首次声明生效**,
+// 所以那两条重定向永远不可达, 老链接进的是 v1 页面 —— 与"旧路由兼容"的
+// 注释意图正好相反。现在按注释意图统一: 老路径一律重定向到 v2。
 import Dashboard from "./pages/Dashboard";
-import HealthRecords from "./pages/HealthRecords";
 import Consultation from "./pages/Consultation";
-import Medication from "./pages/Medication";
 import Summary from "./pages/Summary";
 import TestChat from "./pages/TestChat";
 
@@ -33,7 +36,6 @@ import ChatPanel from "./components/ChatPanel";
 // 渲染 null，但挂在 <Router> 内且始终挂载 —— 给 AI 一个可用的跳转出口
 import PageRouter from "./components/PageRouter";
 import { ChatProvider } from "./components/useChat.jsx";
-import { PageDataProvider } from "./components/PageDataContext.jsx";
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
 
 // 通用组件
@@ -46,134 +48,116 @@ function AppShell() {
   const { user } = useAuth();
   return (
     <ChatProvider>
-      <PageDataProvider>
-        {user && <ChatPanel />}
-        <Router>
-          {/* 必须在 <Router> 内部：AI 的跳转指令靠它落地 */}
-          <PageRouter />
-          <Routes>
-            {/* 健康助手应用路由 */}
-            <Route path="/login" element={<Login />} />
-            <Route
-              path="/dashboard"
-              element={
-                <ProtectedRoute>
-                  <Dashboard />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/health-records"
-              element={
-                <ProtectedRoute>
-                  <HealthRecords />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/consultation"
-              element={
-                <ProtectedRoute>
-                  <Consultation />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/medication"
-              element={
-                <ProtectedRoute>
-                  <Medication />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/summary"
-              element={
-                <ProtectedRoute>
-                  <Summary />
-                </ProtectedRoute>
-              }
-            />
-            <Route path="/test-chat" element={<TestChat />} />
-            <Route path="/register" element={<Register />} />
+      {user && <ChatPanel />}
+      <Router>
+        {/* 必须在 <Router> 内部：AI 的跳转指令靠它落地 */}
+        <PageRouter />
+        <Routes>
+          {/* 健康助手应用路由 */}
+          <Route path="/login" element={<Login />} />
+          <Route
+            path="/dashboard"
+            element={
+              <ProtectedRoute>
+                <Dashboard />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/consultation"
+            element={
+              <ProtectedRoute>
+                <Consultation />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/summary"
+            element={
+              <ProtectedRoute>
+                <Summary />
+              </ProtectedRoute>
+            }
+          />
+          <Route path="/test-chat" element={<TestChat />} />
+          <Route path="/register" element={<Register />} />
 
-            {/* 全新设计页面 */}
-            <Route
-              path="/v2/dashboard"
-              element={
-                <ProtectedRoute>
-                  <Dashboard />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/v2/today"
-              element={
-                <ProtectedRoute>
-                  <TodayDashboard />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/v2/chat"
-              element={
-                <ProtectedRoute>
-                  <NewChat />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/v2/health-records"
-              element={
-                <ProtectedRoute>
-                  <NewHealthRecords />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/v2/medication"
-              element={
-                <ProtectedRoute>
-                  <NewMedication />
-                </ProtectedRoute>
-              }
-            />
+          {/* 全新设计页面 */}
+          <Route
+            path="/v2/dashboard"
+            element={
+              <ProtectedRoute>
+                <Dashboard />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/v2/today"
+            element={
+              <ProtectedRoute>
+                <TodayDashboard />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/v2/chat"
+            element={
+              <ProtectedRoute>
+                <NewChat />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/v2/health-records"
+            element={
+              <ProtectedRoute>
+                <NewHealthRecords />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/v2/medication"
+            element={
+              <ProtectedRoute>
+                <NewMedication />
+              </ProtectedRoute>
+            }
+          />
 
-            {/* 旧路由兼容 */}
-            <Route
-              path="/health-records"
-              element={<Navigate to="/v2/health-records" replace />}
-            />
-            <Route
-              path="/medication"
-              element={<Navigate to="/v2/medication" replace />}
-            />
-            <Route path="/chat" element={<Navigate to="/v2/chat" replace />} />
+          {/* 旧路由兼容 */}
+          <Route
+            path="/health-records"
+            element={<Navigate to="/v2/health-records" replace />}
+          />
+          <Route
+            path="/medication"
+            element={<Navigate to="/v2/medication" replace />}
+          />
+          <Route path="/chat" element={<Navigate to="/v2/chat" replace />} />
 
-            {/* 原有的多智能体系统路由 */}
-            <Route path="/home" element={<Home />} />
-            <Route path="/agents" element={<AgentListPage />} />
-            <Route
-              path="/start_conversations"
-              element={<StartConversationPage />}
-            />
-            <Route path="/conversations" element={<ConversationPage />} />
-            <Route path="/events" element={<EventPage />} />
-            <Route path="/settings" element={<Settings />} />
-            <Route path="/tasks" element={<TasksPage />} />
+          {/* 原有的多智能体系统路由 */}
+          <Route path="/home" element={<Home />} />
+          <Route path="/agents" element={<AgentListPage />} />
+          <Route
+            path="/start_conversations"
+            element={<StartConversationPage />}
+          />
+          <Route path="/conversations" element={<ConversationPage />} />
+          <Route path="/events" element={<EventPage />} />
+          <Route path="/settings" element={<Settings />} />
+          <Route path="/tasks" element={<TasksPage />} />
 
-            {/* 默认重定向 — 落回 /v2/dashboard（主页面）。
-                早先之所以落到 /v2/today，是因为当时 TodayDashboard 是唯一注册了
-                usePageUpdater 的页面，停在别处 PAGE_UPDATE 会被静默丢弃。
-                现在 Dashboard 自己也注册了（含页面无关的 AiInfoCard），
-                且注册表带待执行队列，落地页不再受这个约束。 */}
-            <Route path="/" element={<Navigate to="/v2/dashboard" replace />} />
-            <Route path="*" element={<Navigate to="/v2/dashboard" replace />} />
-          </Routes>
+          {/* 默认重定向 — 落回 /v2/dashboard（主页面）。
+              早先之所以落到 /v2/today，是因为当时 TodayDashboard 是唯一注册了
+              usePageUpdater 的页面，停在别处 PAGE_UPDATE 会被静默丢弃。
+              现在 Dashboard 自己也注册了（含页面无关的 AiInfoCard），
+              且注册表带待执行队列，落地页不再受这个约束。 */}
+          <Route path="/" element={<Navigate to="/v2/dashboard" replace />} />
+          <Route path="*" element={<Navigate to="/v2/dashboard" replace />} />
+        </Routes>
 
-          <NotificationSnackbar />
-        </Router>
-      </PageDataProvider>
+        <NotificationSnackbar />
+      </Router>
     </ChatProvider>
   );
 }
