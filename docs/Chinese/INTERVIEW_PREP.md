@@ -409,6 +409,33 @@ duplicate key value violates unique constraint
 **Q：A2A 和 MCP 都在"调用"，区别是什么？**
 > MCP 是**能力边界**（这个智能体能做什么），A2A 是**组织边界**（这个智能体能把活派给谁）。前者是动词的清单，后者是同事的清单。
 
+**Q：AG-UI 有原生的 `STATE_DELTA`，你为什么自己加了个 `PAGE_UPDATE` 事件？**（**高概率被问，因为你说自己用了 AG-UI**）
+
+> 先澄清一点：`PAGE_UPDATE` **不是绕过协议** —— AG-UI 本身留了自定义事件的扩展位，这是协议内的合法用法。真正的问题是「为什么不走官方那条现成的状态通道」。
+>
+> `STATE_DELTA` 是**状态同步**语义（「状态应该变成 X」，JSON Patch，幂等），`PAGE_UPDATE` 是**动作派发**语义（「执行 X，现在」，有调用、有返回值）。判断依据只有一条 —— **幂等性**：
+>
+> > 状态重放一次无害（「筛到检查」说两遍还是筛到检查）；动作重放一次会出事（弹窗重弹、toast 卡住）。
+>
+> 12 个动作按这条线切完是这样：
+>
+> | 通道 | 动作 | 为什么 |
+> |---|---|---|
+> | `STATE_DELTA`（幂等状态） | `navigateTo` → `route`<br>`setFilter` → `healthRecords.filter`<br>`setSearch` → `healthRecords.search`<br>`setView` → `medication.view` | 都是「我在哪、我在看什么」，收敛到声明值即可 |
+> | `PAGE_UPDATE`（瞬态动作） | `setData` / `openRecord` / `fillForm` / `showAlert` / `refresh` / `askAgent` / `highlightAgent` | 有调用、有返回值、有副作用 |
+>
+> **留下不动的几个原因是硬的**：① `refresh` **根本没有状态可收敛**，硬做要引入一个假计数器；② `showAlert` 是瞬态事件，做成状态意味着「toast 一直亮着直到有人关掉」，重连即卡住；③ `setData` 是**追加**语义，后端并不持有卡片全量，做成状态就得让后端先读一遍现有列表；④ 状态收敛**会重放副作用** —— 我在 `ComponentRegistry.jsx` 里已经踩过这个坑（注释里写着「重复的 `openRecord` 会在用户关掉弹窗后又把它弹开」），在动作通道里是要**对抗**的行为，而它在 `STATE_DELTA` 里是**设计特性**。
+>
+> **我做了这个混合，不是"如果重做我会"。** 关键洞察是：**声明式子集天然幂等，所以状态收敛语义对它们是安全的；只有瞬态动作才会被重放咬到。** 落地时有三点值得说：
+>
+> 1. **用 `add` 而不是 `replace`** —— RFC 6902 规定 `add` 到已存在的对象成员即等于替换，所以后端**不需要知道前端当前状态**，无脑 add 就能表达"把 `/a/b` 设成 v"。工具只声明自己改了什么，不必持有全量 state。
+> 2. **迁移没有 flag day** —— 过渡期两条通道都发，且页面上的用户交互（点 tab、打字）也写**同一个** `pageStateStore`。两条路收敛到同一个值、幂等无害，所以任何一端没重建成功功能都不会坏。
+> 3. **顺手消掉了一个依赖** —— `filter_health_records` 原本发 `[navigateTo, setFilter]` 两个动作，靠 `ComponentRegistry` 的待执行队列兜住"目标页还没挂载"。改成一次 state patch 后，页面挂载时直接读到 store 里的当前值，**这条路径不再需要队列**。
+>
+> **实测**（进了常驻回归 `tests/e2e/agui_smoke.py` 用例 E）：问「帮我打开健康档案页，只看检查的」→ `STATE_DELTA: 1`，delta 是 `[{add,/route,/v2/health-records}, {add,/healthRecords/filter,exam}]`；同一次调用 `PAGE_UPDATE: 2` 照旧发出（双轨兜底）。另外我把 patch 的**幂等性**单独测了 —— 同一条 patch 连放三次结果一致，**这是状态通道能成立的前提**，不幂等的话网络重投递就会把页面推向错误状态。
+>
+> **代价我认**：`PAGE_UPDATE` 那半仍然没有标准背书，别的 AG-UI 客户端还是驱动不了我的界面；而且契约耦合**变多了一处** —— `shared_page_control.py` 里 `page_state` 的键名必须和 `pageStateStore.js` 的 schema 一致，拼错一个字母 patch 会安静地写进没人读的键（这条我记在架构文档 §11 第 16 条）。
+
 **Q：为什么不本地部署模型？**
 > 明确的设计约束。本地模型拖慢镜像、吃内存、增加部署复杂度，而这套栈本来就是 API 驱动的（DeepSeek + DashScope）。需要重排就走 DashScope 的 HTTP API。**这是个成本/复杂度权衡，不是能力妥协。**
 

@@ -316,7 +316,8 @@ Corrective RAG，复用 Magnetic RAG 的 `evaluate_chunks` 结果做决策：
 
 ## 7. 生成式 UI：页面操控管线
 
-这是 48-29 阶段刚补齐的能力 —— **AI 不只是回答，还能操作界面**。
+这是 48-29 阶段补齐的能力 —— **AI 不只是回答，还能操作界面**。
+48-31 又把它拆成了**两条并行通道**（见 7.5）：幂等状态走 AG-UI 标准通道，瞬态动作走自定义事件。
 
 ### 7.1 契约
 
@@ -364,6 +365,78 @@ componentRegistry.call(component, action, params)
 - 视图：`今天/今日 → today`、`本周/这周 → week`、`历史 → history`
 
 **认不出就返回 `{"success": false, "error": ...}` 并列出合法值，不发 `page_update`** —— 让模型改口重问，好过静默展示全部内容。这是"宁可失败得响亮，也不要静默地做错"的取舍。
+
+### 7.5 双通道：幂等状态走 AG-UI 标准 `STATE_DELTA`（阶段48-31）
+
+**问题**：项目对外声称用 AG-UI，但页面控制走的是**自建**的 `PAGE_UPDATE` 事件，
+绕开了 AG-UI 原生的 `STATE_SNAPSHOT` / `STATE_DELTA` 状态通道。全仓库 grep 确认**零处**发送 `STATE_*`。
+对一个"用了 AG-UI"的项目来说，这是个说不圆的地方。
+
+**解法不是替换，是分栏。** 判据只有一条 —— **幂等性**：
+
+> 状态重放一次无害（"筛到检查"说两遍还是筛到检查）；动作重放一次会出事（弹窗重弹、toast 卡住）。
+
+| 走 `STATE_DELTA`（幂等） | 保留 `PAGE_UPDATE`（瞬态 / 有副作用） |
+|---|---|
+| `navigateTo` → `route` | `setData`（卡片**追加**，后端不持有全量） |
+| `setFilter` → `healthRecords.filter` | `openRecord`（打开弹窗，重放会重弹） |
+| `setSearch` → `healthRecords.search` | `fillForm`（HITL 草稿，动作语义更清楚） |
+| `setView` → `medication.view` | `showAlert`（toast，重放会卡住） |
+| | `refresh`（**无状态可收敛**，硬做要假计数器） |
+| | `askAgent` / `highlightAgent`（派发动作） |
+
+**State schema**（刻意扁平、按页面命名空间化）：
+
+```js
+{
+  route: "/v2/health-records",                          // string
+  healthRecords: { filter: "exam", search: "血压" },     // 档案页
+  medication:    { view: "week" }                        // 用药页
+}
+```
+
+**链路**（与 7.2 并行，互不替代）：
+
+```
+工具返回 {"page_state": {route, healthRecords:{...}}, "page_update": {...}}
+      ↓
+bridge._page_state_to_json_patch 展平成 RFC 6902 ops
+      ↓  yield {"event":"state_delta","delta":[...]}
+copilotkit_runtime → _agui_event("STATE_DELTA", {delta, displaySummary})
+      ↓
+useChat.jsx  case "STATE_DELTA" → pageStateStore.applyPatch(delta)
+      ↓
+useSyncExternalStore 订阅 → 页面重渲染
+      ↓
+PageRouter 订阅 route → navigate()；档案页订阅 filter/search → 受控 Tabs/输入框
+```
+
+**三个设计细节**：
+
+1. **`add` 而不是 `replace`** —— RFC 6902 规定 `add` 到**已存在的对象成员**即等于替换。
+   所以后端**不需要知道前端当前状态**，也不用先查键在不在，无脑 `add` 就能表达"把 `/a/b` 设成 v"。
+   这让"工具只声明自己改了什么"成立 —— 它不必持有全量 state。
+2. **路径键做 RFC 6901 转义**（`~`→`~0`、`/`→`~1`，**顺序不能反**）。
+   前端 `applyJsonPatch` 里做反转义时同理必须先解 `~1` 再解 `~0`，否则 `~01` 会被解成 `/`。
+3. **`PageRouter` 的回写 effect 需要 `handledRouteRef` 守卫** —— 没有它，回写会在**同一次 commit** 里
+   看到"route(B) ≠ 当前位置(A)"而把 route 改回 A，导航永远不发生。这个 bug 是写的时候发现的，不是跑出来的。
+
+**为什么过渡期两条通道都发**：前端 `pageStateStore` 是唯一真相，页面的 `setFilter` / `setView` 动作
+也写**同一个** store —— 两条路最终落到同一个值，**幂等无害**。换来的是：任何一端（后端镜像 /
+前端 bundle）没重建成功，功能都不会坏。**没有 flag day。**
+
+**顺带收益**：`filter_health_records` 原本发 `[navigateTo, setFilter]` **两个动作**，靠 `ComponentRegistry`
+的待执行队列兜住"目标页还没挂载"。改成一次 state patch 后，页面挂载时直接读到 store 里的当前值 ——
+**这条路径不再依赖队列**。队列仍然保留，供 `openRecord` / `highlightAgent` 这类真·动作使用。
+
+**实测**（`tests/e2e/agui_smoke.py` 用例 E，走真实浮窗链路 `/api/copilotkit`）：
+
+```
+[E] 幂等状态   STATE_DELTA: 1  PAGE_UPDATE: 2
+    STATE_DELTA: [{"op":"add","path":"/route","value":"/v2/health-records"},
+                  {"op":"add","path":"/healthRecords/filter","value":"exam"}]
+    路径: ["/route","/healthRecords/filter"]   判定: PASS
+```
 
 ---
 
@@ -471,6 +544,25 @@ componentRegistry.call(component, action, params)
 
 > 第 5 条的甄别过程值得记一笔：`pages/Header.jsx` 一度也被我的孤儿扫描判为死文件，**复核时发现它被 `Home.jsx` / `ConversationPage.jsx` 以相对路径 `from "./Header"` 引用** —— 扫描脚本按 `pages/Header"` 匹配，漏了相对路径这种写法。**删除前必须用第二种方式复核。**
 
+### 已修（48-31）
+
+| # | 问题 | 位置 | 修法 |
+|---|---|---|---|
+| 1 | 自称用 AG-UI，页面控制却**全程绕开原生状态通道**（全仓 grep 零处 `STATE_*`） | `bridge.py` / `api.py` / `copilotkit_runtime.py` / `useChat.jsx` | 按**幂等性**把 12 个动作拆两栏：幂等状态走标准 `STATE_DELTA`（JSON Patch），瞬态动作保留自定义 `PAGE_UPDATE`。见 §7.5 |
+| 2 | 5 个自定义事件（`routing` / `rag_context` / `clarification` / `interrupt` / `PAGE_UPDATE`）**裸发**，不是 AG-UI 规定的 `CUSTOM` 包裹形状 | `copilotkit_runtime.py` | 在**唯一出口** `_agui_event()` 上加 28 条标准事件白名单，非标准自动包成 `{"type":"CUSTOM","name":...,"value":...}`；前端 `useChat.jsx` 加 `case "CUSTOM"` 解包后**按原名字重新分发** —— 下游 5 个分支一行未改 |
+| 3 | `TOOL_CALL_RESULT` **缺必填字段 `messageId`** | `copilotkit_runtime.py` | 补 `messageId: f"tool_{tc_id}"` + `role: "tool"`（由 `tc_id` 派生而非 `uuid4`，重投递时 id 稳定） |
+
+> 第 1 条修得"保守"是刻意的：**过渡期两条通道都发**，且前端的页面动作也写同一个 store，
+> 所以两条路收敛到同一个值、幂等无害 —— 任何一端没重建成功功能都不会坏，**没有 flag day**。
+
+> **第 3 条是怎么被发现的（这一段比修复本身更值得讲）。**
+> 第 2 条修完后，`agui_smoke.py` 的 F 用例全绿 —— 它检查的是**事件名**在不在标准白名单里。
+> 但"名字合规 ≠ 结构合规"：一个事件名字对了、字段错了，照样过不了官方客户端。
+> 于是补了一个**用官方 schema 本体**校验的脚本（`tests/e2e/agui_schema_check.mjs`，
+> `require` 前端 `node_modules` 里的 `@ag-ui/core`，对真实 wire 上的每个事件跑 `safeParse`）。
+> 首次运行就报出 **5 个 `TOOL_CALL_RESULT` 未过 `ToolCallResultEventSchema`：`messageId` 是必填的，我们没发**。
+> 这个 bug 从项目第一天就在，**只有拿真 schema 打真流量才照得出来**。
+
 ### 未修
 
 | # | 问题 | 位置 | 影响 |
@@ -485,11 +577,13 @@ componentRegistry.call(component, action, params)
 | 13 | `rag_chunks` **五处 DDL、三个维度**（384 / 1024 / 1536） | `rag.py`、`knowledge_tool.py:202`、`health_records_api.py:764,1153`、两处 `.sql` | 谁先启动谁定表结构，`IF EXISTS` 静默跳过；换机器可能直接炸（见 §8.1） |
 | 14 | 阿里云 OCR 两个函数是**占位实现**，直接返回中文占位串 | `shared_ocr.py:68,107` | 走阿里云路径必然拿到占位文本；靠三级 fallback 掩盖 |
 | 15 | AST 扫描**不认 `AsyncFunctionDef`** | `mcp_discover.py:164-221` | 写成 `async def` 的工具**静默消失**，不报错 |
-| 16 | `pageContract.js` 是**字面量契约，无编译期校验** | `src/ai/pageContract.js` | 改名要同步 5 个后端文件，漏一个就静默失效 |
+| 16 | `pageContract.js` 是**字面量契约，无编译期校验** | `src/ai/pageContract.js` | 改名要同步 5 个后端文件，漏一个就静默失效。48-31 又添了一处同类耦合：`shared_page_control.py` 里 `page_state` 的**键名**必须与 `pageStateStore.js` 的 state schema 一致（`healthRecords` / `medication` / `filter` / `search` / `view`）—— 拼错一个字母，patch 会安静地写进一个没人读的键 |
 | 17 | 全页聊天 `NewChat.jsx` **不消费 PAGE_UPDATE** | `pages/NewChat.jsx` | 只有浮窗能操控页面，两个聊天入口能力不一致 |
 | 18 | 工具返回体超长会被 `[:4000]` 截断，`json.loads` 失败被 `except` 吞掉 | `v2_agent.py:559` → `bridge.py` | **page_update 静默消失** |
 | 19 | `ProtectedRoute` DEV 模式绕过鉴权 | `ProtectedRoute.jsx:11-13` | 仅开发环境，但容易误带上线 |
 | 20 | Recoil 基本名存实亡：24 个 atom，v2 页面全用 `useState` | `store/recoilState.js` | 依赖还在，实际不用 |
+| 21 | 状态通道**只用下行**：从不把 `state` 放进 `RunAgentInput` 上行 | `copilotkit_runtime.py`、`useChat.jsx` | 符合 AG-UI 的"双向状态"只做了一半。后果是**后端不知道前端当前状态**，每次只能发全量 `add` patch（好在 RFC 6902 规定 `add` 到已存在成员即替换，所以不影响正确性，只是浪费带宽）。要做上行得让前端把 `pageStateStore` 的当前快照塞进请求体 |
+| 22 | 无 `STATE_SNAPSHOT` 回退，也**不做状态压缩** | 同上 | 长会话里 patch 会一直累积。参考实现（`@ag-ui/client`）的做法是把 `STATE_SNAPSHOT` + 后续 `STATE_DELTA` **压成一条最终 `STATE_SNAPSHOT`** 再交给消费者 —— 我们没做，客户端重放整条历史才能还原状态。会话短的时候无所谓，长了会疼 |
 
 > 第 13 条（五处 DDL）是这类病的剩余样本：**同一个东西有两份以上真相，且没有任何机制保证它们一致**。这类债的共同表现是"**读代码时读到了错的那份**"，而不是运行时报错 —— 本项目的架构调研就在已删掉的根目录 `api.py` 上踩过一次（第 5 条）。
 
@@ -522,3 +616,32 @@ componentRegistry.call(component, action, params)
 | 容器产物 | 含 `pha_chat_conversation_id`、不再含 `PageDataProvider`；`/app/copilotkit_runtime.py` 含转发代码 |
 
 **这几行是 §11 已修第 1-5 条的实测证据**：多轮记忆的能力本身一直是好的，缺的只是浮窗把会话 id 传下去；页面操控在改动后无回归；删除死代码后构建模块数不变（12066），证明删掉的确实不在构建图里。
+
+### 48-31 双通道的实测（`tests/e2e/agui_smoke.py` 用例 E，已进常驻回归）
+
+| 验证项 | 结果 |
+|---|---|
+| 幂等状态走标准通道 | "帮我打开健康档案页，只看检查的" → **`STATE_DELTA: 1`**，delta = `[{add,/route,/v2/health-records}, {add,/healthRecords/filter,exam}]` |
+| 双轨并存 | 同一次调用 **`PAGE_UPDATE: 2`**（`navigateTo` + `setFilter`）照旧发出 —— 两条通道收敛到同一个 store |
+| 瞬态动作未受影响（回归） | "我今天要吃什么药？" → `PAGE_UPDATE: 1`（`AiInfoCard/setData`），**没有** `STATE_DELTA` |
+| A/B/D 三条既有硬断言 | 全 PASS，退出码 0 |
+| JSON Patch 生成器（单测） | 嵌套展平、`/`→`~1`、`~`→`~0`、空 dict 整体赋值 —— 全部正确 |
+| 前端 applier（单测） | 后端真实 ops 灌入：嵌套不冲掉兄弟键、转义对称、**同一条 patch 重放三次结果一致（幂等）**、空 ops 引用稳定 |
+| 前端产物 | bundle 内含 `STATE_DELTA` 分支、三条 JSON Pointer 写回路径、`useSyncExternalStore` |
+
+> "同一条 patch 重放结果一致"这条不是形式主义 —— **它是整个 STATE_DELTA 方案能成立的前提**。
+> 状态通道的语义就是"收敛到声明值"，一旦某条 patch 不幂等，网络重投递就会把页面推向错误状态。
+
+### 48-31 的 AG-UI 合规实测（`tests/e2e/agui_schema_check.mjs`，官方 schema 本体）
+
+用 `@ag-ui/core@0.0.57` 的 zod schema 逐个校验真实 wire 事件（3 轮真实提问，走 `/api/copilotkit`）：
+
+| 阶段 | 结果 |
+|---|---|
+| 修 CUSTOM 之前 | 5 个 `PAGE_UPDATE` / `routing` / `rag_context` 等**裸发**，官方客户端解析不出 |
+| 修 CUSTOM 之后 | 639 个事件，**0 个非法** —— 但 `TOOL_CALL_RESULT` 报 5 个 schema 失败（缺 `messageId`） |
+| 补 `messageId` 之后 | **657 个事件全部通过官方 schema ✓**；`CUSTOM` 里包着 `routing` / `rag_context` / `PAGE_UPDATE` |
+| 冒烟测试 A/B/D/E/F | 全 PASS，退出码 0，945 个事件 0 非法 |
+
+> 这个脚本**当场就抓到一个从项目第一天就存在的 bug**，而当时白名单守卫（F 用例）是绿的 ——
+> 名字层面的合规和结构层面的合规是两件事，**只有拿真 schema 打真流量才照得出后者**。
