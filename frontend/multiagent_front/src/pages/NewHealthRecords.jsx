@@ -61,6 +61,7 @@ import {
 import Header from "../components/HealthHeader";
 import { usePageUpdater } from "../components/usePageUpdater";
 import { PAGE_COMPONENTS, PAGE_ACTIONS } from "../ai/pageContract";
+import { pageStateStore, usePageState } from "../ai/pageStateStore";
 import HealthRecordForm from "../components/HealthRecordForm"; // 阶段48-22 v3+
 import AgentQuickFab from "../components/AgentQuickFab";
 import {
@@ -712,8 +713,23 @@ function normalizeDraft(f) {
 }
 
 export default function NewHealthRecords() {
-  const [tab, setTab] = useState("all");
-  const [search, setSearch] = useState("");
+  // 阶段48-31: 分类筛选与搜索词改由 pageStateStore 承载 —— 走 AG-UI 标准
+  // STATE_DELTA 通道。页面**读** store、用户点 tab / 打字也**写** store，
+  // 单一真相：AI 与用户不会各改一份。
+  //
+  // 用户的交互用 JSON Patch（与 AI 的 STATE_DELTA 同一条机制），而不是 set() ——
+  // set() 只做顶层浅合并，写 filter 会把同级的 search 一起冲掉。
+  const { healthRecords } = usePageState();
+  const tab = healthRecords?.filter ?? "all";
+  const search = healthRecords?.search ?? "";
+  const setTab = useCallback(
+    (v) => pageStateStore.applyPatch([{ op: "add", path: "/healthRecords/filter", value: v }]),
+    [],
+  );
+  const setSearch = useCallback(
+    (v) => pageStateStore.applyPatch([{ op: "add", path: "/healthRecords/search", value: v }]),
+    [],
+  );
   const [records, setRecords] = useState([]);
   const [loading, setLoading] = useState(true);
   // 阶段48-22 v3+: 单一入口 — 只有 'editing' (走 HealthRecordForm 内嵌的'上传附件')

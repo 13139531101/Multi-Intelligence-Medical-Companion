@@ -355,6 +355,35 @@ def _unwrap_mcp_output(output):
     return output
 
 
+def _escape_json_pointer(token: str) -> str:
+    """RFC 6901 的 JSON Pointer 转义：~ → ~0、/ → ~1。
+
+    顺序不能反 —— 先替换 ~ 再替换 /，否则 ~1 里刚生成的 ~ 会被二次转义。
+    """
+    return token.replace("~", "~0").replace("/", "~1")
+
+
+def _page_state_to_json_patch(state: dict, prefix: str = "") -> list:
+    """把嵌套 dict 展平成 RFC 6902 JSON Patch ops。
+
+    为什么用 add 而不是 replace
+    ---------------------------
+    RFC 6902 规定 add 到**已存在的对象成员**即等于替换。所以后端**不需要知道
+    前端当前状态**，也不用先查一遍键在不在，无脑 add 就能表达「把 /a/b 设成 v」。
+    这让「工具只声明自己改了什么」这件事成立 —— 它不必持有全量 state。
+
+    嵌套 dict 递归展开；空 dict 直接整体赋值（否则会展开成零个 op，被静默丢掉）。
+    """
+    ops: list = []
+    for key, value in state.items():
+        path = f"{prefix}/{_escape_json_pointer(str(key))}"
+        if isinstance(value, dict) and value:
+            ops.extend(_page_state_to_json_patch(value, path))
+        else:
+            ops.append({"op": "add", "path": path, "value": value})
+    return ops
+
+
 async def v2_process_message_stream(message) -> AsyncIterator[dict]:
     """
     阶段48-11: v2 流式处理 — 真流式 yield 事件
@@ -663,14 +692,34 @@ async def v2_process_message_stream(message) -> AsyncIterator[dict]:
             # 再 loads。少了这一步，走 MCP 通路时 output 是个 list，
             # 下面 isinstance(dict) 判空 → 工具返回的 page_update 被静默丢弃。
             output = _unwrap_mcp_output(tr.get("output"))
+            if not isinstance(output, dict):
+                continue
+
+            # 阶段48-31: 幂等状态 → AG-UI 标准 STATE_DELTA
+            #
+            # 与下面的 page_update 是**两条并行通道**，同一个工具可以两者都发：
+            #   - page_state  : 幂等的「我在哪、我在看什么」（route / filter / view）
+            #   - page_update : 瞬态副作用（toast / 刷新 / 打开弹窗）
+            # 分栏依据是**幂等性** —— 状态重放一次无害；动作重放一次会出事
+            # （弹窗重弹、toast 卡住）。详见 INTERVIEW_PREP.md 的 12 动作映射表。
+            ps = output.get("page_state")
+            if isinstance(ps, dict) and ps:
+                ops = _page_state_to_json_patch(ps)
+                if ops:
+                    pu_outer = output.get("page_update")
+                    yield {
+                        "event": "state_delta",
+                        "delta": ops,
+                        "summary": output.get("summary")
+                        or (pu_outer.get("summary", "") if isinstance(pu_outer, dict) else ""),
+                    }
 
             pu = None
-            if isinstance(output, dict):
-                if isinstance(output.get("page_update"), dict):
-                    pu = output["page_update"]
-                elif output.get("component") and output.get("action"):
-                    # 直接返回 page_update 字段的结构
-                    pu = output
+            if isinstance(output.get("page_update"), dict):
+                pu = output["page_update"]
+            elif output.get("component") and output.get("action"):
+                # 直接返回 page_update 字段的结构
+                pu = output
 
             if not isinstance(pu, dict):
                 continue

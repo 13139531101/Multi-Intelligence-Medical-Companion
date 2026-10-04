@@ -77,6 +77,7 @@ import {
 } from "../config/agents";
 import { usePageUpdater } from "../components/usePageUpdater";
 import { PAGE_COMPONENTS, PAGE_ACTIONS } from "../ai/pageContract";
+import { pageStateStore, usePageState } from "../ai/pageStateStore";
 
 // 阶段48-5: 重新设计 - 添加药品 + 智能体建议 + 真正历史
 const PERIODS = [
@@ -186,7 +187,16 @@ export default function NewMedication() {
   const [stats, setStats] = useState({ taken: 0, total: 0 });
   const [streak, setStreak] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [view, setView] = useState("today");
+  // 阶段48-31: view 改由 pageStateStore 承载 —— 走 AG-UI 标准 STATE_DELTA 通道。
+  // 页面**读** store、用户的点击也**写** store，单一真相：AI 与用户不会各改一份。
+  // 下面 usePageUpdater 注册的 SET_VIEW 动作写的是同一个 store，于是两条通道
+  // （STATE_DELTA 与 PAGE_UPDATE）汇聚到一处，旧的 PAGE_UPDATE 路径依然可用。
+  const { medication } = usePageState();
+  const view = medication?.view ?? "today";
+  // 用户的点击也走 JSON Patch —— 与 AI 的 STATE_DELTA 是**同一条机制**，
+  // 顺带避免 set() 顶层浅合并把同级的其它键冲掉。
+  const setView = (v) =>
+    pageStateStore.applyPatch([{ op: "add", path: "/medication/view", value: v }]);
   const [weekData, setWeekData] = useState([]);
   const [historyData, setHistoryData] = useState([]);
   const [snack, setSnack] = useState(null);

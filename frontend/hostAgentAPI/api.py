@@ -5295,6 +5295,11 @@ async def v2_chat_stream(request: Request, user: dict = Depends(get_current_user
                 elif ev_type == "clarification":
                     # 阶段48-29: 主动询问澄清 → 通知前端弹澄清问题
                     yield f"event: clarification\ndata: {_json.dumps({'question': ev.get('question', ''), 'reason': ev.get('reason', '')}, ensure_ascii=False)}\n\n"
+                elif ev_type == "state_delta":
+                    # 阶段48-31: 幂等页面状态 → AG-UI 标准 STATE_DELTA 通道。
+                    # delta 是 RFC 6902 JSON Patch ops, 由 bridge._page_state_to_json_patch
+                    # 从工具的 page_state 生成。与下面的 page_update 并行, 互不替代。
+                    yield f"event: state_delta\ndata: {_json.dumps({'delta': ev.get('delta', []), 'summary': ev.get('summary', '')}, ensure_ascii=False)}\n\n"
                 elif ev_type == "page_update":
                     # 修复: 此前此处无分支 → bridge 发出的 page_update 在 SSE 层
                     # 就被丢弃, 前端 PAGE_UPDATE 处理器永远收不到, "AI 操控页面"失效。

@@ -66,6 +66,36 @@ def _pu(actions: list, summary: str = "") -> Dict[str, Any]:
     return payload
 
 
+def _ps(
+    state: Dict[str, Any],
+    actions: list | None = None,
+    summary: str = "",
+) -> Dict[str, Any]:
+    """组装**幂等状态**返回体 —— 走 AG-UI 标准 STATE_DELTA 通道（阶段48-31）。
+
+    与 _pu() 是两条**并行**通道，不是替代关系：
+      _pu()  → page_update → componentRegistry.call()  动作派发（瞬态副作用）
+      _ps()  → page_state  → pageStateStore            状态同步（幂等）
+
+    分栏依据是**幂等性**：状态重放一次无害（"筛到检查"说两遍还是筛到检查）；
+    动作重放一次会出事（弹窗重弹、toast 卡住）。所以 refresh / showAlert 这类
+    留在动作通道，route / filter / search / view 走状态通道。
+    bridge.py 会把 state 的嵌套 dict 展平成 RFC 6902 JSON Patch ops。
+
+    为什么 actions 参数还留着（看起来冗余）
+    ------------------------------------
+    过渡期**两条都发**。前端 pageStateStore 是唯一真相，页面的 setFilter /
+    setView 动作也写同一个 store —— 所以两条路最终落到同一个值，**幂等无害**。
+    换来的是：任何一端（后端镜像 / 前端 bundle）没重建成功，功能都不会坏。
+    """
+    payload: Dict[str, Any] = {"success": True, "page_state": state}
+    if summary:
+        payload["summary"] = summary
+    if actions:
+        payload["page_update"] = {"actions": actions, "summary": summary}
+    return payload
+
+
 # ============================================================
 # 归一化：让模型传中文口语词就行，不必知道前端用的英文 key
 # ============================================================
@@ -211,8 +241,9 @@ def filter_health_records(category: str) -> Dict[str, Any]:
             "success": False,
             "error": f"认不出分类「{category}」。合法值：{_CATEGORY_HINT}",
         }
-    return _pu(
-        [
+    return _ps(
+        {"route": _PATH_HEALTH_RECORDS, "healthRecords": {"filter": key}},
+        actions=[
             _act(_PAGE_ROUTER, "navigateTo", {"path": _PATH_HEALTH_RECORDS}),
             _act(_HEALTH_RECORDS, "setFilter", {"type": key}),
         ],
@@ -236,8 +267,9 @@ def set_health_records_search(query: str) -> Dict[str, Any]:
     q = (query or "").strip()
     if not q:
         return {"success": False, "error": "query 不能为空"}
-    return _pu(
-        [
+    return _ps(
+        {"route": _PATH_HEALTH_RECORDS, "healthRecords": {"search": q}},
+        actions=[
             _act(_PAGE_ROUTER, "navigateTo", {"path": _PATH_HEALTH_RECORDS}),
             _act(_HEALTH_RECORDS, "setSearch", {"q": q}),
         ],
@@ -260,8 +292,9 @@ def switch_medication_view(view: str) -> Dict[str, Any]:
             "success": False,
             "error": f"认不出视图「{view}」。合法值：{_VIEW_HINT}",
         }
-    return _pu(
-        [
+    return _ps(
+        {"route": _PATH_MEDICATION, "medication": {"view": key}},
+        actions=[
             _act(_PAGE_ROUTER, "navigateTo", {"path": _PATH_MEDICATION}),
             _act(_MEDICATION, "setView", {"view": key}),
         ],

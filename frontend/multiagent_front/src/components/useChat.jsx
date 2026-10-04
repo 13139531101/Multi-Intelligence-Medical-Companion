@@ -9,6 +9,7 @@ import React, {
   useCallback,
 } from "react";
 import { componentRegistry } from "./ComponentRegistry";
+import { pageStateStore } from "../ai/pageStateStore";
 
 const initialState = {
   open: false,
@@ -291,6 +292,22 @@ export function ChatProvider({ children }) {
           });
           return;
 
+        // ===== AG-UI 标准扩展位（阶段48-31）=====
+        // AG-UI 规定非标准事件必须包成 {type:"CUSTOM", name, value}，而不是裸发。
+        // 后端 copilotkit_runtime._agui_event 已经在**唯一出口**上自动包好。
+        //
+        // 这里解包后**按原名字重新分发** —— 所以下面 routing / rag_context /
+        // clarification / interrupt / PAGE_UPDATE 五个分支一行都不用改，
+        // 而且以后新增自定义事件也自动可用。
+        //
+        // 裸发的老形状仍然兼容（上面的 case 还在），所以任何一端没重建成功都不坏。
+        case "CUSTOM":
+          if (payload.name) {
+            console.log(`[useChat] CUSTOM: ${payload.name}`);
+            handleEvent(payload.name, payload.value || {});
+          }
+          return;
+
         // 兼容旧版 /v2/chat/stream 事件
         case "routing":
           dispatch({
@@ -392,6 +409,21 @@ export function ChatProvider({ children }) {
           return;
 
         // ===== AI 页面控制指令 =====
+        case "STATE_DELTA":
+          // AG-UI **标准**状态通道（阶段48-31）。payload: { delta, displaySummary }
+          // delta 是 RFC 6902 JSON Patch ops，由 bridge._page_state_to_json_patch
+          // 从工具的 page_state 生成。只承载**幂等**的页面状态（route / filter /
+          // search / view）—— 瞬态副作用仍走下面的 PAGE_UPDATE 动作通道。
+          //
+          // 与 PAGE_UPDATE 的关键差别：这里是**声明式**的，写进 store 后由页面订阅
+          // 消费。所以「跳到档案页并筛到检查」不再需要发两个动作、也不必依赖待执行
+          // 队列 —— 页面挂载时直接读到 store 里的当前值。
+          if (Array.isArray(payload.delta) && payload.delta.length) {
+            console.log("[useChat] STATE_DELTA:", payload.delta);
+            pageStateStore.applyPatch(payload.delta);
+          }
+          return;
+
         case "PAGE_UPDATE":
           // AI 让页面组件执行操作，如 setData、navigateTo 等
           // payload: { component, action, params, displaySummary }

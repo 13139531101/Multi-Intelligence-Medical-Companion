@@ -39,8 +39,52 @@ def _extract_user_message(messages: list) -> tuple[str, str]:
     return text, agent_hint
 
 
+# AG-UI 的**标准**事件名白名单（阶段48-31）。
+#
+# 逐字抄自 @ag-ui/core 0.0.57 的 `enum EventType`（node_modules 里那份，
+# 不是记忆）—— 去掉标了 @deprecated 的 THINKING_*。
+#
+# 为什么要有这张表
+# --------------
+# AG-UI 规定：**非标准事件必须包成 CUSTOM**，形状是
+#   {"type": "CUSTOM", "name": "PAGE_UPDATE", "value": {...}}
+# 而不是直接 {"type": "PAGE_UPDATE", ...}。
+#
+# 我们此前把 routing / rag_context / clarification / interrupt / PAGE_UPDATE
+# 五个自定义事件**裸发**出去了。官方客户端（@ag-ui/client）按 EventType 判别联合
+# 解析，裸发的事件它一个都认不出来 —— 换句话说，**别的 AG-UI 客户端驱动不了我们的界面**。
+#
+# 修法不是去补那 5 个调用点，而是**在唯一的出口上划界**：_agui_event 自己判断
+# 标准与否，非标准自动包成 CUSTOM。这样以后新增自定义事件不可能再忘记包。
+_STANDARD_AGUI_EVENTS = frozenset({
+    # 生命周期
+    "RUN_STARTED", "RUN_FINISHED", "RUN_ERROR", "STEP_STARTED", "STEP_FINISHED",
+    # 文本消息
+    "TEXT_MESSAGE_START", "TEXT_MESSAGE_CONTENT", "TEXT_MESSAGE_END", "TEXT_MESSAGE_CHUNK",
+    # 工具调用
+    "TOOL_CALL_START", "TOOL_CALL_ARGS", "TOOL_CALL_END", "TOOL_CALL_CHUNK",
+    "TOOL_CALL_RESULT",
+    # 状态
+    "STATE_SNAPSHOT", "STATE_DELTA", "MESSAGES_SNAPSHOT",
+    "ACTIVITY_SNAPSHOT", "ACTIVITY_DELTA",
+    # 逃生舱与推理
+    "RAW", "CUSTOM",
+    "REASONING_START", "REASONING_MESSAGE_START", "REASONING_MESSAGE_CONTENT",
+    "REASONING_MESSAGE_END", "REASONING_MESSAGE_CHUNK", "REASONING_END",
+    "REASONING_ENCRYPTED_VALUE",
+})
+
+
 def _agui_event(event: str, data: dict) -> str:
-    """AG-UI 格式: type 在 data 里. data: {...}\\n\\n"""
+    """AG-UI 格式: type 在 data 里. data: {...}\\n\\n
+
+    标准事件原样发出；**非标准事件自动包成 CUSTOM**（AG-UI 规定的扩展位）。
+    前端 useChat.jsx 收到 CUSTOM 会解包后按原名字重新分发 —— 所以下游那 5 个
+    处理分支一行都不用改。
+    """
+    if event not in _STANDARD_AGUI_EVENTS:
+        data = {"name": event, "value": data}
+        event = "CUSTOM"
     payload = {**data, "type": event}
     return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
@@ -227,7 +271,14 @@ async def _stream_agui(
             yield _agui_event(
                 "TOOL_CALL_RESULT",
                 {
+                    # 阶段48-31: messageId 是官方 schema 的**必填**字段
+                    # (ToolCallResultEventSchema)，此前没发 → 这个事件在官方
+                    # 客户端里解析不过去。语义上 TOOL_CALL_RESULT 是一条 role=tool
+                    # 的消息，所以 messageId 标识那条消息、toolCallId 指向它回答的调用。
+                    # 由 tc_id 派生而不是 uuid4 —— 同一次工具调用重投递时 id 稳定。
+                    "messageId": f"tool_{tc_id}",
                     "toolCallId": tc_id,
+                    "role": "tool",
                     # 修复: 前端 useChat.jsx 用 toolCallName 匹配结果, 此前没发 →
                     # 工具结果永远挂不到 chip 上, UI 显示不出。
                     "toolCallName": name,
@@ -244,6 +295,20 @@ async def _stream_agui(
             # 两处都发 → 同一次工具调用会产出**两个** PAGE_UPDATE → 前端对同一份
             # 数据执行两次 setData, 页面闪烁、弹窗重复。
             # 统一以 bridge 的 page_update 事件为唯一来源, 见下面的 kind == "page_update"。
+        elif kind == "state_delta":
+            # 阶段48-31: 幂等页面状态 → AG-UI **标准** STATE_DELTA 事件。
+            #
+            # 这是本项目第一条真正走 AG-UI 原生状态通道的链路（此前页面控制
+            # 全部走自建的 PAGE_UPDATE）。delta 是 RFC 6902 JSON Patch ops，
+            # 由 bridge._page_state_to_json_patch 从工具的 page_state 生成。
+            # 前端 pageStateStore.applyPatch 消费，与 page_update 通道并行。
+            yield _agui_event(
+                "STATE_DELTA",
+                {
+                    "delta": ev.get("delta", []),
+                    "displaySummary": ev.get("summary", ""),
+                },
+            )
         elif kind == "page_update":
             # 直接的 page_update 事件
             yield _agui_event(
