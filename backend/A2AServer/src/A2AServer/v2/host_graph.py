@@ -252,19 +252,28 @@ def _layer2_heuristic(state: HostState) -> str:
     return ""
 
 
-async def _layer3_llm(state: HostState) -> str:
-    """第 3 层：LLM 委派（用 DeepSeek/ChatModel 决策）"""
+async def _layer3_llm(state: HostState, default: str = "health_advisor") -> str:
+    """第 3 层：LLM 委派（用 DeepSeek/ChatModel 决策）
+
+    阶段48-32: 加了 `default` 参数。此前 LLM 决策失败时**硬编码**返回
+    health_advisor —— 而 48-20 明确把兜底 agent 挪到了 DomainManifest
+    （"不再硬编码 health_advisor"）。这个硬编码是那次重构漏下的一处：
+    图路径下看不出问题（默认值恰好也是它），但流式路径要接这一层时，
+    就会把 48-20 删掉的东西重新引回来。
+
+    调用方各自传自己的兜底（图路径保持默认值不变，行为零变化）。
+    """
     if not _LANGGRAPH_OK:
-        # 无 LangGraph 时默认到健康顾问
-        state["target_agent"] = "health_advisor"
+        # 无 LangGraph 时用调用方给的兜底
+        state["target_agent"] = default
         state["routing_layer"] = 3
         state.setdefault("events", []).append({
             "type": "route",
             "layer": 3,
             "reason": "fallback (no langgraph)",
-            "target": "health_advisor",
+            "target": default,
         })
-        return "health_advisor"
+        return default
 
     try:
         from langchain_openai import ChatOpenAI
@@ -307,16 +316,16 @@ async def _layer3_llm(state: HostState) -> str:
     except Exception as e:
         logger.warning("[host_graph] layer3 LLM 失败: %s", e)
 
-    # LLM 失败默认到健康顾问
-    state["target_agent"] = "health_advisor"
+    # LLM 失败：用调用方给的兜底（图路径默认 health_advisor，行为同以前）
+    state["target_agent"] = default
     state["routing_layer"] = 3
     state.setdefault("events", []).append({
         "type": "route",
         "layer": 3,
         "reason": "fallback after LLM failure",
-        "target": "health_advisor",
+        "target": default,
     })
-    return "health_advisor"
+    return default
 
 
 # ============================================================

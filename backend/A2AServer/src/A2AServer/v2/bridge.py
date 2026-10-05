@@ -431,7 +431,19 @@ async def v2_process_message_stream(message) -> AsyncIterator[dict]:
         parallel_agents = metadata["parallel_agents"]
 
     # Phase 1: 路由 + 锁定目标
+    #
+    # 阶段48-32: 这里此前**没有第 3 层** —— 原样只有一行注释
+    #     # Layer 3: LLM fallback (省略 — 走 v1 HostGraph 一样)
+    # 于是流式路径（也就是前端真正走的那条）的路由是「关键词 → 兜底默认 agent」，
+    # 比图路径 classify_node 少一层，而少掉的恰好是**唯一能处理「关键词没命中」
+    # 的那层**。实测后果：「我做过心电图吗」对四个 agent 的关键词表命中 0 个
+    # → 兜底到 domain_manifest 的默认 host agent = health_advisor
+    # → 而 open_health_record 这个工具只有 health_records 有
+    # → agent 只能如实回答「我没有权限打开档案详情」。
+    #
+    # 现在补上，且**复用 host_graph 里已经写好的 _layer3_llm**，不再各写一份。
     target_agent = None
+    routing_layer = 0
 
     # Layer 1: metadata.selected_agent (锁定)
     if selected_agent:
@@ -440,14 +452,17 @@ async def v2_process_message_stream(message) -> AsyncIterator[dict]:
             spec = AgentRegistry.get(selected_agent) or AgentRegistry.by_alias(selected_agent)
             if spec is not None:
                 target_agent = spec.name
+                routing_layer = 1
         except Exception:
             pass
+
+    # layer2 / layer3 共用一个 state（_layer3_llm 要读 query / metadata / events）
+    fake_state = None
 
     # Layer 2: 关键词启发 (keyword matching)
     if not target_agent:
         try:
             from . import host_graph
-            # 调用 layer2 函数
             HostState = host_graph.HostState
             fake_state = HostState(
                 query=query, conversation_id=conversation_id, user_id=user_id,
@@ -456,29 +471,65 @@ async def v2_process_message_stream(message) -> AsyncIterator[dict]:
             routed = host_graph._layer2_heuristic(fake_state)
             if routed:
                 target_agent = routed
+                routing_layer = 2
         except Exception as e:
             logger.debug("[v2_stream] layer2 failed: %s", e)
 
-    # Layer 3: LLM fallback (省略 — 走 v1 HostGraph 一样)
+    # Layer 3: LLM 兜底（关键词没命中时才走，多一次 LLM 调用的代价只落在这条路径上）
+    if not target_agent:
+        try:
+            from . import host_graph
+            if fake_state is None:
+                HostState = host_graph.HostState
+                fake_state = HostState(
+                    query=query, conversation_id=conversation_id, user_id=user_id,
+                    metadata=metadata, events=[],
+                )
+            # default 传 DomainManifest 的默认 agent —— _layer3_llm 内部失败时用它
+            # 兜底，避免把 48-20 已经删掉的硬编码 health_advisor 重新引回来
+            _fallback = "health_advisor"
+            try:
+                from .domain_manifest import load_default
+                _fallback = load_default().host_agent_name
+            except Exception:
+                pass
+            routed = await host_graph._layer3_llm(fake_state, default=_fallback)
+            if routed:
+                target_agent = routed
+                routing_layer = 3
+        except Exception as e:
+            logger.debug("[v2_stream] layer3 failed: %s", e)
 
-    # 阶段48-20: fallback agent 从 DomainManifest 读, 不再硬编码 health_advisor
+    # 兜底: 三层全没结论（layer3 自己炸了）
     if not target_agent:
         try:
             from .domain_manifest import load_default
             target_agent = load_default().host_agent_name
         except Exception:
             target_agent = "health_advisor"  # legacy
+        routing_layer = 0
+
+    # 本层的决策原因（_layer2_heuristic / _layer3_llm 都会往 state["events"] 记）
+    _reason = ""
+    if fake_state is not None:
+        for _ev in reversed(fake_state.get("events") or []):
+            if _ev.get("type") == "route":
+                _reason = _ev.get("reason", "")
+                break
 
     # 阶段48-11 push routing 事件
+    # 阶段48-32: layer 如实上报。此前写死 `1 if selected_agent else 2` ——
+    # 兜底明明是第 3 层之后的事，事件却报 2，**可观测性在撒谎**：出这类问题时
+    # 从 console 根本看不出是哪一层做的决定。reason 一并带上，同理。
     yield {
         "event": "routing",
         "agent": target_agent,
-        "routing": {"layer": 1 if selected_agent else 2, "target": target_agent},
+        "routing": {"layer": routing_layer, "target": target_agent, "reason": _reason},
         "conversation_id": conversation_id,
     }
 
     # 阶段48-29: 主动询问澄清 — routing 之后、stream 之前检查
-    routing_layer = 1 if selected_agent else 2
+    # （routing_layer 上面已算好，不再重算）
     try:
         from . import host_graph
         cl_res = await host_graph._should_clarify(query, routing_layer)

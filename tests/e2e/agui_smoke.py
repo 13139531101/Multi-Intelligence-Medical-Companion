@@ -10,6 +10,9 @@
   E 幂等状态    : 应收到 STATE_DELTA，且含 /route 与 /healthRecords/filter
                   （阶段48-31 的 AG-UI 标准状态通道）
   F 事件合规    : 跨所有用例收集到的事件，type 要么在标准白名单里、要么包成 CUSTOM
+  G 存在性提问  : 「我做过心电图吗」应路由到 health_records —— 只有它有
+                  open_health_record。此前它会掉到兜底 host agent 手里，
+                  agent 只能答「我没有权限打开档案详情」（阶段48-32）
 
 用法：
     # 宿主机
@@ -17,7 +20,7 @@
     # 容器内（同一 docker 网络）
     PROBE_BASE=http://hostapi:13002 python tests/e2e/agui_smoke.py
 
-退出码：A/B/D/E/F 五条硬断言全过才返回 0，便于接进 CI。
+退出码：A/B/D/E/F/G 六条硬断言全过才返回 0，便于接进 CI。
 """
 import json
 import os
@@ -182,6 +185,29 @@ ok_e = "/route" in paths and "/healthRecords/filter" in paths
 out.append("    路径: " + json.dumps(paths, ensure_ascii=False))
 out.append("    判定: " + ("PASS" if ok_e else "FAIL（幂等状态未走标准通道）"))
 
+# ------------------------------------------------- G 存在性提问的路由
+# 阶段48-32: 「我做过心电图吗」此前对四个 agent 的关键词表命中 **0 个** →
+# 掉到兜底默认 host agent(health_advisor) → 而 open_health_record 只有
+# health_records 有 → agent 只能如实答「我没有权限打开档案详情」。
+# 修了两处：① bridge 接上原本被一行注释「省略」掉的 layer3 LLM 兜底；
+# ② health_records 补「存在性问法」关键词（做过 / 查过）。
+#
+# 这里断言的是**路由结果**，不是页面动作 —— open_health_record 成不成功取决于
+# 测试账号里有没有对应档案，那是数据问题不是代码问题。路由错了才是代码问题。
+status, body, elapsed = post("/api/copilotkit", {"message": "我做过心电图吗"}, token)
+timings["G"] = elapsed
+kinds, events = parse_agui(body)
+routing = [e for e in events if e.get("type") == "CUSTOM" and e.get("name") == "routing"]
+agents = [(e.get("value") or {}).get("agent") for e in routing]
+layers = [((e.get("value") or {}).get("routing") or {}).get("layer") for e in routing]
+out.append("\n[G] 存在性提问路由  HTTP %s  bytes=%d  %.1fs" % (status, len(body), elapsed))
+out.append("    events: " + json.dumps(kinds, ensure_ascii=False))
+out.append("    routing: " + json.dumps(routing[:1], ensure_ascii=False)[:300])
+# 只断言 agent，不断言 layer —— 走 layer2(关键词) 还是 layer3(LLM) 都对，
+# 那是实现细节；「必须落在 health_records」才是要守的不变量。
+ok_g = agents[:1] == ["health_records"]
+out.append("    判定: " + ("PASS" if ok_g else "FAIL（没落到 health_records，open_health_record 拿不到）"))
+
 # ------------------------------------------------- F 事件合规（常驻守卫）
 # 阶段48-31: 跨**所有**用例收集到的事件，逐个检查 type 是否合法。
 # 合法的只有两种：① 在 AG-UI 标准白名单里；② 是 CUSTOM（标准扩展位）。
@@ -211,4 +237,4 @@ print(report)
 # C 不参与断言: clarify 是 host_graph 的节点, 而流式路径（前端实际走的这条）
 # 压根不经过 host_graph, 所以 clarification 事件在产品链路上不会发出 ——
 # agent 改用自然语言追问。这是已知的架构现状, 不是回归。
-sys.exit(0 if (ok_a and ok_b and ok_d and ok_e and ok_f) else 1)
+sys.exit(0 if (ok_a and ok_b and ok_d and ok_e and ok_f and ok_g) else 1)
