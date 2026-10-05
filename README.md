@@ -68,6 +68,8 @@
 
 **事件合规是拿官方 schema 验的，不是靠人看**。`tests/e2e/agui_schema_check.mjs` 直接 `require` 前端 `node_modules` 里的 `@ag-ui/core`，对真实流量上的每个事件跑官方 zod schema。写它的当天就抓到一个从项目第一天就存在的 bug：`TOOL_CALL_RESULT` 缺必填的 `messageId` —— 而当时「事件名白名单」守卫是**绿的**。**名字合规 ≠ 结构合规**，这层只有真 schema 打得出来。修完后 657 个真实事件全部通过。
 
+**一次「agent 说我没权限」挖出五处缺陷。** 用户问「我做过心电图吗」，agent 答的是「我暂时没有直接打开档案详情的权限」—— 回答不算错，但一个 yes/no 问题拿到的是一句能力声明。顺着往下挖：前端不传 `selected_agent` → 四个 agent 的关键词**全不命中** → 流式路径的 **layer3 LLM 兜底只是一行注释**（等于不存在）→ 落到兜底 `health_advisor` → 而它 18 个工具里没有 `open_health_record`，**它的 prompt 却让它去调那个工具**。每一层单看都对，合起来才是 bug。修完还顺带发现 `routing` 事件**谎报层号**（`1 if selected_agent else 2`，一个永远取不到 3 的三元表达式）—— 不影响功能，但会让排障时看到的现象指向错误方向。详见 [ARCHITECTURE.md §11](docs/Chinese/ARCHITECTURE.md)。
+
 ### 3. 检索质量是**可度量**的，不是「感觉变准了」
 
 - **重排让 MRR 从 0.6167 提到 1.0** —— 全项目唯一一处有前后对比数字的检索优化

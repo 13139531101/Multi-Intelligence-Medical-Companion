@@ -563,6 +563,41 @@ PageRouter 订阅 route → navigate()；档案页订阅 filter/search → 受�
 > 首次运行就报出 **5 个 `TOOL_CALL_RESULT` 未过 `ToolCallResultEventSchema`：`messageId` 是必填的，我们没发**。
 > 这个 bug 从项目第一天就在，**只有拿真 schema 打真流量才照得出来**。
 
+### 已修（48-32）：一次「用户说 agent 没权限」的反向排查
+
+触发点是一段真实的浏览器会话：用户问「**我做过心电图吗**」，agent 答
+「我查了一下您的健康档案……我暂时没有直接打开某一份档案详情的权限，需要您在"健康档案"页里……」。
+回答不算错，但**用户问的是一个 yes/no 问题，拿到的却是一句能力声明**。顺着这句话往下挖，挖出五处。
+
+| # | 问题 | 位置 | 修法 |
+|---|---|---|---|
+| 1 | 流式路径的 **layer3（LLM 兜底路由）是一行注释**，不是实现 | `bridge.py`（`v2_process_message_stream` 的 Phase 1） | 补上真实调用：`await host_graph._layer3_llm(fake_state, default=...)`。此前是 `# Layer 3: LLM fallback (省略 — 走 v1 HostGraph 一样)` |
+| 2 | `_layer3_llm` **硬编码**失败兜底为 `health_advisor` | `host_graph.py` | 加 `default` 形参，调用方从 `load_default().host_agent_name` 取。48-20 明确把兜底 agent 挪进了 DomainManifest，这是那次重构漏下的一处 |
+| 3 | `routing` 事件**谎报层号**：只要没有 `selected_agent` 就报 `layer: 2` | `bridge.py` | 改由真实走过的分支决定（1/2/3），`reason` 从 `fake_state["events"]` 里回捞，不再硬写 |
+| 4 | host agent 的 prompt 让它调 **它根本没有的工具** | `HealthAdvisor/memory_enhanced_agent_prompt.md` | `open_health_record` 只属于 health_records。改写第 5 条：先给 A2A 查到的结论，再用它真正持有的 `set_health_records_search` 把用户带到档案页 |
+| 5 | `health_records` 关键词表**缺"存在性问法"** | `sub_agents.py` | 「我做过心电图吗」对四个 agent 命中 **0 个**关键词。补「做过 / 查过」等问法标记（见下） |
+
+> **根因链**（这条链的价值在于：**症状和原因隔了三层**）。
+> 前端不传 `selected_agent` → Layer 1 跳过 → 「我做过心电图吗」四个 agent 关键词**全不命中** →
+> Layer 3 是注释（等于不存在）→ 落到兜底 `health_advisor` → 它 18 个工具里**没有** `open_health_record`
+> → 而它的 prompt 抄了 HealthRecordsManager 的指令、让它去调这个工具 → agent 如实报告"我没权限"。
+> **每一层单看都是对的**，合起来才是 bug —— 这也是为什么"agent 答得没毛病"不能当作验收标准。
+
+> **第 5 条修的时候我自己踩了个坑，值得单独讲。**
+> 第一版我加的是**检查名词**（心电图 / 胸片 / CT …）。结果「**做个 CT 要空腹吗**」——
+> 一个纯咨询问题 —— 被路由进了档案 agent。**检查名词本身是歧义的**
+> （"我做过 CT 吗" vs "CT 有辐射吗"），真正的判别信号是**问法**不是名词。
+> 于是主修复改成「存在性问法」（`做过` / `查过`），名词只做补充，并且刻意**不加裸 `ct`**。
+> 修完把 12 条边界用例重跑一遍才收工。
+> 顺带记一条易踩的：`_layer2_heuristic` 里是 `text = query.lower()`，**关键词必须全小写**，
+> 写 `"CT"` 永远匹配不上。
+
+> **关于"为什么不让 host agent 直接转发"**：host agent 的 A2A 工具
+> （`get_health_records_history` / `get_medication_overview` / `get_visit_summary_overview` /
+> `aggregate_health_report`）是**只读取数**，不是**转发回合** —— 它能拿到档案列表，
+> 但拿不到"打开某条记录的弹窗"这个动作的所有权。所以**跨领域的聚合问题**归它，
+> **单领域的问题**按设计就该直连子 agent。这次修的是后者的路由漏洞，不是要改前者的分工。
+
 ### 未修
 
 | # | 问题 | 位置 | 影响 |
@@ -645,3 +680,18 @@ PageRouter 订阅 route → navigate()；档案页订阅 filter/search → 受�
 
 > 这个脚本**当场就抓到一个从项目第一天就存在的 bug**，而当时白名单守卫（F 用例）是绿的 ——
 > 名字层面的合规和结构层面的合规是两件事，**只有拿真 schema 打真流量才照得出后者**。
+
+### 48-32 路由修复的实测（用例 G，已进常驻回归）
+
+| 验证项 | 结果 |
+|---|---|
+| 存在性提问路由 | 「我做过心电图吗」→ `agent: health_records`，`layer: 2`，`reason: "keyword match: ['做过', '心电图']"`（修前：命中 0 个关键词 → 兜底 `health_advisor`） |
+| 端到端行为 | 路由对之后 agent 调 `open_health_record` → `success: false`（该用户没有**独立**的心电图报告），agent 转而从**心内科门诊复诊记录**里找出心电图结论并作答 —— 比修前的"我没有权限"是实质改善 |
+| 误报回归（12 条边界用例） | 「做个 CT 要空腹吗」→ `health_advisor`（**不能**进档案）；「我做过 CT 吗」→ `health_records`；「心电图异常怎么办」→ `health_advisor`（被更早注册的泛词 `怎么办` 截走，符合预期） |
+| `layer` 不再谎报 | 未命中关键词时现在如实报 `layer: 3`；`selected_agent` 存在时报 `layer: 1` |
+| 冒烟测试 A/B/D/E/F/G | 全 PASS，退出码 0（G 只断言 **agent**，不断言 layer —— 走关键词还是 LLM 都对，那是实现细节） |
+| 官方 schema 校验（`agui_schema_check.mjs`） | **609 个事件全部通过** `@ag-ui/core@0.0.57` 的 zod schema；`CUSTOM` 里包着 `routing` / `rag_context` / `PAGE_UPDATE` |
+
+> 第 3 条（层号谎报）是**顺带发现**的：修第 1 条时要在 `routing` 事件里报出真实层号，
+> 才发现原来那行是 `1 if selected_agent else 2` —— 一个**从来不会取到 3** 的三元表达式。
+> 它不影响功能，但会让**排障时看到的现象指向错误的方向**，这类"可观测性说谎"比功能 bug 更难查。
