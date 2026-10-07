@@ -699,7 +699,13 @@ async def _rerank_chunks(query: str, chunks: List[Any], top_k: int) -> List[Any]
 
     向量检索是 bi-encoder（query 与 doc 各自编码再算 cosine），对"措辞不同但
     语义相关"的档案召回不足；rerank 是 cross-encoder（query+doc 一起进模型），
-    精度显著更高。栈 B 实测 MRR 0.6167 → 1.0。
+    精度显著更高。
+
+    栈 A（本函数所在的主链路）实测见 tests/performance/rag_v2_metrics.json：
+    多跳 + 向量 MRR 0.6667 → 多跳 + 重排 0.95（+0.283）；单跳上仅 +0.022。
+    **重排是多跳的必需项，不是锦上添花** —— 多跳把多来源片段拼在一起，
+    候选池被稀释，bi-encoder 的 cosine 分不再能区分。
+    （早期栈 B 的 5 条小样本测出 0.6167 → 1.0，那份只覆盖单跳，别拿它代表本链路。）
 
     全程可降级：没配 key / 超时 / 报错 → 原样返回，绝不影响主链路。
     """
