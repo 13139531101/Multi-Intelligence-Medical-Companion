@@ -46,21 +46,28 @@ LOCAL_MODEL_URL = os.getenv("LOCAL_MODEL_URL", "")  # 如 http://localhost:11434
 # 限流：每 provider 每分钟 N 次
 PROVIDER_RATE_LIMIT_PER_MIN = int(os.getenv("PHA_PROVIDER_RATE_LIMIT", "60"))
 
-# fallback 链：主失败时按这个顺序
-FALLBACK_CHAIN = os.getenv(
-    "PHA_MODEL_FALLBACK_CHAIN",
-    "deepseek,qwen,claude,local"
-).split(",")
+# fallback 链 & 任务路由：从 RuntimeConfig 单例读取（env 默认值已在构造时加载）
+# 每次取值都从 RuntimeConfig 拉取，支持 admin dashboard 运行时修改
+# 调用方应使用 get_fallback_chain() / get_task_routing() 函数，而不是直接读模块属性
 
-# 任务类型 → 最佳 provider 映射
-TASK_ROUTING = {
-    "chat": os.getenv("PHA_TASK_CHAT", "deepseek").lower(),
-    "code": os.getenv("PHA_TASK_CODE", "deepseek").lower(),
-    "analysis": os.getenv("PHA_TASK_ANALYSIS", "claude").lower(),
-    "summary": os.getenv("PHA_TASK_SUMMARY", "qwen").lower(),
-    "translation": os.getenv("PHA_TASK_TRANSLATION", "qwen").lower(),
-    "creative": os.getenv("PHA_TASK_CREATIVE", "claude").lower(),
-}
+
+def get_fallback_chain() -> list:
+    """取当前 fallback 链（始终从 RuntimeConfig 读最新值）"""
+    from A2AServer.v2.runtime_config import get_runtime_config
+    val = get_runtime_config().get("fallback_chain")
+    return list(val) if val else ["deepseek", "qwen", "claude", "local"]
+
+
+def get_task_routing() -> dict:
+    """取当前 task_routing 表"""
+    from A2AServer.v2.runtime_config import get_runtime_config
+    val = get_runtime_config().get("task_routing")
+    return dict(val) if val else {}
+
+
+# 保留模块级名称作为兼容层（调用方拿到的是当前 snapshot 的 list/dict，不是 live ref）
+FALLBACK_CHAIN = get_fallback_chain()
+TASK_ROUTING = get_task_routing()
 
 
 # ============================================================
@@ -94,6 +101,11 @@ class ProviderStats:
     rate_limited: int = 0
     total_latency_ms: float = 0.0
     total_tokens: int = 0
+    # WS-B.1: input/output 拆分（cost 计算需要分开计费）
+    total_prompt_tokens: int = 0
+    total_completion_tokens: int = 0
+    # WS-B.1: 按 feature 名计数（routing/embedding/cache_lookup/cot/...）
+    feature_counter: dict = field(default_factory=dict)
     last_error: Optional[str] = None
     last_used: float = 0.0
 
@@ -352,11 +364,15 @@ class ModelRouter:
             })
         return out
 
-    def _record_success(self, name: str, latency_ms: float, tokens: int) -> None:
+    def _record_success(self, name: str, latency_ms: float, tokens: int, prompt_tokens: int = 0, completion_tokens: int = 0, feature: str = "") -> None:
         s = self._stats[name]
         s.success += 1
         s.total_latency_ms += latency_ms
         s.total_tokens += tokens
+        s.total_prompt_tokens += prompt_tokens
+        s.total_completion_tokens += completion_tokens
+        if feature:
+            s.feature_counter[feature] = s.feature_counter.get(feature, 0) + 1
         s.last_used = time.time()
 
     def _record_error(self, name: str, err: str) -> None:
@@ -408,9 +424,11 @@ class ModelRouter:
                     completion_tokens=cached.completion_tokens,
                 )
 
-        # 1. 选主 provider
-        primary = prefer_provider or TASK_ROUTING.get(task_type, "deepseek")
-        chain = [primary] + [p for p in FALLBACK_CHAIN if p != primary]
+        # 1. 选主 provider（每次都从 RuntimeConfig 取最新，避免中途变更）
+        task_routing = get_task_routing()
+        fallback_chain = get_fallback_chain()
+        primary = prefer_provider or task_routing.get(task_type, "deepseek")
+        chain = [primary] + [p for p in fallback_chain if p != primary]
 
         # 2. 尝试每个 provider 直到成功
         last_error = None
@@ -429,7 +447,26 @@ class ModelRouter:
                 continue
             try:
                 result = await provider.chat(messages, max_tokens, temperature)
-                self._record_success(name, result.latency_ms, result.total_tokens)
+                self._record_success(
+                    name, result.latency_ms, result.total_tokens,
+                    prompt_tokens=result.prompt_tokens,
+                    completion_tokens=result.completion_tokens,
+                    feature=task_type,  # chat/code/summary/...
+                )
+                # WS-B: 推一条到 cost 最近环形缓冲，供 dashboard 拉明细
+                try:
+                    from .cost_endpoints import record_call
+                    record_call(
+                        provider=name,
+                        model=getattr(result, "model", "") or "",
+                        task_type=task_type,
+                        prompt_tokens=result.prompt_tokens,
+                        completion_tokens=result.completion_tokens,
+                        latency_ms=result.latency_ms,
+                        feature=task_type,
+                    )
+                except Exception:
+                    pass  # cost 记录失败不影响主路径
                 if idx > 0:
                     result.fallback_used = True
                 break  # 成功，跳出循环
@@ -481,8 +518,8 @@ class ModelRouter:
                 for name, s in self._stats.items()
             },
             "config": {
-                "fallback_chain": FALLBACK_CHAIN,
-                "task_routing": TASK_ROUTING,
+                "fallback_chain": get_fallback_chain(),
+                "task_routing": get_task_routing(),
                 "rate_limit_per_min": PROVIDER_RATE_LIMIT_PER_MIN,
             },
         }

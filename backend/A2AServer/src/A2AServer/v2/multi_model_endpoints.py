@@ -108,7 +108,7 @@ async def test_fallback():
     configured = [p["name"] for p in router.list_providers() if p["configured"]]
     return {
         "configured_providers": configured,
-        "fallback_chain": multi_model.FALLBACK_CHAIN,
-        "task_routing": multi_model.TASK_ROUTING,
+        "fallback_chain": multi_model.get_fallback_chain(),
+        "task_routing": multi_model.get_task_routing(),
         "can_fallback": len(configured) >= 2,
     }

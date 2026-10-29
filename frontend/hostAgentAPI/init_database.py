@@ -326,6 +326,18 @@ def init_database():
                 """
             )
 
+            # pha_runtime_config — admin dashboard 运行时配置持久化（WS-D）
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS pha_runtime_config (
+                    key VARCHAR(128) PRIMARY KEY,
+                    value JSONB NOT NULL,
+                    version INTEGER NOT NULL DEFAULT 0,
+                    updated_at TIMESTAMPTZ DEFAULT now()
+                );
+                """
+            )
+
             connection.commit()
             print("数据库初始化完成！")
 

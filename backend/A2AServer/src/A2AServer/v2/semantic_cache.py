@@ -199,6 +199,22 @@ class SemanticCache:
         self._cache.clear()
         logger.info("[semantic_cache] cleared")
 
+    # ---- runtime config hooks (WS-D) ----
+    def set_ttl(self, ttl_sec: int) -> None:
+        """运行时调整 TTL。立即生效（_lookup 每次都读 self.ttl_sec）。"""
+        from A2AServer.v2.runtime_config import get_runtime_config
+        self.ttl_sec = int(ttl_sec)
+        get_runtime_config().set("cache_ttl_sec", self.ttl_sec)
+        logger.info(f"[semantic_cache] ttl_sec -> {self.ttl_sec}")
+
+    def set_max_size(self, max_size: int) -> None:
+        """运行时调整容量。立即触发 eviction。"""
+        from A2AServer.v2.runtime_config import get_runtime_config
+        self.max_size = int(max_size)
+        get_runtime_config().set("cache_max_size", self.max_size)
+        self._evict_if_needed()
+        logger.info(f"[semantic_cache] max_size -> {self.max_size}")
+
     def stats(self) -> Dict[str, Any]:
         total = self._stats["hits"] + self._stats["misses"]
         hit_rate = self._stats["hits"] / total * 100 if total else 0
@@ -225,8 +241,11 @@ _cache: Optional[SemanticCache] = None
 def get_cache() -> SemanticCache:
     global _cache
     if _cache is None:
-        max_size = int(__import__("os").getenv("PHA_LLM_CACHE_SIZE", "1000"))
-        ttl = int(__import__("os").getenv("PHA_LLM_CACHE_TTL", "3600"))
+        # 从 RuntimeConfig 读（env 默认值已经在 RuntimeConfig 构造时加载）
+        from A2AServer.v2.runtime_config import get_runtime_config
+        _rc = get_runtime_config()
+        max_size = int(_rc.get("cache_max_size", 1000))
+        ttl = int(_rc.get("cache_ttl_sec", 3600))
         _cache = SemanticCache(max_size=max_size, ttl_sec=ttl)
         logger.info("[semantic_cache] initialized: max_size=%d, ttl=%ds", max_size, ttl)
     return _cache
