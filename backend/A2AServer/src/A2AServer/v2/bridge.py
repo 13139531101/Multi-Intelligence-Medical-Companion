@@ -19,11 +19,18 @@ import json
 import logging
 import os
 import sys
+import time
 import uuid
+from collections import deque
 from pathlib import Path
-from typing import Any, Optional, AsyncIterator
+from typing import Any, Deque, Dict, Optional, AsyncIterator
 
 logger = logging.getLogger(__name__)
+
+# WS-C: 路由事件 in-memory 缓冲（monitoring 面板聚合用）
+# 只记最近 N 条，避免内存无限增长；环形 deque
+_ROUTING_BUFFER_SIZE = int(os.getenv("PHA_ROUTING_BUFFER_SIZE", "2000"))
+_ROUTING_EVENTS: Deque[Dict[str, Any]] = deque(maxlen=_ROUTING_BUFFER_SIZE)
 
 # 阶段48-30: 触发 @register_agent 装饰器，确保 AgentRegistry 已填充
 from A2AServer.v2.agent_registry import discover_agents
@@ -521,12 +528,24 @@ async def v2_process_message_stream(message) -> AsyncIterator[dict]:
     # 阶段48-32: layer 如实上报。此前写死 `1 if selected_agent else 2` ——
     # 兜底明明是第 3 层之后的事，事件却报 2，**可观测性在撒谎**：出这类问题时
     # 从 console 根本看不出是哪一层做的决定。reason 一并带上，同理。
-    yield {
+    routing_evt = {
         "event": "routing",
         "agent": target_agent,
         "routing": {"layer": routing_layer, "target": target_agent, "reason": _reason},
         "conversation_id": conversation_id,
     }
+    # WS-C: 同步推一条到 in-memory 缓冲，给 monitoring 面板聚合
+    try:
+        _ROUTING_EVENTS.append({
+            "ts": time.time(),
+            "agent": target_agent,
+            "layer": routing_layer,
+            "reason": _reason,
+            "conversation_id": conversation_id,
+        })
+    except Exception as _e:
+        logger.debug(f"[bridge] routing buffer push failed: {_e}")
+    yield routing_evt
 
     # 阶段48-29: 主动询问澄清 — routing 之后、stream 之前检查
     # （routing_layer 上面已算好，不再重算）
