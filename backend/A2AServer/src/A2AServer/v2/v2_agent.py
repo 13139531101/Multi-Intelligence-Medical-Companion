@@ -107,7 +107,13 @@ class V2Agent:
         """阶段48-14: 构造 chat_model 实例.
         用于 create_agent + middlewares (e.g. SummarizationMiddleware).
         返回 None 时让 create_agent 用 str model path.
+
+        WS-B.1 fix: 统一挂上 CostTrackingHandler 回调，使 LangChain 直连
+        路径也能把 prompt/completion token 推送到 /v2/cost/recent。
         """
+        from .langchain_cost_callback import CostTrackingHandler
+        cost_cb = CostTrackingHandler()
+
         if self.model.startswith("deepseek"):
             from langchain_openai import ChatOpenAI
             return ChatOpenAI(
@@ -115,6 +121,7 @@ class V2Agent:
                 api_key=os.getenv("DEEPSEEK_API_KEY") or os.getenv("OPENAI_API_KEY"),
                 base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
                 temperature=0,
+                callbacks=[cost_cb],
             )
         elif self.model.startswith("openai:"):
             from langchain_openai import ChatOpenAI
@@ -124,6 +131,7 @@ class V2Agent:
                 api_key=os.getenv("OPENAI_API_KEY"),
                 base_url=os.getenv("OPENAI_API_BASE"),
                 temperature=0,
+                callbacks=[cost_cb],
             )
         return None
 
