@@ -2,12 +2,15 @@ name: Test (15 verify scripts)
 
 on:
   push:
-    branches: [refactor/v2, main, develop]
+    branches: [refactor/v2, main, develop, security-lab]
+    # 漏洞快照也跑一遍 CI：tag vuln-* 必须是红的，tag fixed-* 必须是绿的。
+    # 红→绿留在 Actions 历史里，就是这条门禁有效性的公开证据。
+    tags: ['vuln-*', 'fixed-*']
     paths-ignore:
       - '**/*.md'
       - 'docs/**'
   pull_request:
-    branches: [refactor/v2, main, develop]
+    branches: [refactor/v2, main, develop, security-lab]
 
 env:
   PYTHONUNBUFFERED: "1"
@@ -127,6 +130,16 @@ jobs:
       # 既没进 CI, import 路径也早就是错的 —— 等于从来没跑过。现在接上。
       - name: Tool name dedup guard (blocking)
         run: python tests/test_tool_dedup.py
+        continue-on-error: false
+
+      # 安全门禁: 身份越权(IDOR) 回归。
+      # 守的不变式: 请求身份**只能**来自已验证的 token, 请求体无权参与。
+      # 对应 F-001 / F-002 / F-003 / F-012 —— 详见 llm-security-lab 的 findings.md。
+      #
+      # 为什么必须进 CI: 修复没有门禁等于没修。下一个人随手加个
+      # `**metadata` 或 `body.get("user_id")`, 洞就重开, 而且没人会发现。
+      - name: "Security gate: IDOR / identity (blocking)"
+        run: python tests/security/test_authz_idor.py
         continue-on-error: false
 
       - name: Summary
