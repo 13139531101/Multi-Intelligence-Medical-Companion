@@ -39,6 +39,7 @@ import {
   Users,
   Shield,
   Upload,
+  DollarSign,
 } from "lucide-react";
 import {
   LineChart,
@@ -57,6 +58,10 @@ import ToolsPanel from "./components/ToolsPanel";
 import SkillsPanel from "./components/SkillsPanel";
 import MCPPanel from "./components/MCPPanel";
 import UsersPanel from "./components/UsersPanel";
+import ConfigPanel from "./components/ConfigPanel";
+import EvalPanel from "./components/EvalPanel";
+import CostPanel from "./components/CostPanel";
+import MonitoringPanel from "./components/MonitoringPanel";
 
 const API_BASE = "/api";
 const API_DIRECT = "http://localhost:13002";
@@ -1480,7 +1485,9 @@ function App() {
   const tabs = [
     { key: "overview", label: "概览", icon: Activity },
     { key: "agents", label: "智能体", icon: Cpu },
+    { key: "config", label: "配置", icon: Settings },
     { key: "multi_model", label: "多LLM", icon: Layers },
+    { key: "cost", label: "成本", icon: DollarSign },
     { key: "cache", label: "LLM缓存", icon: BarChart3 },
     { key: "tools", label: "工具权限", icon: Wrench },
     { key: "skills", label: "Skills", icon: Brain },
@@ -1490,9 +1497,11 @@ function App() {
     { key: "chat_test", label: "聊天测试", icon: MessageSquare },
     { key: "alerts", label: "报警", icon: Bell },
     { key: "metrics", label: "指标", icon: BarChart3 },
+    { key: "monitoring", label: "监控", icon: ActivityIcon },
     { key: "anp", label: "ANP/DID", icon: Network },
     { key: "oauth2", label: "OAuth2", icon: Lock },
     { key: "rag", label: "RAG", icon: BookOpen },
+    { key: "eval", label: "评测", icon: ListChecks },
     { key: "audit", label: "审计", icon: Eye },
     { key: "api", label: "API Explorer", icon: Zap },
   ];
@@ -1574,7 +1583,9 @@ function App() {
       <main className="z-10 flex-1">
         {activeTab === "overview" && <OverviewTab summary={summary} />}
         {activeTab === "agents" && <AgentsTab />}
+        {activeTab === "config" && <ConfigPanel />}
         {activeTab === "multi_model" && <MultiModelTab />}
+        {activeTab === "cost" && <CostPanel />}
         {activeTab === "cache" && <CacheTab />}
         {activeTab === "tools" && <ToolsPanel />}
         {activeTab === "skills" && <SkillsPanel />}
@@ -1584,9 +1595,11 @@ function App() {
         {activeTab === "chat_test" && <ChatTestTab />}
         {activeTab === "alerts" && <AlertsTab />}
         {activeTab === "metrics" && <MetricsTab />}
+        {activeTab === "monitoring" && <MonitoringPanel />}
         {activeTab === "anp" && <ANPTab />}
         {activeTab === "oauth2" && <OAuth2Tab />}
         {activeTab === "rag" && <RagTab />}
+        {activeTab === "eval" && <EvalPanel />}
         {activeTab === "audit" && <AuditTab />}
         {activeTab === "api" && <ApiExplorerTab />}
       </main>

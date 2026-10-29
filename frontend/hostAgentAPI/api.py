@@ -474,6 +474,46 @@ except Exception as _e:
     print(f"[hostapi] admin API mount failed: {_e}")
     traceback.print_exc()
 
+# Runtime Config API: admin runtime config (WS-D)
+try:
+    from A2AServer.v2.config_endpoints import router as config_router
+    app.include_router(config_router)
+    print("[hostapi] config API mounted: /v2/config/*")
+except Exception as _e:
+    import traceback
+    print(f"[hostapi] config API mount failed: {_e}")
+    traceback.print_exc()
+
+# Agent Eval API: admin agent evaluation harness (WS-A)
+try:
+    from A2AServer.v2.eval_endpoints import router as eval_router
+    app.include_router(eval_router)
+    print("[hostapi] eval API mounted: /v2/eval/*")
+except Exception as _e:
+    import traceback
+    print(f"[hostapi] eval API mount failed: {_e}")
+    traceback.print_exc()
+
+# Cost API: admin LLM cost analytics (WS-B)
+try:
+    from A2AServer.v2.cost_endpoints import router as cost_router
+    app.include_router(cost_router)
+    print("[hostapi] cost API mounted: /v2/cost/*")
+except Exception as _e:
+    import traceback
+    print(f"[hostapi] cost API mount failed: {_e}")
+    traceback.print_exc()
+
+# Routing Distribution API: agent routing monitoring (WS-C)
+try:
+    from A2AServer.v2.routing_distribution_endpoints import router as routing_dist_router
+    app.include_router(routing_dist_router)
+    print("[hostapi] routing-distribution API mounted: /v2/routing/distribution")
+except Exception as _e:
+    import traceback
+    print(f"[hostapi] routing-distribution API mount failed: {_e}")
+    traceback.print_exc()
+
 # Direct test endpoint
 @router.get("/v2/admin/ping")
 async def admin_ping():
@@ -5462,8 +5502,8 @@ async def v2_models_stream(request: Request):
     async def event_generator():
         try:
             # 1. routing
-            chosen = prefer_provider or multi_model.TASK_ROUTING.get(task_type, "deepseek")
-            yield f"event: routing\ndata: {__import__('json').dumps({'provider': chosen, 'task_type': task_type, 'fallback_chain': multi_model.FALLBACK_CHAIN}, ensure_ascii=False)}\n\n"
+            chosen = prefer_provider or multi_model.get_task_routing().get(task_type, "deepseek")
+            yield f"event: routing\ndata: {__import__('json').dumps({'provider': chosen, 'task_type': task_type, 'fallback_chain': multi_model.get_fallback_chain()}, ensure_ascii=False)}\n\n"
 
             # 2. 转 ChatMessage
             chat_msgs = [ChatMessage(role=m["role"], content=m["content"]) for m in messages]
