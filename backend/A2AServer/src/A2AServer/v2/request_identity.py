@@ -85,26 +85,50 @@ def client_metadata_from_body(body: Any) -> Dict[str, Any]:
     return out
 
 
+def _allowlisted(meta: Dict[str, Any]) -> Dict[str, Any]:
+    """只保留白名单 key。
+
+    身份类 key（user_id / conversation_id）不在白名单里 → 天然被丢弃。
+    白名单比黑名单的根本优势在这里：黑名单要穷举危险输入（无穷），
+    白名单只列安全输入（有限），新增下游字段时默认进不来。
+    """
+    return {k: v for k, v in meta.items() if k in CLIENT_META_ALLOWED}
+
+
 def resolve_request_identity(
     token_user: Any,
     body: Any,
     conversation_id: str = "",
 ) -> RequestIdentity:
-    """解析一次请求的身份与元数据。"""
+    """解析一次请求的身份与元数据。
+
+    修复要点
+    --------
+    1. **身份只来自 token** —— 请求体里的任何东西都不能影响它
+    2. **没有已认证身份就抛 MissingIdentity**（fail-closed），不退回任何兜底身份
+    3. **客户端元数据只放行白名单 key**
+    4. **服务端字段最后写入** —— 即使白名单漏了，客户端也覆盖不掉
+
+    第 4 条是纵深防御：前三条任一被绕过，第 4 条仍然拦住。
+    """
     body = body if isinstance(body, Mapping) else {}
     token_uid = token_subject_id(token_user)
+    if not token_uid:
+        # fail-closed：宁可拒绝，也不能落到 "default_user" 或任何全局兜底
+        # （退到兜底身份 = 用别人的数据回答 = 静默的越权）
+        raise MissingIdentity(
+            "请求没有已认证身份（token 主体缺失或不含 user_id），拒绝服务"
+        )
 
-    # ---- 当前实现：等价搬运原逻辑，**尚未修复** ----
-    # 请求体里的 user_id 压过 token（越权读取他人档案）
-    user_id = body.get("user_id") or token_uid or "default_user"
+    user_id = token_uid
 
-    client_meta = client_metadata_from_body(body)
+    client_meta = _allowlisted(client_metadata_from_body(body))
 
-    # ** 在后 → 客户端 metadata 里的 user_id 会覆盖上面那个
+    # 服务端字段**最后**写：客户端字段在前，无法覆盖
     metadata = {
+        **client_meta,
         "conversation_id": conversation_id,
         "user_id": user_id,
-        **client_meta,
     }
 
     return RequestIdentity(

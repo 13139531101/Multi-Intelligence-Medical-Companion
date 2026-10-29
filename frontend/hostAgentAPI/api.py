@@ -5247,11 +5247,13 @@ async def v2_chat_stream(request: Request, user: dict = Depends(get_current_user
     message = body.get("message", "")
     conversation_id = body.get("conversation_id") or f"stream_{uuid.uuid4().hex[:8]}"
     # 阶段48-security: 身份与客户端元数据统一走收口模块（唯一入口）。
-    # 本次为等价重构 —— 不改变任何安全属性，漏洞原样保留（见 tag vuln-001）。
-    from A2AServer.v2.request_identity import resolve_request_identity
-    _ident = resolve_request_identity(user, body, conversation_id)
+    # 无已认证身份 → 401（fail-closed），不退到任何兜底身份。
+    from A2AServer.v2.request_identity import MissingIdentity, resolve_request_identity
+    try:
+        _ident = resolve_request_identity(user, body, conversation_id)
+    except MissingIdentity as e:
+        raise HTTPException(status_code=401, detail=str(e))
     user_id = _ident.user_id
-    metadata = _ident.client_metadata
     # 阶段38-2: multi_model 路由选项
     task_type = body.get("task_type", "chat")
     prefer_provider = body.get("prefer_provider", "")
@@ -5380,9 +5382,12 @@ async def v2_chat_resume(request: Request, user: dict = Depends(get_current_user
     decisions = body.get("decisions", [])
     conversation_id = body.get("conversation_id") or f"resume_{uuid.uuid4().hex[:8]}"
     target_agent = body.get("target_agent", "health_advisor")
-    # 阶段48-security: 同上，身份只从 token 来
-    from A2AServer.v2.request_identity import resolve_request_identity
-    user_id = resolve_request_identity(user, body, conversation_id).user_id
+    # 阶段48-security: 同上，身份只从 token 来；无身份即 401
+    from A2AServer.v2.request_identity import MissingIdentity, resolve_request_identity
+    try:
+        user_id = resolve_request_identity(user, body, conversation_id).user_id
+    except MissingIdentity as e:
+        raise HTTPException(status_code=401, detail=str(e))
 
     if not thread_id or not decisions:
         return {"error": "thread_id and decisions required"}
