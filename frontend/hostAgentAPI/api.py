@@ -5286,12 +5286,14 @@ async def v2_chat_stream(request: Request, user: dict = Depends(get_current_user
 
     message = body.get("message", "")
     conversation_id = body.get("conversation_id") or f"stream_{uuid.uuid4().hex[:8]}"
-    # 阶段48: 优先用 token 的 user_id, 其次 body
-    token_uid = str(user.get("id") or user.get("user_id") or user.get("uid") or "")
-    user_id = body.get("user_id") or token_uid or "default_user"
-    metadata = body.get("metadata") or {}
-    if "selected_agent" in body and body["selected_agent"]:
-        metadata["selected_agent"] = body["selected_agent"]
+    # 阶段48-security: 身份与客户端元数据统一走收口模块（唯一入口）。
+    # 无已认证身份 → 401（fail-closed），不退到任何兜底身份。
+    from A2AServer.v2.request_identity import MissingIdentity, resolve_request_identity
+    try:
+        _ident = resolve_request_identity(user, body, conversation_id)
+    except MissingIdentity as e:
+        raise HTTPException(status_code=401, detail=str(e))
+    user_id = _ident.user_id
     # 阶段38-2: multi_model 路由选项
     task_type = body.get("task_type", "chat")
     prefer_provider = body.get("prefer_provider", "")
@@ -5306,11 +5308,7 @@ async def v2_chat_stream(request: Request, user: dict = Depends(get_current_user
             a2a_msg = _AMsg(
                 role="user",
                 parts=[{"type": "text", "text": message}],
-                metadata={
-                    "conversation_id": conversation_id,
-                    "user_id": user_id,
-                    **metadata,
-                },
+                metadata=_ident.metadata,
             )
 
             agent_for_db = "unknown"
@@ -5424,8 +5422,12 @@ async def v2_chat_resume(request: Request, user: dict = Depends(get_current_user
     decisions = body.get("decisions", [])
     conversation_id = body.get("conversation_id") or f"resume_{uuid.uuid4().hex[:8]}"
     target_agent = body.get("target_agent", "health_advisor")
-    token_uid = str(user.get("id") or user.get("user_id") or user.get("uid") or "")
-    user_id = body.get("user_id") or token_uid or "default_user"
+    # 阶段48-security: 同上，身份只从 token 来；无身份即 401
+    from A2AServer.v2.request_identity import MissingIdentity, resolve_request_identity
+    try:
+        user_id = resolve_request_identity(user, body, conversation_id).user_id
+    except MissingIdentity as e:
+        raise HTTPException(status_code=401, detail=str(e))
 
     if not thread_id or not decisions:
         return {"error": "thread_id and decisions required"}
