@@ -26,7 +26,6 @@ on:
           - staging
           - production
       services:
-        description: "部署服务（空=全部）"
         required: false
         type: string
         description: "逗号分隔的服务名，留空表示全部"
