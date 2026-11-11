@@ -117,6 +117,9 @@ class V2AgentRuntime:
     def __init__(self):
         self._checkpointer = None
         self._middleware_initialized = False
+        # agent_name -> HitlStatus（由 get_middlewares 写入，v2_agent 读取）
+        # 按 agent 分键存，避免并发构造两个 agent 时状态互相覆盖。
+        self.hitl_statuses: dict = {}
 
     @property
     def available(self) -> bool:
@@ -231,6 +234,14 @@ class V2AgentRuntime:
             agent_name: 决定哪些 tool 是 dangerous
         """
         if not _LANGCHAIN_V2_OK:
+            # 整个 v2 运行时不可用。仍然要留下「HITL 状态」的记录，
+            # 否则调用方拿到 None 时只能靠猜 —— 而「靠猜」就是 fail-open。
+            from .hitl_guard import HitlStatus
+            self.hitl_statuses[agent_name] = HitlStatus(
+                active=False,
+                reason="LangChain 1.x 不可用，v2 运行时降级",
+                fatal=True,
+            )
             return []
 
         middlewares: List = []
@@ -298,27 +309,56 @@ class V2AgentRuntime:
         # ============================================================
         # 3. HumanInTheLoopMiddleware - 危险操作确认
         # ============================================================
-        if HumanInTheLoopMiddleware is not None:
+        # ⚠️ fail-closed：HITL 装不上时不能「照常跑」。
+        #    修复前这里所有兜底都是 `except: logger.debug(...)` 静默跳过 ——
+        #    判定失效 = 全部危险操作无人确认直接执行，而且没人知道。
+        #    现在：降级必可见（logger.error），且降级时受保护的工具
+        #    **不交给模型**（接线见 v2_agent.py + v2/hitl_guard.py）。
+        #
+        #    ⚠️ 这里只处理「判定器失效」。「判定器不准」（按名字猜，漏了三个
+        #       工具）是 F-014 的事，由能力表规格解决 —— 两个问题两个修法。
+        from .hitl_guard import HitlStatus
+
+        tool_names: list[str] = []
+        try:
+            from ..mcp.mcp_discover import discover_mcp_tools_static, discover_phacore_tools
+            tool_names += [t["name"] for t in discover_mcp_tools_static(agent_name)]
+            tool_names += [t["name"] for t in discover_phacore_tools()]
+            tool_names = list(set(tool_names))   # dedup
+        except Exception as e:
+            # 工具发现失败 → manifest 的自动匹配匹配不到任何工具 → 判定退化为
+            # 硬编码兜底表。**必须报错**：这是一次静默的策略降级。
+            logger.error(
+                "[v2_runtime] 工具发现失败，HITL 判定退化为硬编码兜底表: %s", e
+            )
+
+        # 判定器（纯函数，不依赖 langchain）→ 危险工具集
+        interrupt_cfg: dict = {}
+        fatal = False
+        reason = ""
+        try:
+            from .dangerous_tools import get_interrupt_config
+            interrupt_cfg = get_interrupt_config(agent_name, available_tools=tool_names)
+        except Exception as e:
+            fatal = True
+            reason = "HITL 判定器不可用: %s" % e
+            logger.error("[v2_runtime] %s", reason)
+
+        protected = frozenset(interrupt_cfg)
+
+        if HumanInTheLoopMiddleware is None:
+            reason = reason or "HumanInTheLoopMiddleware 不可用"
+            logger.error(
+                "[v2_runtime] %s —— 危险工具将从工具集移除（fail-closed）", reason
+            )
+            self.hitl_statuses[agent_name] = HitlStatus(
+                active=False, protected=protected, reason=reason, fatal=fatal
+            )
+        else:
             try:
-                from .dangerous_tools import get_interrupt_config
-                # 阶段48-21: 拿 agent 的 tool 名字 list 让 manifest 自动匹配危险 tool
-                tool_names: list[str] = []
-                try:
-                    from ..mcp.mcp_discover import discover_mcp_tools_static, discover_phacore_tools
-                    tool_names += [t["name"] for t in discover_mcp_tools_static(agent_name)]
-                    tool_names += [t["name"] for t in discover_phacore_tools()]
-                    tool_names = list(set(tool_names))   # dedup
-                except Exception:
-                    pass
-                interrupt_cfg = get_interrupt_config(agent_name, available_tools=tool_names)
                 if interrupt_cfg:
                     # 每个 tool 配置允许的决策 + 是否需要描述 + 等待提示
                     # 4 种: approve / edit / reject / respond
-                    allowed = {
-                        "delete_": ["approve", "reject"],          # 删除操作简单 confirm/cancel
-                        "send_": ["approve", "reject", "respond"], # 通知 类
-                        "default": ["approve", "edit", "reject"],  # 默认多种
-                    }
                     m = HumanInTheLoopMiddleware(
                         interrupt_on=interrupt_cfg,
                         description_prefix=(
@@ -329,8 +369,17 @@ class V2AgentRuntime:
                         ),
                     )
                     middlewares.append(m)
+                self.hitl_statuses[agent_name] = HitlStatus(
+                    active=True, protected=protected, reason=""
+                )
             except Exception as e:
-                logger.debug("[v2_runtime] HumanInTheLoop 不可用: %s", e)
+                reason = "HITL 装不上: %s" % e
+                logger.error(
+                    "[v2_runtime] %s —— 危险工具将从工具集移除（fail-closed）", reason
+                )
+                self.hitl_statuses[agent_name] = HitlStatus(
+                    active=False, protected=protected, reason=reason, fatal=fatal
+                )
 
         # ============================================================
         # 4. ToolCallLimitMiddleware - 防止 LLM tool 调用死循环

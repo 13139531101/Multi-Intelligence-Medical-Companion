@@ -193,6 +193,34 @@ class V2Agent:
         # 阶段48-14: middlewares 需要 chat_model 实例 (SummarizationMiddleware 用 model 做 summary)
         middlewares = runtime.get_middlewares(self.model, chat_model=chat_model, agent_name=self.name)
 
+        # ============================================================
+        # fail-closed：HITL 不可用时，危险工具**不交给模型**
+        # ============================================================
+        # HITL 挂不上的时候，「拦住所有危险操作」这个动作本身也不可用了
+        # （拦截器就是 HITL）。所以 fail-closed 不能实现成「多问一句」，
+        # 只能实现成**危险工具压根不交给模型** —— 模型看不见它，就不会调它。
+        #
+        # 判定器不可用时（fatal）直接拒绝启动：危险工具集算不出来，
+        # 就没法知道该摘哪些 —— 此时唯一安全的答案是「什么都不给」。
+        from .hitl_guard import HitlStatus, restrict_tools
+
+        status = runtime.hitl_statuses.get(self.name)
+        if status is None:
+            status = HitlStatus(
+                active=False,
+                reason="HITL 状态未知（runtime 未记录）",
+                fatal=True,
+            )
+        self._tools, removed = restrict_tools(self._tools, status)
+        if removed:
+            logger.error(
+                "[v2_agent:%s] HITL 不可用（%s）—— 已从工具集移除 %d 个危险工具: %s",
+                self.name,
+                status.reason,
+                len(removed),
+                [getattr(t, "name", str(t)) for t in removed],
+            )
+
         # 所有 agent 统一带上「今天几号」—— 否则模型按训练数据里的年份猜日期
         system_prompt = _with_current_date(self.system_prompt)
 
