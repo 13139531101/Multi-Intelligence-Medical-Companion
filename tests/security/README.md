@@ -35,6 +35,26 @@ pytest tests/security/test_authz_idor.py    # pytest 收集
 
 对应漏洞：**F-001 / F-002 / F-003 / F-012**
 
+### `test_hitl_fail_closed.py` — HITL 判定失效（fail-closed）
+
+守的不变式：
+
+1. HITL 装不上时，受保护的工具**不出现**在模型可见的工具列表里
+2. HITL 正常时，工具一个都不能少（不能为了"安全"把功能砍光）
+3. 判定器不可用时**拒绝启动**，不许"降级继续跑"
+4. 降级路径的保护集合必须 **等于** 正常路径（失效可以更严，不能更松）
+5. 判定器不依赖 langchain（否则"摘掉危险工具"这个修法无解）
+6. 降级必须**可见**（`logger.error`，不是 `logger.debug`），而且守卫必须**接线**
+
+对应漏洞：**F-017**
+
+> 第 6 条是结构守卫（读源码），因为「没接线的控制点等于不存在」——
+> F-007（`check_permission` 没接进 MCP 调用链）已经付过一次学费。
+
+> ⚠️ 这条门禁**不能**靠"把 `logger.debug` 改成 `logger.error`"变绿。
+> 可见性不是防御：降级时危险工具照样被模型看见、照样被调用。
+> 真正让这条变绿的是 `v2/hitl_guard.py` + `v2_agent.py` 的接线。
+
 漏洞与修复的完整记录在 llm-security-lab 仓库：
 <https://github.com/13139531101/llm-security-lab>
 
@@ -48,6 +68,9 @@ pytest tests/security/test_authz_idor.py    # pytest 收集
 ```bash
 git checkout vuln-001  && python tests/security/test_authz_idor.py   # 红
 git checkout fixed-001 && python tests/security/test_authz_idor.py   # 绿
+
+git checkout vuln-017  && python tests/security/test_hitl_fail_closed.py   # 红
+git checkout fixed-017 && python tests/security/test_hitl_fail_closed.py   # 绿
 ```
 
 同一份测试文件、同一条命令、两种结果。这就是修复有效性的唯一可信证明。

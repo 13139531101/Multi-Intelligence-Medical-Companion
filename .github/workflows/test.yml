@@ -142,6 +142,17 @@ jobs:
         run: python tests/security/test_authz_idor.py
         continue-on-error: false
 
+      # 安全门禁: HITL fail-closed 回归。
+      # 守的不变式: **判定/拦截失效时, 危险工具不能交给模型**。
+      # 对应 F-017 —— v2_runtime 的 HITL 段有 4 个静默降级点, 坏掉之后
+      # 危险操作全部无人确认直接执行, 而且没人知道(默认日志级别看不见)。
+      #
+      # 特别提醒: 这条门禁**不能**靠"把 logger.debug 改成 logger.error"变绿。
+      # 可见性不是防御 —— 降级时危险工具仍然会被模型看见、仍然会被调用。
+      - name: "Security gate: HITL fail-closed (blocking)"
+        run: python tests/security/test_hitl_fail_closed.py
+        continue-on-error: false
+
       - name: Summary
         if: always()
         run: |
